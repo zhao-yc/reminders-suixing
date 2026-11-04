@@ -42,7 +42,7 @@ async function inspectFrame(frame, timeout = 1500) {
   let timer;
   try {
     return await Promise.race([
-      frame.executeJavaScript('({passwordField:!!document.querySelector("input[type=password]"),accountField:!!document.querySelector("input[type=email],input[autocomplete=username]"),connectionError:null,alertRegionPresent:!!document.querySelector("[role=alert], [role=alertdialog]"),reminders:!!document.querySelector(".rm-list-menu-item"),runtime:{ua:navigator.userAgent,secure:isSecureContext,crypto:!!crypto.subtle,indexedDB:typeof indexedDB,worker:typeof Worker},scripts:[...document.scripts].filter(x=>x.src).map(x=>{const u=new URL(x.src);return u.origin+u.pathname})})'),
+      frame.executeJavaScript('({visibility:document.visibilityState,focused:document.hasFocus(),passwordField:!!document.querySelector("input[type=password]"),accountField:!!document.querySelector("input[type=email],input[autocomplete=username]"),connectionError:null,alertRegionPresent:!!document.querySelector("[role=alert], [role=alertdialog]"),reminders:!!document.querySelector(".rm-list-menu-item"),runtime:{ua:navigator.userAgent,secure:isSecureContext,crypto:!!crypto.subtle,indexedDB:typeof indexedDB,worker:typeof Worker},scripts:[...document.scripts].filter(x=>x.src).map(x=>{const u=new URL(x.src);return u.origin+u.pathname})})'),
       new Promise(resolve => { timer = setTimeout(() => resolve('子页面诊断超时'), timeout); })
     ]);
   } catch { return '页面暂不可读取'; }

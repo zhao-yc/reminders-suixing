@@ -6,6 +6,7 @@ const { inspectFrame, diagnosticRoute, tracePublicExceptions } = require('./page
 const { inspectTestEditor } = require('./editor-diagnostics.cjs');
 const { inspectTestDetails } = require('./date-diagnostics.cjs');
 const { summarizeWriteOutcome, parseCreationStage, applyCreationStage } = require('./operation-diagnostics.cjs');
+const { reopenOfficial } = require('./site-navigation.cjs');
 
 const ROOT = path.resolve(__dirname, '../..');
 const SOURCE = fs.readFileSync(path.join(ROOT, 'apps/uni-app/static/icloud/adapter.js'), 'utf8');
@@ -145,8 +146,17 @@ function createController(options = {}) {
     } finally { clearTimeout(timer); busy = false; }
   }
 
+  async function reconnectSite(region='cn') {
+    if(!['cn','global'].includes(region)) return {ok:false,code:'INVALID_REQUEST',message:'服务区域无效。'};
+    if(busy) return {ok:false,code:'BUSY',message:'请等待当前操作结束后再重新连接。'};
+    const window=ensure(region);busy=true;
+    try {return await reopenOfficial(window.webContents,fixtureURL || ENTRY[region]);}
+    finally {busy=false;}
+  }
+
   return {
     execute,
+    reconnectSite,
     lastWriteOutcome() { return lastWriteOutcome ? {...lastWriteOutcome} : null; },
     async inspectTestEditor() {
       if (!options.diagnostics) return { ok: false, code: 'DIAGNOSTICS_DISABLED' };
@@ -165,6 +175,16 @@ function createController(options = {}) {
     openSite(region = 'cn') {
       if (busy && region !== activeRegion) return { ok: false, code: 'BUSY', message: '请等待当前操作结束后再切换区域。' };
       ensure(region).show(); return { ok: true };
+    },
+    /** 仅受限验收：通过公开页面导航核对刷新，不调用网页内部同步服务。 */
+    async inspectSiteConnection(action) {
+      if (!options.diagnostics) return {ok:false,code:'DIAGNOSTICS_DISABLED'};
+      if (!['show','hide','reopen'].includes(action)) return {ok:false,code:'INVALID_DIAGNOSTIC_ACTION'};
+      if (busy) return {ok:false,code:'BUSY'};
+      const window=ensure('cn');
+      if (action==='show') {window.show();window.focus();return {ok:true,code:'SITE_SHOWN'};}
+      if (action==='hide') {window.hide();return {ok:true,code:'SITE_HIDDEN'};}
+      return reconnectSite('cn');
     },
     reloadSite(region = 'cn') {
       if (busy) return { ok: false, code: 'BUSY', message: '请等待当前操作结束后再重载。' };

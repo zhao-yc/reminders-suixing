@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { clickTestCompletion, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag } = require('../apps/desktop/verification-ui.cjs');
+const { clickTestCompletion, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient } = require('../apps/desktop/verification-ui.cjs');
 const { testOperation, summarize } = require('../apps/desktop/live-check.cjs');
 
 for (const tag of ['button', 'uni-button']) {
@@ -200,4 +200,31 @@ test('真实旗标通道只允许唯一未完成、无日期的既有专用新�
     const blocked=structuredClone(snapshot);Object.assign(blocked.items[0],changed);
     assert.equal((await testOperation({execute:async()=>({ok:true,snapshot:blocked})},'flag-created-test-item',{ui:null})).code,'TEST_CREATED_STATE_UNSUPPORTED');
   }
+});
+
+test('同步验证使用独立测试事项，已有记录只读返回，不重建正在核对的原事项',async()=>{
+  const controller=scopedController(false);
+  const read=await controller.execute({type:'read'});
+  read.snapshot.items.push({id:'synthetic-sync',title:'随行验证 · Windows 同步验证',completed:false,flagged:false,schedule:{date:null,time:null,timeZone:null}});
+  assert.equal((await testOperation(controller,'create-sync-test-item',{sendSnapshot(){assert.fail('已有同步事项不能再次创建');},ui:null})).code,'UNCHANGED');
+  assert.equal((await testOperation(controller,'unflag-sync-test-item',{sendSnapshot(){assert.fail('旗标已经为目标状态');},ui:null})).code,'UNCHANGED');
+  assert.equal(summarize(read).testSyncCount,1);assert.equal(summarize(read).testCreatedCount,0);
+});
+
+test('公开页面重连验收限定专用清单并提前撤销旧快照写权限',async()=>{
+  const controller=scopedController(false),actions=[],snapshots=[];
+  controller.inspectSiteConnection=async action=>{actions.push(action);return {ok:true,code:'SITE_REOPENED'};};
+  assert.equal((await testOperation(controller,'reopen-test-site',{sendSnapshot:r=>snapshots.push(r),ui:null})).ok,true);
+  assert.deepEqual(actions,['reopen']);assert.equal(snapshots[0].ok,false);assert.equal(snapshots[0].code,'PAGE_CHANGED');
+  const denied=scopedController(false,'普通合成清单');denied.inspectSiteConnection=()=>assert.fail('不能切换普通清单的页面');
+  assert.equal((await testOperation(denied,'reopen-test-site',{ui:null})).code,'TEST_LIST_NOT_UNIQUE');
+});
+
+test('本地重新连接验收只激活一次，等待新页面与可写清单，不点击任何事项',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="old-page" data-list-id="old-list" data-live="true"><span class="list-title">随行验证 · 同步清单</span></div><button class="reconnect-button"></button>',{runScripts:'outside-only'});
+  t.after(()=>dom.window.close());dom.window.setTimeout=callback=>setTimeout(callback,0);
+  const doc=dom.window.document,button=doc.querySelector('button');let clicks=0;
+  button.addEventListener('click',()=>{clicks++;button.disabled=true;setTimeout(()=>{const list=doc.querySelector('.list-content');list.dataset.pageId='new-page';list.dataset.listId='new-list';button.disabled=false;},15);});
+  const result=await dom.window.eval('('+reconnectTestClient.toString()+')('+JSON.stringify({pageId:'old-page',listId:'old-list',title:'随行验证 · 同步清单'})+')');
+  assert.equal(result,true);assert.equal(clicks,1);
 });

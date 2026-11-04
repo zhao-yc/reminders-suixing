@@ -3,7 +3,8 @@ function installDesktopIPC({ipcMain, controller, getMainWindow}) {
   const handlers = [
     ['suixing:execute', args=>controller.execute(args.command,args.region)],
     ['suixing:open-site', args=>controller.openSite(args.region)],
-    ['suixing:reload-site', args=>controller.reloadSite(args.region)]
+    ['suixing:reload-site', args=>controller.reloadSite(args.region)],
+    ['suixing:reconnect-site', args=>controller.reconnectSite(args.region)]
   ];
   for (const [channel,handler] of handlers) {
     ipcMain.handle(channel,(event,args)=>{

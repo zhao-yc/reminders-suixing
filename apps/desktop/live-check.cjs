@@ -1,13 +1,14 @@
 const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient } = require('./verification-ui.cjs');
 
 const TEST_PREFIX = '随行验证';
 const TEST_ITEM = '随行验证 · 最小读写验证';
 const TEST_EDITED_ITEM = '随行验证 · 最小读写验证 · 编辑验证';
 const TEST_NOTE = '随行验证 · 备注写入验证\n随行验证 · 第二行';
 const TEST_CREATED_ITEM = '随行验证 · Windows 新增验证';
+const TEST_SYNC_ITEM = '随行验证 · Windows 同步验证';
 
 /** 自动写入只能命中唯一的专用验证清单与验证事项，名称仅用于限定测试范围。实际写入仍使用记录 ID 与指纹。 */
 async function testOperation(controller, command, { sendSnapshot, ui }) {
@@ -19,10 +20,27 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
     return controller.execute({ type: 'selectList', pageId: result.snapshot.pageId, listId: lists[0].id }, 'cn');
   }
   if (result.snapshot.activeListId !== lists[0].id) return { ok: false, code: 'TEST_LIST_NOT_SELECTED' };
-  if (['flag-created-test-item','unflag-created-test-item'].includes(command)) {
-    const created=result.snapshot.items.filter(item=>item.title===TEST_CREATED_ITEM);
+  if(command==='reconnect-test-client') {
+    if(!result.snapshot.items.length || result.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX))) return {ok:false,code:'TEST_ITEMS_REQUIRED'};
+    sendSnapshot(result);await new Promise(resolve=>setTimeout(resolve,120));
+    let connected;
+    try {connected=await ui.webContents.executeJavaScript('('+reconnectTestClient.toString()+')('+JSON.stringify({pageId:result.snapshot.pageId,listId:lists[0].id,title:lists[0].title})+')',true);}
+    catch {return {ok:false,code:'TEST_RECONNECT_UNCONFIRMED'};}
+    if(!connected) return {ok:false,code:'TEST_RECONNECT_UNCONFIRMED'};
+    const after=await controller.execute({type:'read'},'cn');
+    if(!after.ok || after.snapshot.pageId===result.snapshot.pageId || after.snapshot.activeListTitle!==lists[0].title) return {ok:false,code:'TEST_RECONNECT_UNCONFIRMED'};
+    return {...after,code:'CLIENT_RECONNECTED',via:'Windows 本地重新连接按钮 IPC'};
+  }
+  if (['show-test-site','hide-test-site','reopen-test-site'].includes(command)) {
+    if(!result.snapshot.items.length || result.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX))) return {ok:false,code:'TEST_ITEMS_REQUIRED'};
+    if(command==='reopen-test-site')sendSnapshot({ok:false,code:'PAGE_CHANGED',message:'官方页面正在重新打开，请稍后读取。'});
+    return controller.inspectSiteConnection({'show-test-site':'show','hide-test-site':'hide','reopen-test-site':'reopen'}[command]);
+  }
+  if (['flag-created-test-item','unflag-created-test-item','flag-sync-test-item','unflag-sync-test-item'].includes(command)) {
+    const title=command.includes('sync-')?TEST_SYNC_ITEM:TEST_CREATED_ITEM;
+    const created=result.snapshot.items.filter(item=>item.title===title);
     if(created.length!==1) return {ok:false,code:'TEST_CREATED_NOT_UNIQUE'};
-    const item=created[0],flagged=command==='flag-created-test-item';
+    const item=created[0],flagged=command.startsWith('flag-');
     if(typeof item.flagged!=='boolean' || item.schedule?.date!==null || item.schedule.time!==null || item.completed) return {ok:false,code:'TEST_CREATED_STATE_UNSUPPORTED'};
     if(item.flagged===flagged) return {...result,code:'UNCHANGED',dispatched:false};
     sendSnapshot(result);
@@ -48,20 +66,21 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
     const unchanged=after.ok && JSON.stringify(after.snapshot.items.map(item=>item.fingerprint))===JSON.stringify(result.snapshot.items.map(item=>item.fingerprint));
     return {ok:observed && unchanged,code:observed && unchanged?'TEST_SORTING_OBSERVED':'TEST_SORTING_UNCONFIRMED',restored:observed,webItemsUnchanged:unchanged};
   }
-  if (command === 'create-test-item') {
-    const existing = result.snapshot.items.filter(item => item.title === TEST_CREATED_ITEM);
+  if (['create-test-item','create-sync-test-item'].includes(command)) {
+    const title=command==='create-sync-test-item'?TEST_SYNC_ITEM:TEST_CREATED_ITEM;
+    const existing = result.snapshot.items.filter(item => item.title === title);
     if (existing.length > 1) return { ok:false, code:'TEST_CREATED_NOT_UNIQUE' };
     if (existing.length === 1) return { ...result, code:'UNCHANGED', dispatched:false };
     sendSnapshot(result);
     let clicked;
     try {
-      clicked = await ui.webContents.executeJavaScript('(' + createTestItem.toString() + ')(' + JSON.stringify({ pageId:result.snapshot.pageId, listId:lists[0].id, title:TEST_CREATED_ITEM }) + ')', true);
+      clicked = await ui.webContents.executeJavaScript('(' + createTestItem.toString() + ')(' + JSON.stringify({ pageId:result.snapshot.pageId, listId:lists[0].id, title }) + ')', true);
     } catch { return { ok:false, code:'UNCERTAIN_WRITE', cloudConfirmed:false }; }
     if (!clicked) return { ok:false, code:'TEST_UI_NOT_READY' };
     for (let attempt=0; attempt<80; attempt++) {
       await new Promise(resolve=>setTimeout(resolve,200));
       result = await controller.execute({type:'read'},'cn');
-      if (result.snapshot?.items.filter(item=>item.title===TEST_CREATED_ITEM).length===1) return { ...result, code:'WEB_STATE_OBSERVED', dispatched:true, cloudConfirmed:false, via:'Windows 本地新增界面 IPC' };
+      if (result.snapshot?.items.filter(item=>item.title===title).length===1) return { ...result, code:'WEB_STATE_OBSERVED', dispatched:true, cloudConfirmed:false, via:'Windows 本地新增界面 IPC' };
     }
     return { ok:false, code:'UNCERTAIN_WRITE', dispatched:true, cloudConfirmed:false };
   }
@@ -149,6 +168,7 @@ function summarize(result) {
   const testList = snapshot?.activeListTitle.startsWith(TEST_PREFIX);
   const items = testList ? snapshot.items.filter(item => [TEST_ITEM, TEST_EDITED_ITEM].includes(item.title)) : [];
   const created = testList ? snapshot.items.filter(item => item.title === TEST_CREATED_ITEM) : [];
+  const sync = testList ? snapshot.items.filter(item => item.title === TEST_SYNC_ITEM) : [];
   return { ok: result.ok, code: result.code, lists: snapshot?.lists.length, loadedItems: snapshot?.items.length,
     testList, testItemCount: testList ? items.length : undefined, testCompleted: items.length === 1 ? items[0].completed : undefined,
     testOriginalTitle: items.length === 1 ? items[0].title === TEST_ITEM : undefined,
@@ -158,6 +178,9 @@ function summarize(result) {
     testCreatedCount: testList ? created.length : undefined,
     testCreatedPending: created.length === 1 ? !created[0].completed : undefined,
     testCreatedFlagged: created.length === 1 ? created[0].flagged : undefined,
+    testSyncCount:testList?sync.length:undefined,
+    testSyncPending:sync.length===1?!sync[0].completed:undefined,
+    testSyncFlagged:sync.length===1?sync[0].flagged:undefined,
     testScheduleEmpty: result.schedule ? result.schedule.date === null && result.schedule.time === null : undefined,
     testScheduleDate: result.schedule ? result.schedule.date === '2030-01-15' && result.schedule.time === null : undefined,
     testScheduleTimed: result.schedule ? result.schedule.date === '2030-01-15' && result.schedule.time === '14:35' : undefined,
@@ -175,7 +198,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (!['flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date', 'cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
+    if (!['reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date', 'cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
     if (command === 'quit') { quit(); return; }
     if (busy) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));
@@ -206,7 +229,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result }, null, 2));
       console.log('开发验证结果：' + JSON.stringify(result));
     } catch {
-      const write = ['flag-created-test-item', 'unflag-created-test-item', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'set-test-date', 'set-test-time', 'clear-test-schedule'].includes(command);
+      const write = ['create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','flag-created-test-item', 'unflag-created-test-item', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'set-test-date', 'set-test-time', 'clear-test-schedule'].includes(command);
       const result = { ok: false, code: write ? 'UNCERTAIN_WRITE' : 'VERIFICATION_FAILED', cloudConfirmed: false };
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result }));
       console.log('验证命令未完成，请先只读核对，不重放写入。');

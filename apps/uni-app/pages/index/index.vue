@@ -11,7 +11,7 @@
       </view>
       <view class="account-card">
         <view class="account-dot" :class="{ connected: live && !isDemo }"></view>
-        <view class="account-copy"><text class="account-title">{{ isDemo ? '界面示例' : live ? '已连接 iCloud' : '连接你的 iCloud' }}</text><text class="muted small">{{ isDemo ? '示例数据，不连接账户' : region === 'cn' ? '中国大陆账户' : '其他地区账户' }}</text></view>
+        <view class="account-copy"><text class="account-title">{{ isDemo ? '界面示例' : live ? '已连接 iCloud' : snapshot ? '待读取核对' : '连接你的 iCloud' }}</text><text class="muted small">{{ isDemo ? '示例数据，不连接账户' : region === 'cn' ? '中国大陆账户' : '其他地区账户' }}</text></view>
       </view>
       <view class="sidebar-section"><text>我的清单</text><text class="muted">{{ snapshot?.lists.length || 0 }}</text></view>
       <view v-if="!snapshot" class="sidebar-placeholder">连接后，你的清单会显示在这里。</view>
@@ -31,7 +31,8 @@
         </view>
         <view class="toolbar-actions">
           <picker :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || !!editing" @change="changeRegion"><view class="region-picker">{{ region === 'cn' ? '中国大陆' : '其他地区' }}⌄</view></picker>
-          <button class="quiet-button" :disabled="busy || (!!editing && !editing.blocked)" @click="connect">{{ live && !isDemo ? '官方页面' : '登录 iCloud' }}</button>
+          <button class="quiet-button" :disabled="busy || (!!editing && !editing.blocked)" @click="connect">{{ snapshot && !isDemo ? '官方页面' : '登录 iCloud' }}</button>
+          <button v-if="snapshot && !isDemo && bridge.capabilities?.reconnect" class="quiet-button reconnect-button" role="button" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing" title="重新打开官方页面并读取清单，复用现有会话" @click="reconnectClient">重新连接</button>
           <button class="primary-button" :disabled="busy || (!!editing && !editing.blocked)" @click="refresh">{{ busy ? '处理中…' : '刷新' }}</button>
         </view>
       </view>
@@ -46,7 +47,7 @@
         <button class="demo-link" :disabled="busy" @click="showDemo">先看看界面示例 →</button>
         <text class="welcome-footnote">登录在 iCloud 官方页面完成</text>
       </view>
-      <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId">
+      <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-live="String(live)">
         <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title">{{ snapshot.activeListTitle }}</text><text class="heading-count">{{ incompleteCount }}</text></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
         <view class="list-controls">
           <view class="tabs"><button data-status="pending" :disabled="busy || !!editing" :class="{ active: tab === 'pending' }" @click="selectTab('pending')">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :disabled="busy || !!editing" :class="{ active: tab === 'completed' }" @click="selectTab('completed')">已完成 <text>{{ completeCount }}</text></button></view>
@@ -111,6 +112,7 @@ import { demoSnapshot } from '../../lib/demo.js';
 import { readRegionPreference, saveRegionPreference } from '../../lib/region-preference.js';
 import { validSchedule, localDateString } from '../../lib/schedule.js';
 import { SORT_OPTIONS, readSortPreference, saveSortPreference, sortLoadedItems } from '../../lib/list-sort.js';
+import { reconnectLoadedList } from '../../lib/reconnect.js';
 // #ifdef APP-HARMONY
 import HarmonyICloudHost from '../../components/HarmonyICloudHost.vue';
 import { onBackPress } from '@dcloudio/uni-app';
@@ -135,6 +137,7 @@ const sortFocusIndex = ref(0);
 const snapshot = ref(null);
 const busy = ref(false);
 const live = ref(false);
+const listSelectionRequired = ref(false);
 const isDemo = ref(false);
 const editing = ref(null);
 const canEdit = computed(() => isDemo.value || bridge.capabilities?.editText === true);
@@ -160,12 +163,13 @@ const formattedTime = computed(() => snapshot.value ? '读取于 ' + new Date(sn
 function accept(result) {
   if (result.ok && result.snapshot) {
     snapshot.value = result.snapshot;
-    live.value = true;
+    if(result.needsListSelection) listSelectionRequired.value=true;
+    live.value = !listSelectionRequired.value;
     isDemo.value = false;
   } else if (!result.ok) {
     live.value = false;
   }
-  notice.value = result.code === 'READY' ? '' : result.message || '';
+  notice.value = result.code === 'READY' ? listSelectionRequired.value?'请重新选择清单后继续编辑。':'' : result.message || '';
   noticeError.value = !result.ok;
 }
 
@@ -184,6 +188,7 @@ async function connect() {
   if (editing.value?.blocked) { notice.value = '请在官方页面核对修改结果，返回后刷新。'; return; }
   isDemo.value = false;
   snapshot.value = null;
+  listSelectionRequired.value = false;
   live.value = false;
   notice.value = '请在官方页面完成登录，返回后点击“刷新”。';
   noticeError.value = false;
@@ -192,7 +197,17 @@ async function connect() {
 async function refresh() {
   if (isDemo.value) { showDemo(); return; }
   const result = await run({ type: 'read' });
-  if (result?.ok && tab.value === 'completed') await selectTab('completed');
+  if (result?.ok && !listSelectionRequired.value && tab.value === 'completed') await selectTab('completed');
+}
+
+async function reconnectClient() {
+  if(busy.value || editing.value || isDemo.value || !bridge.capabilities?.reconnect) return;
+  const previous={title:snapshot.value?.activeListTitle,pageId:snapshot.value?.pageId};
+  live.value=false;busy.value=true;notice.value='正在重新连接 iCloud…';noticeError.value=false;
+  let result;
+  try {result=await reconnectLoadedList(bridge,region.value,previous);accept(result);}
+  finally {busy.value=false;}
+  if(result?.ok && !listSelectionRequired.value && tab.value==='completed') await selectTab('completed');
 }
 
 async function selectTab(next) {
@@ -218,6 +233,11 @@ async function selectList(list) {
     return;
   }
   const result = await run({ type: 'selectList', listId: list.id, pageId: snapshot.value.pageId });
+  if(result?.ok) {
+    const wasRequired=listSelectionRequired.value;
+    listSelectionRequired.value=false;live.value=true;
+    if(wasRequired && result.code==='READY') {notice.value='';noticeError.value=false;}
+  }
   if (result?.ok && tab.value === 'completed') await selectTab('completed');
 }
 
@@ -240,6 +260,7 @@ async function toggleFlag(item) {
 function showDemo() {
   if (busy.value || editing.value) return;
   snapshot.value = demoSnapshot();
+  listSelectionRequired.value = false;
   isDemo.value = true;
   live.value = false;
   notice.value = '正在查看界面示例，所有操作仅影响本地示例数据。';
@@ -256,6 +277,7 @@ function changeRegion(event) {
   const next = index === 0 ? 'cn' : 'global';
   if (next === region.value) return;
   region.value = next;
+  listSelectionRequired.value = false;
   flagOnly.value = false;
   snapshot.value = null;
   isDemo.value = false;
@@ -433,10 +455,10 @@ watch([busy,editing], () => { if (busy.value || editing.value) closeSortMenu(); 
 function workspaceKeydown(event) {
   if (event.isComposing || event.keyCode === 229 || !snapshot.value) return;
   if (event.target?.closest?.('.desktop-sort') && sortKeydown(event)) return;
-  const flagButton=event.target?.closest?.('.flag-toggle-button,.flag-filter');
-  if (flagButton && ['Enter',' '].includes(event.key)) {
+  const actionButton=event.target?.closest?.('.flag-toggle-button,.flag-filter,.reconnect-button');
+  if (actionButton && ['Enter',' '].includes(event.key)) {
     event.preventDefault();
-    if (!event.repeat && !flagButton.hasAttribute('disabled')) flagButton.click();
+    if (!event.repeat && !actionButton.hasAttribute('disabled')) actionButton.click();
     return;
   }
   if (editing.value) {
@@ -483,7 +505,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .items-scroll { flex:1; min-height:0; height:1px; }.reminder-row { display:flex; align-items:flex-start; gap:15px; border-bottom:1px solid #f0f2f5; padding:23px 2px; }.completion-button { width:22px; height:22px; border:1.5px solid #cbd4df; border-radius:50%; flex-shrink:0; margin-top:1px; color:#fff; display:flex; align-items:center; justify-content:center; font-size:13px; }.completion-button.checked { background:#a4b4c8; border-color:#a4b4c8; }.reminder-copy { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }.reminder-title { font-size:15px; color:#3d4859; line-height:1.6; word-break:break-word; }.completed .reminder-title { color:#a6afbb; text-decoration:line-through; }.reminder-notes { color:#8f9aaa; font-size:12px; line-height:1.6; white-space:pre-wrap; }.reminder-metadata { color:#9aa5b4; font-size:11px; line-height:1.6; }.subtask-tag { font-size:10px; color:#a3adba; padding-top:5px; }.list-footer { flex-shrink:0; border-top:1px solid #f1f3f7; padding:17px 0 20px; display:flex; justify-content:space-between; color:#a3adba; font-size:10px; gap:10px; }.list-bottom-space { height:30px; }.empty-list { display:flex; align-items:center; flex-direction:column; gap:18px; padding:85px 20px; font-size:12px; color:#9aa5b4; text-align:center; }.empty-circle { width:42px; height:42px; border:1px solid #dfe6ef; border-radius:50%; line-height:42px; color:#a6b8ce; font-size:22px; }
 .mobile-menu { display:none; }.sidebar-scrim { display:none; }
 .row-actions { display:flex; gap:3px; flex-shrink:0; opacity:0; transition:opacity .15s; }.reminder-row:hover .row-actions,.reminder-row:focus-within .row-actions { opacity:1; }.row-actions button { margin:0; padding:0; width:25px; height:28px; color:#8393a8; font-size:17px; }.row-actions button:hover { color:#1687ff; background:#eef5ff; border-radius:6px; }
-.flag-mark,.row-actions .flag-active { color:#ed9b38; }.flag-filter { margin:0; padding:8px 6px; color:#8492a5; background:transparent; font-size:11px; flex-shrink:0; }.flag-filter.flag-active { color:#b77d23; background:#fff5e5; border-radius:6px; }.flag-toggle-button:focus-visible,.flag-filter:focus-visible { outline:2px solid #1687ff; outline-offset:2px; border-radius:4px; }
+.flag-mark,.row-actions .flag-active { color:#ed9b38; }.flag-filter { margin:0; padding:8px 6px; color:#8492a5; background:transparent; font-size:11px; flex-shrink:0; }.flag-filter.flag-active { color:#b77d23; background:#fff5e5; border-radius:6px; }.flag-toggle-button:focus-visible,.flag-filter:focus-visible,.reconnect-button:focus-visible { outline:2px solid #1687ff; outline-offset:2px; border-radius:4px; }
 .reminder-title-line { display:flex; align-items:baseline; gap:5px; min-width:0; }.reminder-title-line .reminder-title { min-width:0; }.flag-mark { flex-shrink:0; }
 .inline-editor { display:flex; flex-direction:column; gap:9px; width:100%; }.editor-label { color:#8393a8; font-size:11px; }.edit-field { box-sizing:border-box; width:100%; height:38px; padding:8px 10px; color:#3d4859; font-size:14px; border:1px solid #a3caff; border-radius:7px; background:#fafcff; }.edit-notes { min-height:95px; line-height:1.7; }.editor-actions { display:flex; gap:10px; }.editor-actions button { margin:0; padding:6px 11px; font-size:12px; color:#8491a4; border-radius:6px; }.editor-actions .save-edit { color:#fff; background:#1687ff; }.editor-actions .save-edit[disabled] { background:#aebed2; }.edit-recovery { margin:8px 34px 0; display:flex; align-items:center; gap:12px; font-size:12px; color:#b36139; }.edit-recovery button { margin:0; padding:5px; font-size:12px; color:#1687ff; }.reminder-notes { overflow-wrap:anywhere; }
 @media (hover:none) { .row-actions { opacity:1; } }

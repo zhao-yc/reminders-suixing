@@ -187,4 +187,20 @@ async function clickTestFlag(expected) {
   return false;
 }
 
-module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag };
+/** 从本地正式入口重新连接一次，等待新页面与原清单恢复；不触发任何事项写入。 */
+async function reconnectTestClient(expected) {
+  const list=document.querySelector('.list-content'),button=document.querySelector('.reconnect-button');
+  if(list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId || document.querySelector('.inline-editor') || !button || button.hasAttribute('disabled')) return false;
+  button.click();
+  for(let attempt=0;attempt<450;attempt++) {
+    await new Promise(resolve=>setTimeout(resolve,200));
+    const current=document.querySelector('.list-content'),control=document.querySelector('.reconnect-button');
+    if(control && !control.hasAttribute('disabled')) {
+      if(document.querySelector('.notice.error')) return false;
+      if(current?.dataset.pageId && current.dataset.pageId!==expected.pageId) return current.dataset.live==='true' && document.querySelector('.list-title')?.textContent.trim()===expected.title;
+    }
+  }
+  return false;
+}
+
+module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient };

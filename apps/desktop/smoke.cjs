@@ -134,6 +134,8 @@ async function runSmoke({ frontendURL, root }) {
       await new Promise(resolve=>setTimeout(resolve,100));
     };
     await press('Tab');
+    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".reconnect-button")'),true,'Tab 应能到达重新连接');
+    await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".flag-filter")'),true,'Tab 应先到达旗标筛选');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".desktop-sort .sort-picker-label")'),true,'Tab 应能到达排序菜单');
@@ -430,6 +432,22 @@ async function runSmoke({ frontendURL, root }) {
       if(normalSnapshot.snapshot?.items.some(item=>item.title===normalTitle))break;
     }
     assert.equal(normalSnapshot.snapshot?.items.filter(item=>item.title===normalTitle).length,1);
+    const beforeReconnect=normalSnapshot.snapshot;
+    normalUI.webContents.send('suixing:snapshot',{region:'cn',result:normalSnapshot});
+    await new Promise(resolve=>setTimeout(resolve,100));normalUI.show();normalUI.focus();normalUI.webContents.focus();
+    await normalUI.webContents.executeJavaScript('document.querySelector(".reconnect-button").focus()');
+    normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
+    await normalUI.webContents.executeJavaScript('new Promise((resolve,reject)=>{const deadline=Date.now()+7000;const timer=setInterval(()=>{const list=document.querySelector(".list-content"),button=document.querySelector(".reconnect-button");if(list?.dataset.pageId!=='+JSON.stringify(beforeReconnect.pageId)+' && button && !button.hasAttribute("disabled")){clearInterval(timer);resolve(true)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("重新连接未完成"))}},50)})');
+    const afterReconnect=await normalController.execute({type:'read'},'cn');
+    assert.notEqual(afterReconnect.snapshot.pageId,beforeReconnect.pageId);
+    const content=items=>items.map(({id,title,notes,completed,flagged,schedule})=>({id,title,notes,completed,flagged,schedule}));
+    assert.deepEqual(content(afterReconnect.snapshot.items),content(beforeReconnect.items));
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'false','同名清单不能自动猜测身份并开放写入');
+    assert.ok((await normalUI.webContents.executeJavaScript('document.querySelector(".notice").textContent')).includes('重新选择清单'));
+    await normalUI.webContents.executeJavaScript('document.querySelector(".list-button.selected").click()');
+    await new Promise(resolve=>setTimeout(resolve,150));
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'true','用户明确选定新清单后才恢复写入');
+    console.log('普通模式重新连接经键盘与正式 IPC 完成，同名清单只读保护及新句柄选择通过，事项内容未变。');
     stopIPC();
     normalUI.destroy();normalUI=null;
     normalController.dispose();normalController=null;
@@ -484,6 +502,7 @@ async function runSmoke({ frontendURL, root }) {
     report.checks.push('本地清单排序、原顺序恢复、设置恢复及窄屏入口');
     report.checks.push('排序下拉框 Tab 聚焦、回车展开、方向键选择和 Esc 取消');
     report.checks.push('旗标空格操作、正式 IPC 单次保存、移除及本地筛选');
+    report.checks.push('普通模式重新连接、同名清单只读保护与新页面句柄');
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });
     fs.writeFileSync(path.join(root, '.local/desktop-smoke.json'), JSON.stringify(report, null, 2));
     console.log('桌面合成验证通过：' + report.checks.join('、'));
