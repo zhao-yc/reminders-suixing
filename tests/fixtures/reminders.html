@@ -5,6 +5,8 @@
   <div role="treeitem" class="rm-list-menu-item" aria-selected="false" data-list="two"><button class="inline-editable-label">验证清单</button></div>
 </div>
 <button class="rm-new-reminder" role="button" aria-label="新增提醒事项">新增</button>
+<button class="list-detail-button" role="button" aria-label="编辑提醒事项列表">菜单</button>
+<div class="fixture-list-menu" role="menu" hidden><button role="menuitem"></button></div>
 <div role="treegrid" aria-label="提醒列表"></div>
 <script>
 // 该页面只包含合成数据，用来验证重复标题、完成回执和列表切换，绝不访问 Apple。
@@ -23,6 +25,9 @@ window.fixtureCreationReady = false;
 window.fixtureEarlyCreationBlurs = 0;
 window.fixtureNavigateOnCreate = false;
 window.fixtureCreationAutosaves = 0;
+window.fixtureHideCompleted = false;
+window.fixtureCompletedMenuClicks = 0;
+window.fixtureCompletedActionClicks = 0;
 // JSDOM 不实现浏览器编辑命令；真实 Electron 保留并验证其原生实现。
 if (!document.execCommand) document.execCommand = function (command, _ui, value) {
   if (!['insertText', 'insertHTML'].includes(command) || !document.activeElement?.isContentEditable && document.activeElement?.getAttribute('contenteditable') !== 'true') return false;
@@ -41,6 +46,7 @@ function renderFixture(list) {
     '<div class="title"><div role="textbox" contenteditable="true">' + title + '</div></div>' +
     '<div class="notes"><div role="textbox" contenteditable="true"></div></div><div class="metadata">2026/11/04<span aria-hidden="true">重复无障碍文字</span></div></div>'
   ).join('');
+  if (window.fixtureHideCompleted) document.querySelectorAll('.mark-completed[data-completed="true"]').forEach(button => button.closest('.reminder-item').remove());
   document.querySelectorAll('.title [role="textbox"], .notes [role="textbox"]').forEach(editor => {
     const field = editor.closest('.title') ? 'title' : 'notes';
     const key = 'fixture-text-' + editor.closest('.reminder-item').id + '-' + field;
@@ -101,6 +107,19 @@ document.querySelector('.rm-new-reminder').addEventListener('click', () => {
     row?.setAttribute('aria-selected','true');
     row?.querySelector('.title [role="textbox"]')?.focus();
   },60);
+});
+
+document.querySelector('.list-detail-button').addEventListener('click', () => {
+  window.fixtureCompletedMenuClicks++;
+  const menu = document.querySelector('.fixture-list-menu');
+  menu.hidden = !menu.hidden;
+  menu.querySelector('[role="menuitem"]').textContent = window.fixtureHideCompleted ? '显示已完成的项目' : '隐藏已完成的项目';
+});
+document.querySelector('.fixture-list-menu [role="menuitem"]').addEventListener('click', () => {
+  window.fixtureCompletedActionClicks++;
+  window.fixtureHideCompleted = !window.fixtureHideCompleted;
+  document.querySelector('.fixture-list-menu').hidden = true;
+  renderFixture(document.querySelector('[role="treeitem"][aria-selected="true"]').dataset.list);
 });
 document.querySelectorAll('[role="treeitem"]').forEach(node => node.addEventListener('click', () => {
   document.querySelectorAll('[role="treeitem"]').forEach(other => other.setAttribute('aria-selected', String(other === node)));

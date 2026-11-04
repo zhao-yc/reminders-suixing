@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。仅访问页面 DOM，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.2.7') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.2.8') return;
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   var listHandles = new WeakMap();
@@ -209,6 +209,56 @@
     return read();
   }
 
+  /** 只请求官方菜单展开完成项，不切换事项状态；清单变化时不继续点击。 */
+  async function showCompleted(command) {
+    var doc = application();
+    function currentList() {
+      var active = doc && listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
+      return active && handle(active) === command.listId && command.pageId === pageId;
+    }
+    if (!doc || !lastSnapshot || lastSnapshot.activeListId !== command.listId || !currentList()) return result(false, 'STALE_VIEW', '当前清单已变化，请先刷新。');
+    if (isLoading(doc)) return result(false, 'LIST_LOADING', 'iCloud 正在加载列表，请稍后重新读取。');
+    function actions() {
+      return Array.from(doc.querySelectorAll('[role="menuitem"]')).filter(function (node) {
+        return !node.closest('[hidden], [aria-hidden="true"]') && doc.defaultView.getComputedStyle(node).display !== 'none';
+      }).map(function (node) { return { node: node, label: node.getAttribute('aria-label') || text(node) }; });
+    }
+    function completionActions() {
+      return actions().filter(function (item) { return /^(?:show\b.*\bcompleted|hide\b.*\bcompleted|显示.*已完成|隐藏.*已完成)/i.test(item.label); });
+    }
+    var openedHere = false;
+    var menuButton = null;
+    if (!completionActions().length) {
+      var buttons = Array.from(doc.querySelectorAll('.list-detail-button[role="button"]')).filter(function (node) {
+        return !node.closest('[hidden], [aria-hidden="true"]');
+      });
+      if (buttons.length !== 1 || buttons[0].disabled || buttons[0].getAttribute('aria-disabled') === 'true') return result(false, 'VIEW_UNAVAILABLE', '请在官方页面显示已完成事项，返回后刷新。');
+      menuButton = buttons[0];
+      openedHere = true;
+      activate(buttons[0]);
+    }
+    var candidates = await until(function () { var found = completionActions(); return found.length ? found : null; }, 1400);
+    if (!currentList()) { lastSnapshot = null; return result(false, 'STALE_VIEW', '打开菜单时清单发生变化，请先刷新。'); }
+    if (!candidates || candidates.length !== 1 || candidates[0].node.disabled || candidates[0].node.getAttribute('aria-disabled') === 'true') return result(false, 'VIEW_UNAVAILABLE', '请在官方页面显示已完成事项，返回后刷新。');
+    // 已显示时不点击“隐藏”，确保重复请求不会反转界面设置。
+    if (/^(?:hide\b|隐藏)/i.test(candidates[0].label)) { if (openedHere) activate(menuButton); return read(); }
+    activate(candidates[0].node);
+    var stable = 0;
+    var previous = null;
+    await until(function () {
+      if (!currentList()) return true;
+      if (isLoading(doc)) { stable = 0; return false; }
+      var ids = rowNodes(doc).map(function (row) { return row.id; }).join('|');
+      stable = previous === ids ? stable + 1 : 0;
+      previous = ids;
+      return stable >= 4;
+    }, 6500);
+    if (!currentList()) { lastSnapshot = null; return result(false, 'STALE_VIEW', '展开期间清单发生变化，请先刷新。'); }
+    var refreshed = read();
+    if (!refreshed.ok) return refreshed;
+    return result(true, 'VIEW_REQUESTED', '已请求显示已完成事项；仍只读取网页当前已加载内容。', { snapshot: refreshed.snapshot });
+  }
+
   async function setCompleted(command) {
     if (typeof command.completed !== 'boolean' || typeof command.expectedCompleted !== 'boolean') {
       return result(false, 'INVALID_COMMAND', '完成状态必须是明确的布尔值。');
@@ -281,7 +331,7 @@
       var inserted = doc.execCommand(instruction.command, false, instruction.value);
       if (inserted) {
         if (reportStage) reportStage('input-accepted');
-        // 新记录的文字保存由官方 input 回调排队；先让该任务执行，再离开编辑提交初始记录。
+        // 新记录的文字保存由官方 input 回调排队；让该任务执行，随后继续交给官方自动保存。
         if (settleInitialInput) await new Promise(function (resolve) { root.setTimeout(resolve, 0); });
         if (reportStage) reportStage('input-settled');
         if (!editor.isConnected) { if (reportStage) reportStage('editor-detached'); return false; }
@@ -413,16 +463,17 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.2.7',
+    version: '0.2.8',
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');
-      if (!command || !['read', 'selectList', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
+      if (!command || !['read', 'selectList', 'showCompleted', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
       inFlight = true;
       if (command.type === 'createItem') { creationDiagnosticSequence = root.__suixingDiagnosticWriteSequence; setCreationStage('preflight'); }
       try {
         if (command.type === 'read') return read();
         if (command.type === 'selectList') return await selectList(command);
+        if (command.type === 'showCompleted') return await showCompleted(command);
         if (command.type === 'setText') return await setText(command);
         if (command.type === 'createItem') return await createItem(command);
         return await setCompleted(command);

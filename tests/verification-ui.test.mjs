@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { clickTestCompletion } = require('../apps/desktop/verification-ui.cjs');
+const { clickTestCompletion, showTestCompleted } = require('../apps/desktop/verification-ui.cjs');
 const { testOperation, summarize } = require('../apps/desktop/live-check.cjs');
 
 for (const tag of ['button', 'uni-button']) {
@@ -83,4 +83,26 @@ test('新增自动验证拒绝普通清单，已有测试新增事项时只读�
   const result=await testOperation(controller,'create-test-item',{sendSnapshot:()=>assert.fail('不得派发新增'),ui:null});
   assert.equal(result.code,'UNCHANGED');
   assert.equal(summarize(result).testCreatedCount,1);
+});
+
+test('本地已完成页签验收只激活一次并等待正式异步动作结束',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="synthetic-page" data-list-id="synthetic-list"><div class="tabs"><button data-status="completed"></button></div></div>',{runScripts:'outside-only'});
+  t.after(()=>dom.window.close());
+  const tab=dom.window.document.querySelector('button');
+  let clicks=0;
+  tab.addEventListener('click',()=>{
+    clicks++;tab.classList.add('active');tab.disabled=true;
+    setTimeout(()=>{tab.disabled=false;},160);
+  });
+  const shown=await dom.window.eval('('+showTestCompleted.toString()+')({pageId:"synthetic-page",listId:"synthetic-list"})');
+  assert.equal(shown,true);assert.equal(clicks,1);assert.equal(tab.disabled,false);
+});
+
+test('已完成页签验收遇到旧页面或正式界面错误时不宣称成功',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="synthetic-page" data-list-id="synthetic-list"><div class="tabs"><button data-status="completed"></button></div></div><div class="notice error"></div>',{runScripts:'outside-only'});
+  t.after(()=>dom.window.close());
+  const tab=dom.window.document.querySelector('button');let clicks=0;
+  tab.addEventListener('click',()=>{clicks++;tab.classList.add('active');});
+  for(const pageId of ['synthetic-old-page','synthetic-page']) assert.equal(await dom.window.eval('('+showTestCompleted.toString()+')('+JSON.stringify({pageId,listId:'synthetic-list'})+')'),false);
+  assert.equal(clicks,1);
 });

@@ -48,7 +48,7 @@
       </view>
       <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId">
         <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title">{{ snapshot.activeListTitle }}</text><text class="heading-count">{{ incompleteCount }}</text></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
-        <view class="list-controls"><view class="tabs"><button data-status="pending" :disabled="!!editing" :class="{ active: tab === 'pending' }" @click="tab = 'pending'">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :disabled="!!editing" :class="{ active: tab === 'completed' }" @click="tab = 'completed'">已完成 <text>{{ completeCount }}</text></button></view><text class="current-scope">当前清单</text></view>
+        <view class="list-controls"><view class="tabs"><button data-status="pending" :disabled="busy || !!editing" :class="{ active: tab === 'pending' }" @click="selectTab('pending')">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :disabled="busy || !!editing" :class="{ active: tab === 'completed' }" @click="selectTab('completed')">已完成 <text>{{ completeCount }}</text></button></view><text class="current-scope">当前清单已加载</text></view>
         <scroll-view class="items-scroll" scroll-y>
           <view v-if="editing?.creating" class="reminder-row new-reminder-row"><view class="draft-circle"></view><view class="inline-editor"><text class="editor-label">新提醒事项 · {{ snapshot.activeListTitle }}</text><input v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" placeholder="提醒我…" aria-label="新事项标题" @confirm="confirmEdit" @keydown="editKeydown" /><view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '添加中…' : '添加' }}</button><button :disabled="busy" @click="endEdit">取消</button></view></view></view>
           <view v-if="!visibleItems.length && !editing?.creating" class="empty-list"><text class="empty-circle">✓</text><text>{{ search ? '没有找到相关事项' : tab === 'completed' ? '这里会显示网页已加载的完成事项' : '这份清单暂时没有待办事项' }}</text><button v-if="canCreate && tab === 'pending' && !search" class="empty-add" :disabled="busy || !!editing || (!live && !isDemo)" @click="startCreate">添加提醒事项</button></view>
@@ -149,7 +149,20 @@ async function connect() {
 
 async function refresh() {
   if (isDemo.value) { showDemo(); return; }
-  await run({ type: 'read' });
+  const result = await run({ type: 'read' });
+  if (result?.ok && tab.value === 'completed') await selectTab('completed');
+}
+
+async function selectTab(next) {
+  if (busy.value || editing.value) return;
+  tab.value = next;
+  if (next !== 'completed' || isDemo.value || !snapshot.value || !live.value) return;
+  if (bridge.capabilities?.showCompleted !== true) {
+    notice.value = '这里只显示网页已加载内容；请在官方页面显示已完成事项后刷新。';
+    noticeError.value = false;
+    return;
+  }
+  await run({ type: 'showCompleted', pageId: snapshot.value.pageId, listId: snapshot.value.activeListId });
 }
 
 async function selectList(list) {
@@ -162,7 +175,8 @@ async function selectList(list) {
     snapshot.value.lists.forEach(item => { item.selected = item.id === list.id; });
     return;
   }
-  await run({ type: 'selectList', listId: list.id, pageId: snapshot.value.pageId });
+  const result = await run({ type: 'selectList', listId: list.id, pageId: snapshot.value.pageId });
+  if (result?.ok && tab.value === 'completed') await selectTab('completed');
 }
 
 /** 写入传递记录 ID、目标状态和最新指纹，禁止用标题匹配或简单地重复点击。 */

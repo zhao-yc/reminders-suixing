@@ -1,8 +1,7 @@
 const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
-const { allowedURL } = require('./policy.cjs');
-const { clickTestCompletion, editTestText, createTestItem } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted } = require('./verification-ui.cjs');
 
 const TEST_PREFIX = '随行验证';
 const TEST_ITEM = '随行验证 · 最小读写验证';
@@ -38,21 +37,10 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
     return { ok:false, code:'UNCERTAIN_WRITE', dispatched:true, cloudConfirmed:false };
   }
   if (command === 'show-completed') {
-    const target = controller.window().webContents.mainFrame.framesInSubtree.find(frame => /\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url));
-    if (!target) return { ok: false, code: 'TEST_FRAME_NOT_READY' };
-    // 这里只展开已完成分组，不更改事项；英文与中文官方界面均适用。
-    await target.executeJavaScript(`(async()=>{
-      function activate(b){if(!b)return;for(const type of ['pointerdown','mousedown','pointerup','mouseup','click']){const C=type.startsWith('pointer')?PointerEvent:MouseEvent;b.dispatchEvent(new C(type,{bubbles:true,cancelable:true,button:0,buttons:type.endsWith('down')?1:0,view:window,pointerId:1,pointerType:'mouse'}))}}
-      const find=()=>[...document.querySelectorAll('[role=menuitem]')].find(x=>/show.*completed|显示.*已完成/i.test(x.innerText||x.getAttribute('aria-label')||''));
-      if(!find())activate(document.querySelector('.list-detail-button[role=button]'));
-      for(let i=0;i<20;i++){const b=find();if(b){activate(b);return true}await new Promise(r=>setTimeout(r,100))}return false;
-    })()`, true);
-    for (let attempt = 0; attempt < 40; attempt++) {
-      result = await controller.execute({ type: 'read' }, 'cn');
-      if (result.snapshot?.items.some(item => item.title === TEST_ITEM)) return result;
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
-    return { ok: false, code: 'TEST_ITEM_NOT_VISIBLE' };
+    sendSnapshot(result);
+    const shown=await ui.webContents.executeJavaScript('('+showTestCompleted.toString()+')('+JSON.stringify({pageId:result.snapshot.pageId,listId:lists[0].id})+')',true);
+    if (!shown) return {ok:false,code:'TEST_VIEW_NOT_READY'};
+    return {...await controller.execute({type:'read'},'cn'),via:'Windows 本地已完成页签 IPC'};
   }
   const items = result.snapshot.items.filter(item => [TEST_ITEM, TEST_EDITED_ITEM].includes(item.title));
   if (items.length !== 1) return { ok: false, code: 'TEST_ITEM_NOT_UNIQUE' };

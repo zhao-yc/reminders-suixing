@@ -7,7 +7,7 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
 const { installDesktopIPC } = require('./ipc.cjs');
-const { clickTestCompletion, editTestText, createTestItem } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted } = require('./verification-ui.cjs');
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
 async function runSmoke({ frontendURL, root }) {
@@ -112,6 +112,21 @@ async function runSmoke({ frontendURL, root }) {
     const writes = await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureClicks');
     assert.equal(writes, 2, '重载后的完成与取消完成各只写一次');
     console.log('构建界面完成与取消完成单次派发验证通过。');
+    await controller.window().webContents.executeJavaScript('(()=>{const w=document.querySelector("iframe").contentWindow;w.fixtureHideCompleted=true;w.document.querySelector(".fixture-list-menu").hidden=true;w.renderFixture("one")})()');
+    const hiddenCompleted=await controller.execute({type:'read'},'cn');
+    assert.equal(hiddenCompleted.snapshot.items.length,1);
+    ui.webContents.send('suixing:snapshot',{region:'cn',result:hiddenCompleted});
+    await new Promise(resolve=>setTimeout(resolve,100));
+    for(let attempt=0;attempt<2;attempt++) {
+      assert.equal(await ui.webContents.executeJavaScript('('+showTestCompleted.toString()+')('+JSON.stringify({pageId:hiddenCompleted.snapshot.pageId,listId:hiddenCompleted.snapshot.activeListId})+')',true),true);
+      const shown=await controller.execute({type:'read'},'cn');
+      assert.equal(shown.snapshot.items.length,2);
+      assert.equal(shown.snapshot.items[0].completed,true);
+    }
+    const completedEvents=await controller.window().webContents.executeJavaScript('(()=>{const w=document.querySelector("iframe").contentWindow;return {actions:w.fixtureCompletedActionClicks,writes:w.fixtureClicks}})()');
+    assert.equal(completedEvents.actions,1);
+    assert.equal(completedEvents.writes,2);
+    console.log('本地已完成页签展开官方隐藏事项，重复进入不反转、不修改事项。');
     const textValues = { title: '随行验证 · 编辑后的合成标题', notes: '随行验证 · <合成备注> & 文字\n\n第二行' };
     for (const [field, value] of Object.entries(textValues)) {
       const current = await controller.execute({ type: 'read' }, 'cn');
@@ -270,7 +285,7 @@ async function runSmoke({ frontendURL, root }) {
     fs.writeFileSync(path.join(root, '.local/mobile-preview.png'), (await ui.webContents.capturePage()).toPNG());
     const report = {
       passed: true, kind: 'Electron 合成验证，不代表真实 iCloud 或真机验收',
-      checks: ['跨站 iframe 浏览器标识', '只读子页面诊断', '同源 iframe 读取', '同名事项按记录 ID 操作', '完成状态重载保持', '旧页面句柄失效', '构建界面加载', '服务区域恢复', '正式 IPC 主框架校验', '构建界面完成及取消完成各派发一次', '标题和备注各保存一次及合成重载保持', '顶栏新增与搜索快捷键', '输入法取消不创建', '新增单次输入和官方自动保存', '普通模式隐藏官方容器新增与重载保持', '页面退出后保留固定阶段回执', '固定提醒事项入口恢复', '页面无 Node 权限', '桌面与手机宽度布局'],
+      checks: ['跨站 iframe 浏览器标识', '只读子页面诊断', '同源 iframe 读取', '同名事项按记录 ID 操作', '完成状态重载保持', '旧页面句柄失效', '构建界面加载', '服务区域恢复', '正式 IPC 主框架校验', '构建界面完成及取消完成各派发一次', '已完成页签展开官方隐藏事项且重复不反转', '标题和备注各保存一次及合成重载保持', '顶栏新增与搜索快捷键', '输入法取消不创建', '新增单次输入和官方自动保存', '普通模式隐藏官方容器新增与重载保持', '页面退出后保留固定阶段回执', '固定提醒事项入口恢复', '页面无 Node 权限', '桌面与手机宽度布局'],
       capturedAt: new Date().toISOString()
     };
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });

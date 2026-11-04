@@ -78,4 +78,21 @@ async function createTestItem(expected) {
   return false;
 }
 
-module.exports = { clickTestCompletion, editTestText, createTestItem };
+/** 显示完成项也走正式页签，只激活一次，等待异步显示请求结束后才返回。 */
+async function showTestCompleted(expected) {
+  const list=document.querySelector('.list-content');
+  const tab=document.querySelector('.tabs [data-status="completed"]');
+  if (list?.dataset.pageId !== expected.pageId || list.dataset.listId !== expected.listId || !tab || tab.disabled || ['true',''].includes(tab.getAttribute('disabled'))) return false;
+  tab.click();
+  await new Promise(resolve=>setTimeout(resolve,100));
+  for(let attempt=0;attempt<80;attempt++) {
+    const current=document.querySelector('.list-content');
+    if (current?.dataset.pageId !== expected.pageId || current.dataset.listId !== expected.listId) return false;
+    const currentTab=document.querySelector('.tabs [data-status="completed"]');
+    if (currentTab?.classList.contains('active') && !currentTab.disabled && !['true',''].includes(currentTab.getAttribute('disabled'))) return !document.querySelector('.notice.error');
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  return false;
+}
+
+module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted };
