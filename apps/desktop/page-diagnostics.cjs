@@ -8,6 +8,35 @@ function diagnosticRoute(value) {
   } catch { return '无效地址'; }
 }
 
+/** 异常仅提取公开静态脚本的位置；不读取异常正文、远程对象、变量或调用参数。 */
+function publicExceptionFrames(details) {
+  return (details?.stackTrace?.callFrames || []).slice(0, 12).flatMap(frame => {
+    try {
+      const url = new URL(frame.url);
+      if (!['www.icloud.com', 'www.icloud.com.cn'].includes(url.hostname) || !/^\/(?:applications|system)\/.+\.js$/.test(url.pathname) ||
+          !Number.isInteger(frame.lineNumber) || !Number.isInteger(frame.columnNumber)) return [];
+      return [{ source:url.origin+url.pathname, line:frame.lineNumber+1, column:frame.columnNumber+1 }];
+    } catch { return []; }
+  });
+}
+
+/** 仅开发验收启用 Chromium 异常位置事件；不订阅请求内容，不取远程对象或变量。 */
+function tracePublicExceptions(debuggerAPI, record) {
+  try {
+    debuggerAPI.attach('1.3');
+    debuggerAPI.on('message', (_event, method, params) => {
+      if (method === 'Runtime.exceptionThrown') {
+        const frames = publicExceptionFrames(params.exceptionDetails);
+        if (frames.length) record('页面异常位置', {frames});
+      } else if (method === 'Target.attachedToTarget' && params.sessionId) {
+        debuggerAPI.sendCommand('Runtime.enable', {}, params.sessionId).catch(()=>{});
+      }
+    });
+    debuggerAPI.sendCommand('Runtime.enable').catch(()=>{});
+    debuggerAPI.sendCommand('Target.setAutoAttach', {autoAttach:true,waitForDebuggerOnStart:false,flatten:true}).catch(()=>{});
+  } catch { record('异常位置诊断不可用', {}); }
+}
+
 /** 只读取公开结构与运行能力，不访问输入值、Cookie、认证请求或提醒事项正文。 */
 async function inspectFrame(frame, timeout = 1500) {
   let timer;
@@ -20,4 +49,4 @@ async function inspectFrame(frame, timeout = 1500) {
   finally { clearTimeout(timer); }
 }
 
-module.exports = { inspectFrame, diagnosticRoute };
+module.exports = { inspectFrame, diagnosticRoute, publicExceptionFrames, tracePublicExceptions };

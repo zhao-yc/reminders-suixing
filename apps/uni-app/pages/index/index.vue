@@ -22,9 +22,13 @@
       <view class="sidebar-footer"><text class="footer-wordmark">随行 · 开源</text><text class="muted small">{{ bridge.platform }} · 最小验证版</text></view>
     </view>
     <view class="workspace">
-      <view class="toolbar">
+      <view class="toolbar" :class="{ 'with-tools': !!snapshot }">
         <button class="mobile-menu" aria-label="显示清单" @click="sidebarOpen = true">☰</button>
-        <text class="toolbar-label">{{ isDemo ? '界面示例 · 不连接 iCloud' : '你的清单，随时在身边' }}</text>
+        <text v-if="!snapshot" class="toolbar-label">你的清单，随时在身边</text>
+        <view v-if="snapshot" class="quick-tools">
+          <button v-if="canCreate" class="add-reminder-button" :disabled="busy || !!editing || (!live && !isDemo)" aria-label="新增提醒事项" title="新增提醒事项（Ctrl+N）" @click="startCreate"><text>＋</text></button>
+          <view class="toolbar-search"><view class="search-mark"></view><input v-model="search" :disabled="!!editing" :focus="searchFocused" class="search" placeholder="搜索当前清单" aria-label="搜索当前清单" @blur="searchFocused = false" /></view>
+        </view>
         <view class="toolbar-actions">
           <picker :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || !!editing" @change="changeRegion"><view class="region-picker">{{ region === 'cn' ? '中国大陆' : '其他地区' }}⌄</view></picker>
           <button class="quiet-button" :disabled="busy || (!!editing && !editing.blocked)" @click="connect">{{ live && !isDemo ? '官方页面' : '登录 iCloud' }}</button>
@@ -44,15 +48,16 @@
       </view>
       <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId">
         <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title">{{ snapshot.activeListTitle }}</text><text class="heading-count">{{ incompleteCount }}</text></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
-        <view class="list-controls"><view class="tabs"><button data-status="pending" :disabled="!!editing" :class="{ active: tab === 'pending' }" @click="tab = 'pending'">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :disabled="!!editing" :class="{ active: tab === 'completed' }" @click="tab = 'completed'">已完成 <text>{{ completeCount }}</text></button></view><input v-model="search" :disabled="!!editing" class="search" placeholder="搜索当前清单" aria-label="搜索当前清单" /></view>
+        <view class="list-controls"><view class="tabs"><button data-status="pending" :disabled="!!editing" :class="{ active: tab === 'pending' }" @click="tab = 'pending'">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :disabled="!!editing" :class="{ active: tab === 'completed' }" @click="tab = 'completed'">已完成 <text>{{ completeCount }}</text></button></view><text class="current-scope">当前清单</text></view>
         <scroll-view class="items-scroll" scroll-y>
-          <view v-if="!visibleItems.length" class="empty-list"><text class="empty-circle">✓</text><text>{{ search ? '没有找到相关事项' : tab === 'completed' ? '这里会显示网页已加载的完成事项' : '这份清单暂时没有待办事项' }}</text></view>
+          <view v-if="editing?.creating" class="reminder-row new-reminder-row"><view class="draft-circle"></view><view class="inline-editor"><text class="editor-label">新提醒事项 · {{ snapshot.activeListTitle }}</text><input v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" placeholder="提醒我…" aria-label="新事项标题" @confirm="confirmEdit" @keydown="editKeydown" /><view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '添加中…' : '添加' }}</button><button :disabled="busy" @click="endEdit">取消</button></view></view></view>
+          <view v-if="!visibleItems.length && !editing?.creating" class="empty-list"><text class="empty-circle">✓</text><text>{{ search ? '没有找到相关事项' : tab === 'completed' ? '这里会显示网页已加载的完成事项' : '这份清单暂时没有待办事项' }}</text><button v-if="canCreate && tab === 'pending' && !search" class="empty-add" :disabled="busy || !!editing || (!live && !isDemo)" @click="startCreate">添加提醒事项</button></view>
           <view v-for="item in visibleItems" :key="item.id" class="reminder-row" :data-record-id="item.id" :class="{ completed: item.completed }">
             <button class="completion-button" :class="{ checked: item.completed }" :disabled="busy || !!editing || (!live && !isDemo) || item.disabled" :aria-label="(item.completed ? '取消完成：' : '完成：') + item.title" @click="toggle(item)"><text v-if="item.completed">✓</text></button>
             <view class="reminder-copy">
               <view v-if="editing?.id === item.id" class="inline-editor">
                 <text class="editor-label">{{ editing.field === 'title' ? '编辑标题' : '编辑备注' }}</text>
-                <input v-if="editing.field === 'title'" v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" aria-label="事项标题" @confirm="saveEdit" @keydown="editKeydown" />
+                <input v-if="editing.field === 'title'" v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" aria-label="事项标题" @confirm="confirmEdit" @keydown="editKeydown" />
                 <textarea v-else v-model="editing.value" class="edit-field edit-notes" :maxlength="2000" :focus="true" :disabled="busy || editing.blocked" auto-height aria-label="事项备注" @keydown="editKeydown" />
                 <view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '保存中…' : '保存' }}</button><button :disabled="busy" @click="endEdit">取消</button></view>
               </view>
@@ -71,7 +76,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onUnmounted } from 'vue';
+import { computed, ref, nextTick, onMounted, onUnmounted } from 'vue';
 import { createBridge } from '../../lib/bridge.js';
 import { demoSnapshot } from '../../lib/demo.js';
 import { readRegionPreference, saveRegionPreference } from '../../lib/region-preference.js';
@@ -97,11 +102,13 @@ const live = ref(false);
 const isDemo = ref(false);
 const editing = ref(null);
 const canEdit = computed(() => isDemo.value || bridge.capabilities?.editText === true);
+const canCreate = computed(() => isDemo.value || bridge.capabilities?.openNewItem === true);
 const notice = ref('');
 const noticeError = ref(false);
 const sidebarOpen = ref(false);
 const tab = ref('pending');
 const search = ref('');
+const searchFocused = ref(false);
 const incompleteCount = computed(() => snapshot.value?.items.filter(item => !item.completed).length || 0);
 const completeCount = computed(() => snapshot.value?.items.filter(item => item.completed).length || 0);
 const visibleItems = computed(() => (snapshot.value?.items || []).filter(item => item.completed === (tab.value === 'completed') && (!search.value || (item.title + item.notes).toLowerCase().includes(search.value.toLowerCase()))));
@@ -116,7 +123,7 @@ function accept(result) {
   } else if (!result.ok) {
     live.value = false;
   }
-  notice.value = result.message || '';
+  notice.value = result.code === 'READY' ? '' : result.message || '';
   noticeError.value = !result.ok;
 }
 
@@ -202,22 +209,76 @@ function startEdit(item, field) {
 
 function endEdit() { if (!busy.value) editing.value = null; }
 
+async function startCreate() {
+  if (!canCreate.value || !snapshot.value || busy.value || editing.value || (!live.value && !isDemo.value)) return;
+  if (!isDemo.value && bridge.capabilities?.createItem !== true) {
+    const result = await bridge.openSite(region.value);
+    if (!result.ok) { accept(result); return; }
+    notice.value = '请在官方页面新增事项，返回后刷新。';
+    noticeError.value = false;
+    return;
+  }
+  tab.value = 'pending';
+  search.value = '';
+  editing.value = { creating: true, field: 'title', value: '', pageId: snapshot.value.pageId, listId: snapshot.value.activeListId,
+    requestId: 'create-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2), blocked: false };
+}
+
 function editKeydown(event) {
+  // #ifndef H5
+  handleEditKeydown(event);
+  // #endif
+}
+
+function handleEditKeydown(event) {
+  if (event.isComposing || event.keyCode === 229) return;
   if (event.key === 'Escape') { event.preventDefault?.(); endEdit(); }
   else if (event.key === 'Enter' && (editing.value?.field === 'title' || event.ctrlKey || event.metaKey)) { event.preventDefault?.(); saveEdit(); }
+}
+
+function confirmEdit() {
+  // H5 使用保留 isComposing 的原始键盘事件，避免中文输入法选字回车被当作保存。
+  // #ifdef H5
+  return;
+  // #endif
+  // #ifndef H5
+  saveEdit();
+  // #endif
 }
 
 async function saveEdit() {
   const current = editing.value;
   if (!current || current.blocked || busy.value) return;
   if (current.field === 'title' && !current.value.trim()) { notice.value = '请填写事项标题。'; noticeError.value = true; return; }
-  if (isDemo.value) { snapshot.value.items.find(item => item.id === current.id)[current.field] = current.value; editing.value = null; return; }
+  if (isDemo.value) {
+    if (current.creating) snapshot.value.items.push({ id: current.requestId, listId: current.listId, title: current.value.trim(), notes: '', metadata: '', completed: false, level: 1, disabled: false });
+    else snapshot.value.items.find(item => item.id === current.id)[current.field] = current.value;
+    editing.value = null; return;
+  }
   if (!live.value) return;
-  const result = await run({ type: 'setText', pageId: current.pageId, listId: current.listId, id: current.id,
-    fingerprint: current.fingerprint, expectedCompleted: current.expectedCompleted, field: current.field, value: current.value });
+  const result = await run(current.creating ? { type: 'createItem', pageId: current.pageId, listId: current.listId, title: current.value.trim(), requestId: current.requestId } :
+    { type: 'setText', pageId: current.pageId, listId: current.listId, id: current.id,
+      fingerprint: current.fingerprint, expectedCompleted: current.expectedCompleted, field: current.field, value: current.value });
   if (result?.ok) editing.value = null;
   else current.blocked = true;
 }
+
+// #ifdef H5
+function workspaceKeydown(event) {
+  if (event.isComposing || event.keyCode === 229 || !snapshot.value) return;
+  if (editing.value) {
+    if (event.target?.closest?.('.inline-editor')) handleEditKeydown(event);
+    return;
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); startCreate(); }
+  else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+    event.preventDefault(); searchFocused.value = false; nextTick(() => { searchFocused.value = true; });
+  } else if (event.key === 'Escape') search.value = '';
+}
+// 捕获原始 DOM 事件，避免输入组件包装时丢失 isComposing；远程官方网页不加载此界面代码。
+onMounted(() => document.addEventListener('keydown', workspaceKeydown, true));
+onUnmounted(() => document.removeEventListener('keydown', workspaceKeydown, true));
+// #endif
 
 // 验证客户端仍通过相同的快照入口更新界面，不把诊断读取伪装成示例数据。
 const stopSnapshotListener = bridge.onSnapshot?.(payload => {
@@ -247,5 +308,15 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .row-actions { display:flex; gap:3px; flex-shrink:0; opacity:0; transition:opacity .15s; }.reminder-row:hover .row-actions,.reminder-row:focus-within .row-actions { opacity:1; }.row-actions button { margin:0; padding:0; width:25px; height:28px; color:#8393a8; font-size:17px; }.row-actions button:hover { color:#1687ff; background:#eef5ff; border-radius:6px; }
 .inline-editor { display:flex; flex-direction:column; gap:9px; width:100%; }.editor-label { color:#8393a8; font-size:11px; }.edit-field { box-sizing:border-box; width:100%; height:38px; padding:8px 10px; color:#3d4859; font-size:14px; border:1px solid #a3caff; border-radius:7px; background:#fafcff; }.edit-notes { min-height:95px; line-height:1.7; }.editor-actions { display:flex; gap:10px; }.editor-actions button { margin:0; padding:6px 11px; font-size:12px; color:#8491a4; border-radius:6px; }.editor-actions .save-edit { color:#fff; background:#1687ff; }.editor-actions .save-edit[disabled] { background:#aebed2; }.edit-recovery { margin:8px 34px 0; display:flex; align-items:center; gap:12px; font-size:12px; color:#b36139; }.edit-recovery button { margin:0; padding:5px; font-size:12px; color:#1687ff; }.reminder-notes { overflow-wrap:anywhere; }
 @media (hover:none) { .row-actions { opacity:1; } }
+.toolbar { height:68px; gap:16px; }
+.quick-tools { display:flex; align-items:center; gap:12px; flex:1; min-width:0; }
+.add-reminder-button { flex-shrink:0; width:36px; height:36px; margin:0; display:flex; align-items:center; justify-content:center; border-radius:9px; font-size:27px; line-height:1; color:#1687ff; background:#edf5ff; }
+.add-reminder-button:hover { background:#dfedff; }.add-reminder-button[disabled] { color:#a5b6cc; }
+.toolbar-search { display:flex; align-items:center; gap:10px; min-width:60px; width:230px; max-width:100%; padding:0 12px; height:36px; background:#f4f6f9; border:1px solid transparent; border-radius:9px; }
+.toolbar-search:focus-within { background:#fff; border-color:#92bcf4; }.toolbar-search .search { flex:1; min-width:0; width:100%; padding:0; background:transparent; font-size:12px; height:34px; }
+.search-mark { width:11px; height:11px; border:1.6px solid #97a3b3; border-radius:50%; position:relative; flex-shrink:0; margin-right:2px; }.search-mark::after { content:''; position:absolute; width:5px; height:1.6px; background:#97a3b3; right:-4px; bottom:-2px; transform:rotate(45deg); }
+.current-scope { font-size:10px; color:#a3adba; }.list-content { padding:24px 34px 0; }.list-heading { margin-bottom:16px; }.eyebrow { margin-bottom:5px; }.list-title { font-size:32px; }.reminder-row { padding:16px 2px; }.reminder-copy { gap:4px; }
+.new-reminder-row { background:#f8fbff; border-radius:9px; padding:16px 10px; margin-top:10px; gap:15px; }.draft-circle { width:22px; height:22px; border:1.5px solid #cbd4df; border-radius:50%; margin-top:29px; flex-shrink:0; }.new-reminder-row .inline-editor { min-width:0; flex:1; }.empty-add { color:#1687ff; font-size:12px; padding:8px 12px; }
 @media (max-width:760px) { .sidebar { position:fixed; top:0; bottom:0; left:0; z-index:30; transform:translateX(-100%); transition:transform .2s ease; padding-top:calc(28px + env(safe-area-inset-top)); }.sidebar.is-open { transform:translateX(0); }.sidebar-scrim { display:block; position:fixed; inset:0; z-index:25; background:#26324735; }.mobile-menu { display:block; color:#74839a; font-size:19px; width:28px; }.toolbar { height:calc(68px + env(safe-area-inset-top)); padding:env(safe-area-inset-top) 20px 0; gap:8px; }.toolbar-label { display:none; }.toolbar-actions { gap:10px; }.region-picker { font-size:10px; }.quiet-button { font-size:12px; }.primary-button { font-size:12px; padding:9px 15px; }.notice { margin:12px 20px 0; font-size:11px; }.list-content { padding:28px 24px 0; }.list-title { font-size:32px; }.heading-count { font-size:26px; }.list-heading { margin-bottom:21px; }.search { width:125px; font-size:10px; }.tabs { gap:18px; }.tabs button { font-size:11px; }.reminder-row { gap:13px; padding:21px 0; }.reminder-title { font-size:14px; }.list-footer { padding-bottom:calc(20px + env(safe-area-inset-bottom)); font-size:9px; }.welcome-title { font-size:33px; }.welcome { padding-bottom:40px; }.source-chip { font-size:9px; padding:6px 8px; } }
+@media (max-width:760px) { .toolbar.with-tools { height:calc(114px + env(safe-area-inset-top)); padding-bottom:10px; flex-wrap:wrap; align-content:center; row-gap:10px; }.toolbar.with-tools .mobile-menu { order:1; }.toolbar-actions { order:2; margin-left:auto; }.quick-tools { order:3; flex-basis:100%; }.toolbar-search { flex:1; width:auto; }.list-content { padding-top:22px; }.new-reminder-row { padding:15px 10px; } }
 </style>

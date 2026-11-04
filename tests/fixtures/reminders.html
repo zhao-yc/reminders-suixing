@@ -4,6 +4,7 @@
   <div role="treeitem" class="rm-list-menu-item" aria-selected="true" data-list="one"><button class="inline-editable-label">验证清单</button></div>
   <div role="treeitem" class="rm-list-menu-item" aria-selected="false" data-list="two"><button class="inline-editable-label">验证清单</button></div>
 </div>
+<button class="rm-new-reminder" role="button" aria-label="新增提醒事项">新增</button>
 <div role="treegrid" aria-label="提醒列表"></div>
 <script>
 // 该页面只包含合成数据，用来验证重复标题、完成回执和列表切换，绝不访问 Apple。
@@ -15,6 +16,10 @@ window.fixtureTextSaves = 0;
 window.fixtureTextInputs = 0;
 window.fixtureTextBlurs = 0;
 window.fixtureTextPreparations = 0;
+window.fixtureCreationClicks = 0;
+window.fixtureDisableCreation = false;
+window.fixtureCreationCopies = 1;
+window.fixtureCreationReady = false;
 // JSDOM 不实现浏览器编辑命令；真实 Electron 保留并验证其原生实现。
 if (!document.execCommand) document.execCommand = function (command, _ui, value) {
   if (!['insertText', 'insertHTML'].includes(command) || !document.activeElement?.isContentEditable && document.activeElement?.getAttribute('contenteditable') !== 'true') return false;
@@ -25,9 +30,10 @@ if (!document.execCommand) document.execCommand = function (command, _ui, value)
 };
 function renderFixture(list) {
   const complete = sessionStorage.getItem('fixture-complete') === 'true';
-  const titles = list === 'two' ? ['随行验证 · 第二个同名清单'] : ['随行验证 · 同名事项', '随行验证 · 同名事项'];
-  document.querySelector('[role="treegrid"]').innerHTML = titles.map((title, index) =>
-    '<div class="reminder-item" id="reminder-item-fixture-' + list + '-' + index + '" role="row" aria-level="1" aria-setsize="' + titles.length + '">' +
+  const titles = (list === 'two' ? ['随行验证 · 第二个同名清单'] : ['随行验证 · 同名事项', '随行验证 · 同名事项']).map((title,index)=>({title,id:'reminder-item-fixture-' + list + '-' + index}));
+  const records = titles.concat(JSON.parse(sessionStorage.getItem('fixture-created-' + list) || '[]'));
+  document.querySelector('[role="treegrid"]').innerHTML = records.map(({title,id}, index) =>
+    '<div class="reminder-item" id="' + id + '" role="row" aria-level="1" aria-setsize="' + records.length + '">' +
     '<button class="mark-completed" data-completed="' + (index === 0 && complete) + '" aria-label="切换完成状态"></button>' +
     '<div class="title"><div role="textbox" contenteditable="true">' + title + '</div></div>' +
     '<div class="notes"><div role="textbox" contenteditable="true"></div></div><div class="metadata">2026/11/04<span aria-hidden="true">重复无障碍文字</span></div></div>'
@@ -64,6 +70,23 @@ function renderFixture(list) {
     sessionStorage.setItem('fixture-complete', String(next));
   }); });
 }
+document.querySelector('.rm-new-reminder').addEventListener('click', () => {
+  window.fixtureCreationClicks++;
+  if (window.fixtureDisableCreation) return;
+  const list = document.querySelector('[role="treeitem"][aria-selected="true"]').dataset.list;
+  const created = JSON.parse(sessionStorage.getItem('fixture-created-' + list) || '[]');
+  for (let index=0; index<window.fixtureCreationCopies; index++) created.push({title:'',id:'reminder-item-fixture-' + list + '-created-' + created.length});
+  sessionStorage.setItem('fixture-created-' + list, JSON.stringify(created));
+  renderFixture(list);
+  window.fixtureCreationReady = false;
+  // 模拟官方 saveLocally 完成后才选择新事项，DOM 节点可能提前出现在列表中。
+  setTimeout(() => {
+    const row=document.getElementById(created[created.length-1].id);
+    window.fixtureCreationReady = true;
+    row?.setAttribute('aria-selected','true');
+    row?.querySelector('.title [role="textbox"]')?.focus();
+  },60);
+});
 document.querySelectorAll('[role="treeitem"]').forEach(node => node.addEventListener('click', () => {
   document.querySelectorAll('[role="treeitem"]').forEach(other => other.setAttribute('aria-selected', String(other === node)));
   renderFixture(node.dataset.list);

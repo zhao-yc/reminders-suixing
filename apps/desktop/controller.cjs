@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { BrowserWindow, session } = require('electron');
 const { allowedURL, allowStorage, browserUserAgent, validCommand } = require('./policy.cjs');
-const { inspectFrame, diagnosticRoute } = require('./page-diagnostics.cjs');
+const { inspectFrame, diagnosticRoute, tracePublicExceptions } = require('./page-diagnostics.cjs');
 const { inspectTestEditor } = require('./editor-diagnostics.cjs');
 
 const ROOT = path.resolve(__dirname, '../..');
@@ -92,6 +92,7 @@ function createController(options = {}) {
       webPreferences: { partition, nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: !options.diagnostics }
     });
     harden(site.webContents);
+    if (options.diagnostics && !fixtureURL) tracePublicExceptions(site.webContents.debugger, record);
     site.webContents.setUserAgent(browserUserAgent(process.versions.chrome));
     site.on('close', event => { if (!closing) { event.preventDefault(); site.hide(); } });
     // 页面载入失败只反馈状态，不自动重新提交任何读写命令。
@@ -103,7 +104,7 @@ function createController(options = {}) {
     if (!validCommand(command)) return { ok: false, code: 'INVALID_COMMAND', message: '不支持的操作参数。' };
     if (busy) return { ok: false, code: 'BUSY', message: '上一项操作尚未结束。' };
     busy = true;
-    const write = ['setCompleted', 'setText'].includes(command.type);
+    const write = ['setCompleted', 'setText', 'createItem'].includes(command.type);
     let timer;
     try {
       const window = ensure(region);

@@ -55,4 +55,27 @@ async function editTestText(expected) {
   return false;
 }
 
-module.exports = { clickTestCompletion, editTestText };
+/** 新建验证只通过本地“＋”、标题输入和添加按钮各一次，不直接调用创建 IPC。 */
+async function createTestItem(expected) {
+  const pause = () => new Promise(resolve => setTimeout(resolve, 100));
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const list = document.querySelector('.list-content');
+    if (list?.dataset.pageId !== expected.pageId || list.dataset.listId !== expected.listId) { await pause(); continue; }
+    const add = document.querySelector('.add-reminder-button');
+    if (!add || add.disabled || ['true', ''].includes(add.getAttribute('disabled'))) return false;
+    add.click();
+    await pause();
+    const input = document.querySelector('.new-reminder-row input');
+    if (!input || input.disabled) return false;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, expected.title);
+    input.dispatchEvent(new Event('input', { bubbles:true }));
+    await pause();
+    const save = document.querySelector('.new-reminder-row .save-edit');
+    if (!save || save.disabled || ['true', ''].includes(save.getAttribute('disabled'))) return false;
+    save.click();
+    return true;
+  }
+  return false;
+}
+
+module.exports = { clickTestCompletion, editTestText, createTestItem };

@@ -38,7 +38,8 @@ function frontendPath() {
 
 function installIPC() {
   for (const [channel, handler] of [
-    ['suixing:execute', args => controller.execute(args.command, args.region)],
+    ['suixing:execute', args => args.command?.type === 'createItem' && !liveCheck ?
+      { ok:false, code:'CREATE_OFFICIAL', message:'请在官方页面新增事项，返回后刷新。' } : controller.execute(args.command, args.region)],
     ['suixing:open-site', args => controller.openSite(args.region)],
     ['suixing:reload-site', args => controller.reloadSite(args.region)]
   ]) {
@@ -64,7 +65,8 @@ app.whenReady().then(async () => {
   mainWindow = new BrowserWindow({
     width: 1160, height: 830, minWidth: 390, minHeight: 600, show: false,
     title: '提醒事项·随行', autoHideMenuBar: true, backgroundColor: '#f6f7f9',
-    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: !liveCheck }
+    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: !liveCheck,
+      additionalArguments: liveCheck ? ['--suixing-verify-create'] : [] }
   });
   installIPC();
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

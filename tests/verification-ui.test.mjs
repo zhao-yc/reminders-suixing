@@ -74,3 +74,13 @@ test('界面执行中断返回不确定状态，不宣称没有点击', async ()
   assert.equal(result.dispatched, undefined);
   assert.equal(invocations, 1);
 });
+
+test('新增自动验证拒绝普通清单，已有测试新增事项时只读返回', async () => {
+  const refused = await testOperation(scopedController(false,'普通合成清单'),'create-test-item',{ui:null});
+  assert.equal(refused.code,'TEST_LIST_NOT_UNIQUE');
+  const base = scopedController(false);
+  const controller = { async execute(command) { const result=await base.execute(command); result.snapshot.items.push({title:'随行验证 · Windows 新增验证',completed:false}); return result; } };
+  const result=await testOperation(controller,'create-test-item',{sendSnapshot:()=>assert.fail('不得派发新增'),ui:null});
+  assert.equal(result.code,'UNCHANGED');
+  assert.equal(summarize(result).testCreatedCount,1);
+});

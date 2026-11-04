@@ -6,7 +6,7 @@ const { once } = require('node:events');
 const { BrowserWindow, ipcMain } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
-const { clickTestCompletion, editTestText } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem } = require('./verification-ui.cjs');
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
 async function runSmoke({ frontendURL, root }) {
@@ -20,6 +20,7 @@ async function runSmoke({ frontendURL, root }) {
   const controller = createController({ fixtureURL: 'http://127.0.0.1:' + server.address().port + '/', diagnostics: true });
   let ui;
   let agentWindow;
+  let normalUI;
   try {
     // localhost 与 127.0.0.1 是不同站点，验证登录所用的跨域 iframe 不会退回中文 Electron 标识。
     agentWindow = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } });
@@ -61,7 +62,8 @@ async function runSmoke({ frontendURL, root }) {
     console.log('桌面网页桥接及重载验证通过。');
 
     ui = new BrowserWindow({ show: false, width: 1160, height: 830, webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false
+      preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false,
+      additionalArguments:['--suixing-verify-create']
     } });
     ui.webContents.on('console-message', event => { if (event.level === 'error') console.error('界面错误：' + event.message); });
     ipcMain.handle('suixing:execute', (event, args) => event.sender === ui.webContents ? controller.execute(args.command, args.region) : { ok: false });
@@ -139,6 +141,55 @@ async function runSmoke({ frontendURL, root }) {
     }
     for (const [field, value] of Object.entries(textValues)) assert.equal(textReloaded.snapshot.items[0][field], value);
     console.log('构建界面标题和备注经原生编辑命令各保存一次，合成页面重载保持。');
+    ui.webContents.send('suixing:snapshot', {region:'cn',result:textReloaded});
+    const keyboard = await ui.webContents.executeJavaScript(`(async()=>{
+      const pause=()=>new Promise(resolve=>setTimeout(resolve,120));
+      document.dispatchEvent(new KeyboardEvent('keydown',{key:'f',ctrlKey:true,bubbles:true,cancelable:true}));await pause();
+      const searchFocused=!!document.activeElement.closest('.toolbar-search');
+      document.dispatchEvent(new KeyboardEvent('keydown',{key:'n',ctrlKey:true,bubbles:true,cancelable:true}));await pause();
+      const input=document.querySelector('.new-reminder-row input');if(!input)return {searchFocused,opened:false};
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'随行验证 · 输入法取消');input.dispatchEvent(new Event('input',{bubbles:true}));await pause();
+      input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',isComposing:true,bubbles:true,cancelable:true}));await pause();
+      const composingKept=!!document.querySelector('.new-reminder-row');
+      input.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await pause();
+      return {searchFocused,opened:true,composingKept,cancelled:!document.querySelector('.new-reminder-row')};
+    })()`,true);
+    assert.deepEqual(keyboard,{searchFocused:true,opened:true,composingKept:true,cancelled:true});
+    assert.equal(await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureCreationClicks'),0);
+    const createdTitle='随行验证 · 构建界面新增';
+    assert.equal(await ui.webContents.executeJavaScript('('+createTestItem.toString()+')('+JSON.stringify({pageId:textReloaded.snapshot.pageId,listId:textReloaded.snapshot.activeListId,title:createdTitle})+')',true),true);
+    let created;
+    for(let attempt=0;attempt<50;attempt++) {
+      await new Promise(resolve=>setTimeout(resolve,100));
+      created=await controller.execute({type:'read'},'cn');
+      if(created.snapshot?.items.some(item=>item.title===createdTitle))break;
+    }
+    assert.equal(created.snapshot?.items.filter(item=>item.title===createdTitle).length,1);
+    assert.equal(await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureCreationClicks'),1);
+    await controller.window().webContents.executeJavaScript('location.reload()');
+    for(let attempt=0;attempt<30;attempt++) {
+      await new Promise(resolve=>setTimeout(resolve,100));
+      created=await controller.execute({type:'read'},'cn');
+      if(created.snapshot?.items.some(item=>item.title===createdTitle))break;
+    }
+    assert.equal(created.snapshot?.items.filter(item=>item.title===createdTitle).length,1);
+    console.log('顶栏新增及搜索快捷键、输入法取消和单次新增重载保持验证通过。');
+    // 默认窗口不开放尚未通过真实保存的直接新增；“＋”仅进入官方页面，不产生创建命令。
+    normalUI = new BrowserWindow({show:false,webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}});
+    let officialOpens=0;
+    ipcMain.handle('suixing:open-site', event=>{
+      assert.equal(event.sender,normalUI.webContents);
+      officialOpens++;return {ok:true};
+    });
+    await normalUI.loadURL(frontendURL);
+    await normalUI.webContents.executeJavaScript('new Promise(resolve=>{const timer=setInterval(()=>{if(document.querySelector(".demo-link")){clearInterval(timer);resolve(true)}},30)})');
+    normalUI.webContents.send('suixing:snapshot',{region:'cn',result:created});
+    const fallback=await normalUI.webContents.executeJavaScript(`(async()=>{for(let i=0;i<50;i++){const add=document.querySelector('.add-reminder-button');if(add){add.click();await new Promise(r=>setTimeout(r,100));return {direct:window.suixingDesktop.capabilities.createItem,draft:!!document.querySelector('.new-reminder-row'),notice:document.querySelector('.notice')?.textContent.includes('请在官方页面新增事项')}}await new Promise(r=>setTimeout(r,100))}return null})()`,true);
+    assert.deepEqual(fallback,{direct:false,draft:false,notice:true});
+    assert.equal(officialOpens,1);
+    assert.equal(await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureCreationClicks'),0);
+    normalUI.destroy();normalUI=null;
+    console.log('默认新增入口只打开官方页面，不派发未验收创建命令。');
     await controller.window().webContents.loadURL('http://127.0.0.1:' + server.address().port + '/home');
     const returned = once(controller.window().webContents, 'did-finish-load');
     assert.equal(controller.reloadSite('cn').ok, true);
@@ -169,7 +220,7 @@ async function runSmoke({ frontendURL, root }) {
     fs.writeFileSync(path.join(root, '.local/mobile-preview.png'), (await ui.webContents.capturePage()).toPNG());
     const report = {
       passed: true, kind: 'Electron 合成验证，不代表真实 iCloud 或真机验收',
-      checks: ['跨站 iframe 浏览器标识', '只读子页面诊断', '同源 iframe 读取', '同名事项按记录 ID 操作', '完成状态重载保持', '旧页面句柄失效', '构建界面加载', '服务区域恢复', '界面通过 IPC 读取', '构建界面完成及取消完成各派发一次', '标题和备注各保存一次及合成重载保持', '页面无 Node 权限', '桌面与手机宽度布局'],
+      checks: ['跨站 iframe 浏览器标识', '只读子页面诊断', '同源 iframe 读取', '同名事项按记录 ID 操作', '完成状态重载保持', '旧页面句柄失效', '构建界面加载', '服务区域恢复', '界面通过 IPC 读取', '构建界面完成及取消完成各派发一次', '标题和备注各保存一次及合成重载保持', '顶栏新增与搜索快捷键', '输入法取消不创建', '新增单次派发与合成重载保持', '固定提醒事项入口恢复', '页面无 Node 权限', '桌面与手机宽度布局'],
       capturedAt: new Date().toISOString()
     };
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });
@@ -177,7 +228,9 @@ async function runSmoke({ frontendURL, root }) {
     console.log('桌面合成验证通过：' + report.checks.join('、'));
   } finally {
     ipcMain.removeHandler('suixing:execute');
+    ipcMain.removeHandler('suixing:open-site');
     ui?.destroy();
+    normalUI?.destroy();
     agentWindow?.destroy();
     controller.dispose();
     await new Promise(resolve => server.close(resolve));

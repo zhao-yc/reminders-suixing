@@ -2,12 +2,13 @@ const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
 const { allowedURL } = require('./policy.cjs');
-const { clickTestCompletion, editTestText } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem } = require('./verification-ui.cjs');
 
 const TEST_PREFIX = '随行验证';
 const TEST_ITEM = '随行验证 · 最小读写验证';
 const TEST_EDITED_ITEM = '随行验证 · 最小读写验证 · 编辑验证';
 const TEST_NOTE = '随行验证 · 备注写入验证\n随行验证 · 第二行';
+const TEST_CREATED_ITEM = '随行验证 · Windows 新增验证';
 
 /** 自动写入只能命中唯一的专用验证清单与验证事项，名称仅用于限定测试范围。实际写入仍使用记录 ID 与指纹。 */
 async function testOperation(controller, command, { sendSnapshot, ui }) {
@@ -19,6 +20,23 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
     return controller.execute({ type: 'selectList', pageId: result.snapshot.pageId, listId: lists[0].id }, 'cn');
   }
   if (result.snapshot.activeListId !== lists[0].id) return { ok: false, code: 'TEST_LIST_NOT_SELECTED' };
+  if (command === 'create-test-item') {
+    const existing = result.snapshot.items.filter(item => item.title === TEST_CREATED_ITEM);
+    if (existing.length > 1) return { ok:false, code:'TEST_CREATED_NOT_UNIQUE' };
+    if (existing.length === 1) return { ...result, code:'UNCHANGED', dispatched:false };
+    sendSnapshot(result);
+    let clicked;
+    try {
+      clicked = await ui.webContents.executeJavaScript('(' + createTestItem.toString() + ')(' + JSON.stringify({ pageId:result.snapshot.pageId, listId:lists[0].id, title:TEST_CREATED_ITEM }) + ')', true);
+    } catch { return { ok:false, code:'UNCERTAIN_WRITE', cloudConfirmed:false }; }
+    if (!clicked) return { ok:false, code:'TEST_UI_NOT_READY' };
+    for (let attempt=0; attempt<80; attempt++) {
+      await new Promise(resolve=>setTimeout(resolve,200));
+      result = await controller.execute({type:'read'},'cn');
+      if (result.snapshot?.items.filter(item=>item.title===TEST_CREATED_ITEM).length===1) return { ...result, code:'WEB_STATE_OBSERVED', dispatched:true, cloudConfirmed:false, via:'Windows 本地新增界面 IPC' };
+    }
+    return { ok:false, code:'UNCERTAIN_WRITE', dispatched:true, cloudConfirmed:false };
+  }
   if (command === 'show-completed') {
     const target = controller.window().webContents.mainFrame.framesInSubtree.find(frame => /\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url));
     if (!target) return { ok: false, code: 'TEST_FRAME_NOT_READY' };
@@ -90,12 +108,15 @@ function summarize(result) {
   const snapshot = result.snapshot;
   const testList = snapshot?.activeListTitle.startsWith(TEST_PREFIX);
   const items = testList ? snapshot.items.filter(item => [TEST_ITEM, TEST_EDITED_ITEM].includes(item.title)) : [];
+  const created = testList ? snapshot.items.filter(item => item.title === TEST_CREATED_ITEM) : [];
   return { ok: result.ok, code: result.code, lists: snapshot?.lists.length, loadedItems: snapshot?.items.length,
     testList, testItemCount: testList ? items.length : undefined, testCompleted: items.length === 1 ? items[0].completed : undefined,
     testOriginalTitle: items.length === 1 ? items[0].title === TEST_ITEM : undefined,
     testEditedTitle: items.length === 1 ? items[0].title === TEST_EDITED_ITEM : undefined,
     testNoteSet: items.length === 1 ? items[0].notes === TEST_NOTE : undefined,
     testNoteEmpty: items.length === 1 ? items[0].notes === '' : undefined,
+    testCreatedCount: testList ? created.length : undefined,
+    testCreatedPending: created.length === 1 ? !created[0].completed : undefined,
     dispatched: result.dispatched, cloudConfirmed: result.cloudConfirmed, via: result.via };
 }
 
@@ -110,7 +131,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui }) {
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (!['diagnostics', 'inspect-test-editor', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'reload', 'quit'].includes(command)) return;
+    if (!['diagnostics', 'inspect-test-editor', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
     if (command === 'quit') { quit(); return; }
     if (busy) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));
@@ -135,7 +156,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui }) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result }, null, 2));
       console.log('开发验证结果：' + JSON.stringify(result));
     } catch {
-      const write = ['complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note'].includes(command);
+      const write = ['complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item'].includes(command);
       const result = { ok: false, code: write ? 'UNCERTAIN_WRITE' : 'VERIFICATION_FAILED', cloudConfirmed: false };
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result }));
       console.log('验证命令未完成，请先只读核对，不重放写入。');

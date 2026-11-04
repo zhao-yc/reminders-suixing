@@ -18,10 +18,12 @@ function browserUserAgent(chromiumVersion) {
 }
 
 function validCommand(command) {
-  if (!command || typeof command !== 'object' || !['read', 'selectList', 'setCompleted', 'setText'].includes(command.type)) return false;
+  if (!command || typeof command !== 'object' || !['read', 'selectList', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return false;
   if (command.type === 'read') return true;
   if (typeof command.pageId !== 'string' || command.pageId.length > 150 || typeof command.listId !== 'string' || command.listId.length > 150) return false;
   if (command.type === 'selectList') return true;
+  if (command.type === 'createItem') return typeof command.title === 'string' && command.title.trim().length > 0 && command.title.length <= 1000 && !/[\r\n]/.test(command.title) &&
+    typeof command.requestId === 'string' && /^[a-z0-9-]{1,100}$/.test(command.requestId);
   const target = typeof command.id === 'string' && command.id.length > 0 && command.id.length <= 1024 && typeof command.fingerprint === 'string' &&
     command.fingerprint.length <= 16000 && typeof command.expectedCompleted === 'boolean';
   if (command.type === 'setText') return target && ['title', 'notes'].includes(command.field) && typeof command.value === 'string' &&
