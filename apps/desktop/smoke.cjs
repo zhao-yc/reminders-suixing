@@ -2,10 +2,11 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
+const { once } = require('node:events');
 const { BrowserWindow, ipcMain } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
-const { clickTestCompletion } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText } = require('./verification-ui.cjs');
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
 async function runSmoke({ frontendURL, root }) {
@@ -107,6 +108,43 @@ async function runSmoke({ frontendURL, root }) {
     const writes = await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureClicks');
     assert.equal(writes, 2, '重载后的完成与取消完成各只写一次');
     console.log('构建界面完成与取消完成单次派发验证通过。');
+    const textValues = { title: '随行验证 · 编辑后的合成标题', notes: '随行验证 · <合成备注> & 文字\n\n第二行' };
+    for (const [field, value] of Object.entries(textValues)) {
+      const current = await controller.execute({ type: 'read' }, 'cn');
+      const target = current.snapshot.items[0];
+      ui.webContents.send('suixing:snapshot', { region: 'cn', result: current });
+      const clicked = await ui.webContents.executeJavaScript('(' + editTestText.toString() + ')(' + JSON.stringify({
+        pageId: current.snapshot.pageId, listId: target.listId, id: target.id, completed: target.completed, field, value
+      }) + ')', true);
+      assert.equal(clicked, true, '实际构建界面的文字编辑必须可操作');
+      let observed;
+      for (let attempt = 0; attempt < 80; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        observed = await controller.execute({ type: 'read' }, 'cn');
+        if (observed.snapshot?.items[0][field] === value) break;
+      }
+      assert.equal(observed.snapshot?.items[0][field], value, '文字字段读回不一致：' + field + ' / ' + observed.code);
+    }
+    const textEvents = await controller.window().webContents.executeJavaScript('(()=>{const w=document.querySelector("iframe").contentWindow;return {saves:w.fixtureTextSaves,preparations:w.fixtureTextPreparations,inputs:w.fixtureTextInputs,blurs:w.fixtureTextBlurs,activeTag:w.document.activeElement.tagName}})()');
+    console.log('原生文字编辑事件：' + JSON.stringify(textEvents));
+    assert.equal(textEvents.saves, 2);
+    assert.equal(textEvents.preparations, 2);
+    assert.equal(textEvents.inputs, 2);
+    await controller.window().webContents.executeJavaScript('location.reload()');
+    let textReloaded;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      textReloaded = await controller.execute({ type: 'read' }, 'cn');
+      if (textReloaded.ok && textReloaded.snapshot.items[0].title === textValues.title) break;
+    }
+    for (const [field, value] of Object.entries(textValues)) assert.equal(textReloaded.snapshot.items[0][field], value);
+    console.log('构建界面标题和备注经原生编辑命令各保存一次，合成页面重载保持。');
+    await controller.window().webContents.loadURL('http://127.0.0.1:' + server.address().port + '/home');
+    const returned = once(controller.window().webContents, 'did-finish-load');
+    assert.equal(controller.reloadSite('cn').ok, true);
+    await returned;
+    assert.equal(new URL(controller.window().webContents.getURL()).pathname, '/');
+    console.log('偏离提醒事项入口后重载回到固定入口验证通过。');
     // 读写回归已进入清单页，重新加载本地界面后再从欢迎页进入明确标识的示例模式。
     await ui.loadURL(frontendURL);
     await ui.webContents.executeJavaScript('new Promise((resolve,reject)=>{const deadline=Date.now()+8000;const timer=setInterval(()=>{const b=document.querySelector(".demo-link");if(b){clearInterval(timer);b.click();resolve(true)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("示例入口未完成加载"))}},50)})');
@@ -131,7 +169,7 @@ async function runSmoke({ frontendURL, root }) {
     fs.writeFileSync(path.join(root, '.local/mobile-preview.png'), (await ui.webContents.capturePage()).toPNG());
     const report = {
       passed: true, kind: 'Electron 合成验证，不代表真实 iCloud 或真机验收',
-      checks: ['跨站 iframe 浏览器标识', '只读子页面诊断', '同源 iframe 读取', '同名事项按记录 ID 操作', '完成状态重载保持', '旧页面句柄失效', '构建界面加载', '服务区域恢复', '界面通过 IPC 读取', '构建界面完成及取消完成各派发一次', '页面无 Node 权限', '桌面与手机宽度布局'],
+      checks: ['跨站 iframe 浏览器标识', '只读子页面诊断', '同源 iframe 读取', '同名事项按记录 ID 操作', '完成状态重载保持', '旧页面句柄失效', '构建界面加载', '服务区域恢复', '界面通过 IPC 读取', '构建界面完成及取消完成各派发一次', '标题和备注各保存一次及合成重载保持', '页面无 Node 权限', '桌面与手机宽度布局'],
       capturedAt: new Date().toISOString()
     };
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });

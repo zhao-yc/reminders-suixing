@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { protectConsoleStreams } = require('./console-streams.cjs');
+protectConsoleStreams();
 const { createController } = require('./controller.cjs');
 const { serveFrontend } = require('./frontend.cjs');
 const { browserUserAgent } = require('./policy.cjs');

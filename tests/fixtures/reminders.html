@@ -11,6 +11,18 @@ window.fixtureClicks = 0;
 window.fixtureDisableUpdates = false;
 window.fixtureRequiresPointerDown = false;
 window.fixturePointerDown = false;
+window.fixtureTextSaves = 0;
+window.fixtureTextInputs = 0;
+window.fixtureTextBlurs = 0;
+window.fixtureTextPreparations = 0;
+// JSDOM 不实现浏览器编辑命令；真实 Electron 保留并验证其原生实现。
+if (!document.execCommand) document.execCommand = function (command, _ui, value) {
+  if (!['insertText', 'insertHTML'].includes(command) || !document.activeElement?.isContentEditable && document.activeElement?.getAttribute('contenteditable') !== 'true') return false;
+  if (command === 'insertHTML') document.activeElement.innerHTML = value;
+  else document.activeElement.textContent = value;
+  document.activeElement.dispatchEvent(new InputEvent('input', { bubbles: true, data: value, inputType: 'insertText' }));
+  return true;
+};
 function renderFixture(list) {
   const complete = sessionStorage.getItem('fixture-complete') === 'true';
   const titles = list === 'two' ? ['随行验证 · 第二个同名清单'] : ['随行验证 · 同名事项', '随行验证 · 同名事项'];
@@ -20,6 +32,26 @@ function renderFixture(list) {
     '<div class="title"><div role="textbox" contenteditable="true">' + title + '</div></div>' +
     '<div class="notes"><div role="textbox" contenteditable="true"></div></div><div class="metadata">2026/11/04<span aria-hidden="true">重复无障碍文字</span></div></div>'
   ).join('');
+  document.querySelectorAll('.title [role="textbox"], .notes [role="textbox"]').forEach(editor => {
+    const field = editor.closest('.title') ? 'title' : 'notes';
+    const key = 'fixture-text-' + editor.closest('.reminder-item').id + '-' + field;
+    const saved = sessionStorage.getItem(key);
+    if (saved !== null) editor.textContent = saved;
+    let changed = false;
+    let prepared = false;
+    editor.addEventListener('beforeinput', () => { prepared = true; window.fixtureTextPreparations++; });
+    editor.addEventListener('input', () => {
+      if (!prepared) throw new Error('合成富文本编辑必须先准备输入范围');
+      prepared = false; changed = true; window.fixtureTextInputs++;
+    });
+    editor.addEventListener('blur', () => {
+      window.fixtureTextBlurs++;
+      if (!changed) return;
+      window.fixtureTextSaves++;
+      sessionStorage.setItem(key, editor.innerText ?? editor.innerHTML.replace(/<br\s*\/?\s*>/gi, '\n').replace(/<[^>]*>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&'));
+      changed = false;
+    });
+  });
   document.querySelectorAll('.mark-completed').forEach(button => {
     button.addEventListener('mousedown', () => { window.fixturePointerDown = true; });
     button.addEventListener('click', () => {

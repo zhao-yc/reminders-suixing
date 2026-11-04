@@ -2,7 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { BrowserWindow, session } = require('electron');
 const { allowedURL, allowStorage, browserUserAgent, validCommand } = require('./policy.cjs');
-const { inspectFrame } = require('./page-diagnostics.cjs');
+const { inspectFrame, diagnosticRoute } = require('./page-diagnostics.cjs');
+const { inspectTestEditor } = require('./editor-diagnostics.cjs');
 
 const ROOT = path.resolve(__dirname, '../..');
 const SOURCE = fs.readFileSync(path.join(ROOT, 'apps/uni-app/static/icloud/adapter.js'), 'utf8');
@@ -20,8 +21,7 @@ function createController(options = {}) {
 
   /** 诊断仅保留公开路由和错误类型；不访问请求体、认证头、Cookie 或输入框的值。 */
   function route(value) {
-    try { const url = new URL(value); return url.protocol === 'https:' || url.protocol === 'http:' ? url.origin + url.pathname : url.protocol; }
-    catch { return '无效地址'; }
+    return diagnosticRoute(value);
   }
 
   function record(type, values) {
@@ -41,7 +41,8 @@ function createController(options = {}) {
     contents.on('console-message', event => {
       if (event.level !== 'error') return;
       const issue = /SecurityError|TypeError|ReferenceError|SyntaxError|Content Security Policy|Failed to fetch|ERR_[A-Z_]+/.exec(event.message);
-      if (issue) record('页面脚本异常', { issue: issue[0], source: route(event.sourceId), category: issue[0] === 'Content Security Policy' ? event.message.replace(/'[^']*'|"[^"]*"/g, '<已省略>').slice(0, 500) : undefined, hosts: (event.message.match(/https?:\/\/[^\s"']+/g) || []).map(value => { try { return new URL(value).origin; } catch { return ''; } }) });
+      const property = /Cannot read properties of (?:undefined|null) \(reading ['"]([a-zA-Z_$][a-zA-Z0-9_$]{0,40})['"]\)/.exec(event.message)?.[1];
+      if (issue) record('页面脚本异常', { issue: issue[0], property, source: route(event.sourceId), category: issue[0] === 'Content Security Policy' ? event.message.replace(/'[^']*'|"[^"]*"/g, '<已省略>').slice(0, 500) : undefined, hosts: (event.message.match(/https?:\/\/[^\s"']+/g) || []).map(value => { try { return new URL(value).origin; } catch { return ''; } }) });
     });
     contents.setWindowOpenHandler(({ url }) => canNavigate(url) ? {
       action: 'allow', overrideBrowserWindowOptions: {
@@ -102,6 +103,7 @@ function createController(options = {}) {
     if (!validCommand(command)) return { ok: false, code: 'INVALID_COMMAND', message: '不支持的操作参数。' };
     if (busy) return { ok: false, code: 'BUSY', message: '上一项操作尚未结束。' };
     busy = true;
+    const write = ['setCompleted', 'setText'].includes(command.type);
     let timer;
     try {
       const window = ensure(region);
@@ -110,18 +112,41 @@ function createController(options = {}) {
       if (!canNavigate(target.url)) return { ok: false, code: 'PAGE_NOT_READY', message: '官方页面正在载入，请稍后读取。' };
       const operation = target.executeJavaScript(SOURCE + '\nwindow.__suixingAdapter.execute(' + JSON.stringify(command) + ');', true);
       const timeout = new Promise(resolve => {
-        timer = setTimeout(() => resolve({ ok: false, code: command.type === 'setCompleted' ? 'UNCERTAIN_WRITE' : 'BRIDGE_TIMEOUT', message: '页面响应超时，请打开官方页面核对。', cloudConfirmed: false }), 18000);
+        timer = setTimeout(() => resolve({ ok: false, code: write ? 'UNCERTAIN_WRITE' : 'BRIDGE_TIMEOUT', message: '页面响应超时，请打开官方页面核对。', cloudConfirmed: false }), 18000);
       });
       return await Promise.race([operation, timeout]);
     } catch {
-      return { ok: false, code: command.type === 'setCompleted' ? 'UNCERTAIN_WRITE' : 'PAGE_NOT_READY', message: '请在官方页面完成登录，等待清单显示后重新读取。', cloudConfirmed: false };
+      return { ok: false, code: write ? 'UNCERTAIN_WRITE' : 'PAGE_NOT_READY', message: '请在官方页面完成登录，等待清单显示后重新读取。', cloudConfirmed: false };
     } finally { clearTimeout(timer); busy = false; }
   }
 
   return {
     execute,
-    openSite(region = 'cn') { ensure(region).show(); return { ok: true }; },
-    reloadSite(region = 'cn') { ensure(region).webContents.reload(); return { ok: true, message: '官方页面正在重新加载，请稍后读取。' }; },
+    async inspectTestEditor() {
+      if (!options.diagnostics) return { ok: false, code: 'DIAGNOSTICS_DISABLED' };
+      if (!site || site.isDestroyed()) return { ok: false, code: 'PAGE_NOT_READY' };
+      const frame = site.webContents.mainFrame.framesInSubtree.find(frame => /\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url));
+      if (!frame) return { ok: false, code: 'PAGE_NOT_READY' };
+      return inspectTestEditor(frame);
+    },
+    openSite(region = 'cn') {
+      if (busy && region !== activeRegion) return { ok: false, code: 'BUSY', message: '请等待当前操作结束后再切换区域。' };
+      ensure(region).show(); return { ok: true };
+    },
+    reloadSite(region = 'cn') {
+      if (busy) return { ok: false, code: 'BUSY', message: '请等待当前操作结束后再重载。' };
+      const contents = ensure(region).webContents;
+      const destination = fixtureURL || ENTRY[region];
+      let atEntry = false;
+      try {
+        const current = new URL(contents.getURL());
+        const entry = new URL(destination);
+        atEntry = current.origin === entry.origin && current.pathname.replace(/\/$/, '') === entry.pathname.replace(/\/$/, '');
+      } catch { /* 未取得有效页面时重新打开固定官方入口。 */ }
+      if (atEntry) contents.reload();
+      else contents.loadURL(destination).catch(() => {});
+      return { ok: true, message: '官方提醒事项正在重新加载，请稍后读取。' };
+    },
     window() { return site; },
     /** 仅让 Chromium 将自己的待写入会话存储落盘，不读取、复制或更改 Cookie。是否长期登录由官方选项决定。 */
     async flushStorage() {

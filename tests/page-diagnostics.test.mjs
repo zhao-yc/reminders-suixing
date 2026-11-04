@@ -2,7 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { inspectFrame } = createRequire(import.meta.url)('../apps/desktop/page-diagnostics.cjs');
+const { inspectFrame, diagnosticRoute } = createRequire(import.meta.url)('../apps/desktop/page-diagnostics.cjs');
+
+test('服务请求诊断省略整个路径及查询，静态脚本只保留公开路径', () => {
+  assert.equal(diagnosticRoute('https://gatewayws.icloud.com/acsegateway/v1/accounts/synthetic-account/plans?token=synthetic-token'), 'https://gatewayws.icloud.com/<服务路径已省略>');
+  assert.equal(diagnosticRoute('https://www.icloud.com/applications/reminders2/build/zh-cn/main.js?token=synthetic-token'), 'https://www.icloud.com/applications/reminders2/build/zh-cn/main.js');
+  assert.equal(diagnosticRoute('https://www.icloud.com/reminders/'), 'https://www.icloud.com/reminders/');
+  assert.equal(diagnosticRoute('about:blank'), 'about:');
+});
 
 test('登录子页面永不响应时，诊断退出并且只派发一次读取', { timeout: 1000 }, async () => {
   let calls = 0;

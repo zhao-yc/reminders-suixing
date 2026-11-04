@@ -15,7 +15,7 @@
       </view>
       <view class="sidebar-section"><text>我的清单</text><text class="muted">{{ snapshot?.lists.length || 0 }}</text></view>
       <view v-if="!snapshot" class="sidebar-placeholder">连接后，你的清单会显示在这里。</view>
-      <button v-for="list in snapshot?.lists || []" :key="list.id" class="list-button" :class="{ selected: list.id === snapshot.activeListId }" :disabled="busy" @click="selectList(list)">
+      <button v-for="list in snapshot?.lists || []" :key="list.id" class="list-button" :class="{ selected: list.id === snapshot.activeListId }" :disabled="busy || !!editing" @click="selectList(list)">
         <view class="list-symbol" :style="{ background: list.color }">≡</view><text class="list-name">{{ list.title }}</text>
         <text v-if="list.id === snapshot.activeListId" class="list-count">{{ incompleteCount }}</text>
       </button>
@@ -26,12 +26,13 @@
         <button class="mobile-menu" aria-label="显示清单" @click="sidebarOpen = true">☰</button>
         <text class="toolbar-label">{{ isDemo ? '界面示例 · 不连接 iCloud' : '你的清单，随时在身边' }}</text>
         <view class="toolbar-actions">
-          <picker :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy" @change="changeRegion"><view class="region-picker">{{ region === 'cn' ? '中国大陆' : '其他地区' }}⌄</view></picker>
-          <button class="quiet-button" :disabled="busy" @click="connect">{{ live && !isDemo ? '官方页面' : '登录 iCloud' }}</button>
-          <button class="primary-button" :disabled="busy" @click="refresh">{{ busy ? '读取中…' : '刷新' }}</button>
+          <picker :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || !!editing" @change="changeRegion"><view class="region-picker">{{ region === 'cn' ? '中国大陆' : '其他地区' }}⌄</view></picker>
+          <button class="quiet-button" :disabled="busy || (!!editing && !editing.blocked)" @click="connect">{{ live && !isDemo ? '官方页面' : '登录 iCloud' }}</button>
+          <button class="primary-button" :disabled="busy || (!!editing && !editing.blocked)" @click="refresh">{{ busy ? '处理中…' : '刷新' }}</button>
         </view>
       </view>
       <view v-if="notice" class="notice" :class="{ error: noticeError }" role="status"><text>{{ notice }}</text></view>
+      <view v-if="editing?.blocked" class="edit-recovery"><text>请先核对修改结果。</text><button @click="endEdit">结束本次编辑</button></view>
       <view v-if="!snapshot" class="welcome">
         <view class="welcome-art"><view class="welcome-line"><text>✓</text><view></view></view><view class="welcome-line"><text>○</text><view></view></view><view class="welcome-line"><text>○</text><view></view></view></view>
         <text class="welcome-kicker">熟悉的提醒，新的随行方式</text>
@@ -43,12 +44,22 @@
       </view>
       <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId">
         <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title">{{ snapshot.activeListTitle }}</text><text class="heading-count">{{ incompleteCount }}</text></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
-        <view class="list-controls"><view class="tabs"><button data-status="pending" :class="{ active: tab === 'pending' }" @click="tab = 'pending'">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :class="{ active: tab === 'completed' }" @click="tab = 'completed'">已完成 <text>{{ completeCount }}</text></button></view><input v-model="search" class="search" placeholder="搜索当前清单" aria-label="搜索当前清单" /></view>
+        <view class="list-controls"><view class="tabs"><button data-status="pending" :disabled="!!editing" :class="{ active: tab === 'pending' }" @click="tab = 'pending'">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :disabled="!!editing" :class="{ active: tab === 'completed' }" @click="tab = 'completed'">已完成 <text>{{ completeCount }}</text></button></view><input v-model="search" :disabled="!!editing" class="search" placeholder="搜索当前清单" aria-label="搜索当前清单" /></view>
         <scroll-view class="items-scroll" scroll-y>
           <view v-if="!visibleItems.length" class="empty-list"><text class="empty-circle">✓</text><text>{{ search ? '没有找到相关事项' : tab === 'completed' ? '这里会显示网页已加载的完成事项' : '这份清单暂时没有待办事项' }}</text></view>
           <view v-for="item in visibleItems" :key="item.id" class="reminder-row" :data-record-id="item.id" :class="{ completed: item.completed }">
-            <button class="completion-button" :class="{ checked: item.completed }" :disabled="busy || (!live && !isDemo) || item.disabled" :aria-label="(item.completed ? '取消完成：' : '完成：') + item.title" @click="toggle(item)"><text v-if="item.completed">✓</text></button>
-            <view class="reminder-copy"><text class="reminder-title">{{ item.title }}</text><text v-if="item.notes" class="reminder-notes">{{ item.notes }}</text><text v-if="item.metadata" class="reminder-metadata">{{ item.metadata }}</text></view>
+            <button class="completion-button" :class="{ checked: item.completed }" :disabled="busy || !!editing || (!live && !isDemo) || item.disabled" :aria-label="(item.completed ? '取消完成：' : '完成：') + item.title" @click="toggle(item)"><text v-if="item.completed">✓</text></button>
+            <view class="reminder-copy">
+              <view v-if="editing?.id === item.id" class="inline-editor">
+                <text class="editor-label">{{ editing.field === 'title' ? '编辑标题' : '编辑备注' }}</text>
+                <input v-if="editing.field === 'title'" v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" aria-label="事项标题" @confirm="saveEdit" @keydown="editKeydown" />
+                <textarea v-else v-model="editing.value" class="edit-field edit-notes" :maxlength="2000" :focus="true" :disabled="busy || editing.blocked" auto-height aria-label="事项备注" @keydown="editKeydown" />
+                <view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '保存中…' : '保存' }}</button><button :disabled="busy" @click="endEdit">取消</button></view>
+              </view>
+              <template v-else><text class="reminder-title" @dblclick="startEdit(item, 'title')">{{ item.title }}</text><text v-if="item.notes" class="reminder-notes" @dblclick="startEdit(item, 'notes')">{{ item.notes }}</text><text v-if="item.notesTruncated" class="reminder-metadata">备注较长，请在官方页面查看完整内容</text></template>
+              <text v-if="item.metadata" class="reminder-metadata">{{ item.metadata }}</text>
+            </view>
+            <view v-if="canEdit && !editing" class="row-actions"><button class="edit-title-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑标题" @click="startEdit(item, 'title')">✎</button><button class="edit-notes-button" :disabled="busy || (!live && !isDemo) || item.disabled || item.notesTruncated" aria-label="编辑备注" @click="startEdit(item, 'notes')">≡</button></view>
             <text v-if="item.level > 1" class="subtask-tag">子事项</text>
           </view>
           <view class="list-bottom-space"></view>
@@ -84,6 +95,8 @@ const snapshot = ref(null);
 const busy = ref(false);
 const live = ref(false);
 const isDemo = ref(false);
+const editing = ref(null);
+const canEdit = computed(() => isDemo.value || bridge.capabilities?.editText === true);
 const notice = ref('');
 const noticeError = ref(false);
 const sidebarOpen = ref(false);
@@ -110,15 +123,16 @@ function accept(result) {
 async function run(command) {
   if (busy.value) return;
   busy.value = true;
-  try { accept(await bridge.execute(command, region.value)); }
-  catch (_) { live.value = false; notice.value = '连接暂时不可用，请重新打开官方页面核对。'; noticeError.value = true; }
+  try { const result = await bridge.execute(command, region.value); accept(result); return result; }
+  catch (_) { live.value = false; notice.value = '连接暂时不可用，请重新打开官方页面核对。'; noticeError.value = true; return { ok: false, code: 'CONNECTION_FAILED' }; }
   finally { busy.value = false; }
 }
 
 async function connect() {
-  if (busy.value) return;
+  if (busy.value || (editing.value && !editing.value.blocked)) return;
   const result = await bridge.openSite(region.value);
   if (!result.ok) { accept(result); return; }
+  if (editing.value?.blocked) { notice.value = '请在官方页面核对修改结果，返回后刷新。'; return; }
   isDemo.value = false;
   snapshot.value = null;
   live.value = false;
@@ -132,6 +146,7 @@ async function refresh() {
 }
 
 async function selectList(list) {
+  if (busy.value || editing.value) return;
   sidebarOpen.value = false;
   search.value = '';
   if (isDemo.value) {
@@ -145,6 +160,7 @@ async function selectList(list) {
 
 /** 写入传递记录 ID、目标状态和最新指纹，禁止用标题匹配或简单地重复点击。 */
 async function toggle(item) {
+  if (editing.value) return;
   if (isDemo.value) { item.completed = !item.completed; return; }
   if (!live.value || busy.value) return;
   await run({ type: 'setCompleted', pageId: snapshot.value.pageId, listId: item.listId,
@@ -152,7 +168,7 @@ async function toggle(item) {
 }
 
 function showDemo() {
-  if (busy.value) return;
+  if (busy.value || editing.value) return;
   snapshot.value = demoSnapshot();
   isDemo.value = true;
   live.value = false;
@@ -163,7 +179,7 @@ function showDemo() {
 }
 
 function changeRegion(event) {
-  if (busy.value) return;
+  if (busy.value || editing.value) return;
   const index = Number(event.detail.value);
   if (![0, 1].includes(index)) return;
   const next = index === 0 ? 'cn' : 'global';
@@ -175,6 +191,32 @@ function changeRegion(event) {
   const saved = saveRegionPreference(regionStorage, next);
   notice.value = saved ? '服务区域已切换，请重新连接。' : '本次已切换区域，但未能保存设置；下次启动请重新选择。';
   noticeError.value = !saved;
+}
+
+function startEdit(item, field) {
+  if (!canEdit.value || busy.value || editing.value || item.disabled || (!live.value && !isDemo.value)) return;
+  if (field === 'notes' && item.notesTruncated) return;
+  editing.value = { id: item.id, field, value: item[field] || '', pageId: snapshot.value.pageId, listId: item.listId,
+    fingerprint: item.fingerprint, expectedCompleted: item.completed, blocked: false };
+}
+
+function endEdit() { if (!busy.value) editing.value = null; }
+
+function editKeydown(event) {
+  if (event.key === 'Escape') { event.preventDefault?.(); endEdit(); }
+  else if (event.key === 'Enter' && (editing.value?.field === 'title' || event.ctrlKey || event.metaKey)) { event.preventDefault?.(); saveEdit(); }
+}
+
+async function saveEdit() {
+  const current = editing.value;
+  if (!current || current.blocked || busy.value) return;
+  if (current.field === 'title' && !current.value.trim()) { notice.value = '请填写事项标题。'; noticeError.value = true; return; }
+  if (isDemo.value) { snapshot.value.items.find(item => item.id === current.id)[current.field] = current.value; editing.value = null; return; }
+  if (!live.value) return;
+  const result = await run({ type: 'setText', pageId: current.pageId, listId: current.listId, id: current.id,
+    fingerprint: current.fingerprint, expectedCompleted: current.expectedCompleted, field: current.field, value: current.value });
+  if (result?.ok) editing.value = null;
+  else current.blocked = true;
 }
 
 // 验证客户端仍通过相同的快照入口更新界面，不把诊断读取伪装成示例数据。
@@ -202,5 +244,8 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .list-controls { display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #edf0f5; flex-shrink:0; gap:14px; }.tabs { display:flex; gap:24px; }.tabs button { padding:11px 0 14px; border-bottom:2px solid transparent; color:#9aa3b0; font-size:12px; border-radius:0; }.tabs button.active { border-bottom-color:#1687ff; color:#47566e; }.tabs text { color:#aeb6c1; margin-left:5px; font-size:10px; }.search { width:158px; font-size:11px; height:32px; padding:0 11px; background:#f5f7fa; border-radius:7px; color:#4d596a; }
 .items-scroll { flex:1; min-height:0; height:1px; }.reminder-row { display:flex; align-items:flex-start; gap:15px; border-bottom:1px solid #f0f2f5; padding:23px 2px; }.completion-button { width:22px; height:22px; border:1.5px solid #cbd4df; border-radius:50%; flex-shrink:0; margin-top:1px; color:#fff; display:flex; align-items:center; justify-content:center; font-size:13px; }.completion-button.checked { background:#a4b4c8; border-color:#a4b4c8; }.reminder-copy { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }.reminder-title { font-size:15px; color:#3d4859; line-height:1.6; word-break:break-word; }.completed .reminder-title { color:#a6afbb; text-decoration:line-through; }.reminder-notes { color:#8f9aaa; font-size:12px; line-height:1.6; white-space:pre-wrap; }.reminder-metadata { color:#9aa5b4; font-size:11px; line-height:1.6; }.subtask-tag { font-size:10px; color:#a3adba; padding-top:5px; }.list-footer { flex-shrink:0; border-top:1px solid #f1f3f7; padding:17px 0 20px; display:flex; justify-content:space-between; color:#a3adba; font-size:10px; gap:10px; }.list-bottom-space { height:30px; }.empty-list { display:flex; align-items:center; flex-direction:column; gap:18px; padding:85px 20px; font-size:12px; color:#9aa5b4; text-align:center; }.empty-circle { width:42px; height:42px; border:1px solid #dfe6ef; border-radius:50%; line-height:42px; color:#a6b8ce; font-size:22px; }
 .mobile-menu { display:none; }.sidebar-scrim { display:none; }
+.row-actions { display:flex; gap:3px; flex-shrink:0; opacity:0; transition:opacity .15s; }.reminder-row:hover .row-actions,.reminder-row:focus-within .row-actions { opacity:1; }.row-actions button { margin:0; padding:0; width:25px; height:28px; color:#8393a8; font-size:17px; }.row-actions button:hover { color:#1687ff; background:#eef5ff; border-radius:6px; }
+.inline-editor { display:flex; flex-direction:column; gap:9px; width:100%; }.editor-label { color:#8393a8; font-size:11px; }.edit-field { box-sizing:border-box; width:100%; height:38px; padding:8px 10px; color:#3d4859; font-size:14px; border:1px solid #a3caff; border-radius:7px; background:#fafcff; }.edit-notes { min-height:95px; line-height:1.7; }.editor-actions { display:flex; gap:10px; }.editor-actions button { margin:0; padding:6px 11px; font-size:12px; color:#8491a4; border-radius:6px; }.editor-actions .save-edit { color:#fff; background:#1687ff; }.editor-actions .save-edit[disabled] { background:#aebed2; }.edit-recovery { margin:8px 34px 0; display:flex; align-items:center; gap:12px; font-size:12px; color:#b36139; }.edit-recovery button { margin:0; padding:5px; font-size:12px; color:#1687ff; }.reminder-notes { overflow-wrap:anywhere; }
+@media (hover:none) { .row-actions { opacity:1; } }
 @media (max-width:760px) { .sidebar { position:fixed; top:0; bottom:0; left:0; z-index:30; transform:translateX(-100%); transition:transform .2s ease; padding-top:calc(28px + env(safe-area-inset-top)); }.sidebar.is-open { transform:translateX(0); }.sidebar-scrim { display:block; position:fixed; inset:0; z-index:25; background:#26324735; }.mobile-menu { display:block; color:#74839a; font-size:19px; width:28px; }.toolbar { height:calc(68px + env(safe-area-inset-top)); padding:env(safe-area-inset-top) 20px 0; gap:8px; }.toolbar-label { display:none; }.toolbar-actions { gap:10px; }.region-picker { font-size:10px; }.quiet-button { font-size:12px; }.primary-button { font-size:12px; padding:9px 15px; }.notice { margin:12px 20px 0; font-size:11px; }.list-content { padding:28px 24px 0; }.list-title { font-size:32px; }.heading-count { font-size:26px; }.list-heading { margin-bottom:21px; }.search { width:125px; font-size:10px; }.tabs { gap:18px; }.tabs button { font-size:11px; }.reminder-row { gap:13px; padding:21px 0; }.reminder-title { font-size:14px; }.list-footer { padding-bottom:calc(20px + env(safe-area-inset-bottom)); font-size:9px; }.welcome-title { font-size:33px; }.welcome { padding-bottom:40px; }.source-chip { font-size:9px; padding:6px 8px; } }
 </style>
