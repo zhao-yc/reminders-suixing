@@ -1,0 +1,152 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const { BrowserWindow, session } = require('electron');
+const { allowedURL, allowStorage, browserUserAgent, validCommand } = require('./policy.cjs');
+
+const ROOT = path.resolve(__dirname, '../..');
+const SOURCE = fs.readFileSync(path.join(ROOT, 'apps/uni-app/static/icloud/adapter.js'), 'utf8');
+const ENTRY = { cn: 'https://www.icloud.com.cn/reminders/', global: 'https://www.icloud.com/reminders/' };
+
+/** 每个区域独立持久化会话。没有导入外部浏览器 Cookie，也没有账号密码读取接口。 */
+function createController(options = {}) {
+  let site = null;
+  let activeRegion = '';
+  let busy = false;
+  let closing = false;
+  const trace = [];
+  const fixtureURL = options.fixtureURL;
+  const canNavigate = value => fixtureURL ? new URL(value).origin === new URL(fixtureURL).origin : allowedURL(value);
+
+  /** 诊断仅保留公开路由和错误类型；不访问请求体、认证头、Cookie 或输入框的值。 */
+  function route(value) {
+    try { const url = new URL(value); return url.protocol === 'https:' || url.protocol === 'http:' ? url.origin + url.pathname : url.protocol; }
+    catch { return '无效地址'; }
+  }
+
+  function record(type, values) {
+    if (!options.diagnostics) return;
+    trace.push({ type, ...values });
+    if (trace.length > 120) trace.shift();
+  }
+
+  function harden(contents) {
+    contents.on('will-navigate', (event, url) => {
+      if (!canNavigate(url)) { record('阻止主页面跳转', { route: route(url) }); event.preventDefault(); }
+    });
+    contents.on('will-frame-navigate', (event, details) => {
+      const url = details?.url || event.url;
+      if (url && !canNavigate(url)) { record('阻止子页面跳转', { route: route(url) }); event.preventDefault(); }
+    });
+    contents.on('console-message', event => {
+      if (event.level !== 'error') return;
+      const issue = /SecurityError|TypeError|ReferenceError|SyntaxError|Content Security Policy|Failed to fetch|ERR_[A-Z_]+/.exec(event.message);
+      if (issue) record('页面脚本异常', { issue: issue[0], source: route(event.sourceId), category: issue[0] === 'Content Security Policy' ? event.message.replace(/'[^']*'|"[^"]*"/g, '<已省略>').slice(0, 500) : undefined, hosts: (event.message.match(/https?:\/\/[^\s"']+/g) || []).map(value => { try { return new URL(value).origin; } catch { return ''; } }) });
+    });
+    contents.setWindowOpenHandler(({ url }) => canNavigate(url) ? {
+      action: 'allow', overrideBrowserWindowOptions: {
+        parent: site, width: 920, height: 760,
+        webPreferences: { partition: fixtureURL ? 'suixing-smoke' : 'persist:suixing-icloud-' + activeRegion, nodeIntegration: false, contextIsolation: true, sandbox: true }
+      }
+    } : { action: 'deny' });
+    contents.on('did-create-window', popup => { harden(popup.webContents); });
+  }
+
+  function ensure(region = 'cn') {
+    if (!Object.hasOwn(ENTRY, region)) throw new Error('不支持的服务区域。');
+    if (site && !site.isDestroyed() && region === activeRegion) return site;
+    if (site && !site.isDestroyed()) { closing = true; site.destroy(); closing = false; }
+    activeRegion = region;
+    const partition = fixtureURL ? 'suixing-smoke' : 'persist:suixing-icloud-' + region;
+    const isolated = session.fromPartition(partition);
+    isolated.setUserAgent(browserUserAgent(process.versions.chrome), 'zh-CN,zh,en-US,en');
+    isolated.setPermissionCheckHandler((contents, permission, origin, details = {}) => {
+      const allowed = allowStorage(permission, details.requestingUrl || origin, details.embeddingOrigin || contents?.getURL() || '');
+      record('权限检查', { permission, allowed, requester: route(details.requestingUrl || origin), embedding: route(details.embeddingOrigin || contents?.getURL() || '') });
+      return allowed;
+    });
+    isolated.setPermissionRequestHandler((contents, permission, callback, details = {}) => {
+      const allowed = allowStorage(permission, details.requestingUrl, contents?.getURL() || '');
+      record('权限请求', { permission, allowed, requester: route(details.requestingUrl), embedding: route(contents?.getURL() || '') });
+      callback(allowed);
+    });
+    // 诊断只记录主机名与错误码，绝不记录请求体、查询参数或认证请求头。
+    if (!fixtureURL) {
+      isolated.webRequest.onErrorOccurred(details => {
+        record('网络失败', { route: route(details.url), error: details.error, resource: details.resourceType });
+        if (allowedURL(details.url)) console.warn('官方页面网络错误：' + new URL(details.url).hostname + ' ' + details.error);
+      });
+      isolated.webRequest.onCompleted(details => {
+        if (['xhr', 'subFrame', 'mainFrame'].includes(details.resourceType) || details.statusCode >= 400 || new URL(details.url).hostname === 'idmsa.apple.com') {
+          record('网络响应', { route: route(details.url), status: details.statusCode, resource: details.resourceType });
+        }
+        if (allowedURL(details.url) && details.statusCode >= 400) console.warn('官方页面响应异常：' + new URL(details.url).hostname + ' HTTP ' + details.statusCode);
+      });
+    }
+    isolated.on('will-download', event => event.preventDefault());
+    site = new BrowserWindow({
+      width: 1180, height: 830, minWidth: 700, minHeight: 600, show: false,
+      title: 'iCloud 官方页面 · 提醒事项随行', autoHideMenuBar: true,
+      webPreferences: { partition, nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true }
+    });
+    harden(site.webContents);
+    site.webContents.setUserAgent(browserUserAgent(process.versions.chrome));
+    site.on('close', event => { if (!closing) { event.preventDefault(); site.hide(); } });
+    // 页面载入失败只反馈状态，不自动重新提交任何读写命令。
+    site.loadURL(fixtureURL || ENTRY[region]).catch(() => {});
+    return site;
+  }
+
+  async function execute(command, region = 'cn') {
+    if (!validCommand(command)) return { ok: false, code: 'INVALID_COMMAND', message: '不支持的操作参数。' };
+    if (busy) return { ok: false, code: 'BUSY', message: '上一项操作尚未结束。' };
+    busy = true;
+    let timer;
+    try {
+      const window = ensure(region);
+      const frames = window.webContents.mainFrame.framesInSubtree;
+      const target = frames.find(frame => /\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url)) || window.webContents.mainFrame;
+      if (!canNavigate(target.url)) return { ok: false, code: 'PAGE_NOT_READY', message: '官方页面正在载入，请稍后读取。' };
+      const operation = target.executeJavaScript(SOURCE + '\nwindow.__suixingAdapter.execute(' + JSON.stringify(command) + ');', true);
+      const timeout = new Promise(resolve => {
+        timer = setTimeout(() => resolve({ ok: false, code: command.type === 'setCompleted' ? 'UNCERTAIN_WRITE' : 'BRIDGE_TIMEOUT', message: '页面响应超时，请打开官方页面核对。', cloudConfirmed: false }), 18000);
+      });
+      return await Promise.race([operation, timeout]);
+    } catch {
+      return { ok: false, code: command.type === 'setCompleted' ? 'UNCERTAIN_WRITE' : 'PAGE_NOT_READY', message: '请在官方页面完成登录，等待清单显示后重新读取。', cloudConfirmed: false };
+    } finally { clearTimeout(timer); busy = false; }
+  }
+
+  return {
+    execute,
+    openSite(region = 'cn') { ensure(region).show(); return { ok: true }; },
+    reloadSite(region = 'cn') { ensure(region).webContents.reload(); return { ok: true, message: '官方页面正在重新加载，请稍后读取。' }; },
+    window() { return site; },
+    /** 仅让 Chromium 将自己的待写入会话存储落盘，不读取、复制或更改 Cookie。是否长期登录由官方选项决定。 */
+    async flushStorage() {
+      if (!site || site.isDestroyed()) return;
+      const storage = site.webContents.session;
+      storage.flushStorageData();
+      await storage.cookies.flushStore();
+    },
+    /** 开发诊断只允许点击官方页面的登录入口，不处理账号、密码或认证挑战。 */
+    async openSignIn() {
+      return ensure('cn').webContents.executeJavaScript('(()=>{const b=[...document.querySelectorAll("button,a,[role=button]")].find(x=>/^(Sign In|Sign in|登录|登入)$/.test(x.innerText.trim()));if(!b)return {clicked:false};for(const type of ["mousedown","mouseup","click"])b.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window}));return {clicked:true}})()', true);
+    },
+    /** 只检查公开页面结构及固定错误文案，诊断结果不包含账户或提醒事项内容。 */
+    async diagnostics() {
+      if (!site || site.isDestroyed()) return { opened: false, trace };
+      const frames = [];
+      for (const frame of site.webContents.mainFrame.framesInSubtree) {
+        const entry = { route: route(frame.url) };
+        try {
+          entry.state = await frame.executeJavaScript('({passwordField:!!document.querySelector("input[type=password]"),accountField:!!document.querySelector("input[type=email],input[autocomplete=username]"),connectionError:/There was a problem connecting to the server|连接服务器时出现问题|无法连接服务器/.test(document.body?.innerText||""),reminders:!!document.querySelector(".rm-list-menu-item"),runtime:{ua:navigator.userAgent,secure:isSecureContext,crypto:!!crypto.subtle,indexedDB:typeof indexedDB,worker:typeof Worker},scripts:[...document.scripts].filter(x=>x.src).map(x=>{const u=new URL(x.src);return u.origin+u.pathname})})');
+        } catch { entry.state = '页面暂不可读取'; }
+        frames.push(entry);
+      }
+      return { opened: true, frames, trace };
+    },
+    dispose() { closing = true; if (site && !site.isDestroyed()) site.destroy(); }
+  };
+}
+
+module.exports = { createController, allowedURL, validCommand };

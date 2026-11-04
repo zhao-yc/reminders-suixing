@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><title>随行合成验证</title></head><body>
+<div role="tree" aria-label="提醒事项列表">
+  <div role="treeitem" class="rm-list-menu-item" aria-selected="true" data-list="one"><button class="inline-editable-label">验证清单</button></div>
+  <div role="treeitem" class="rm-list-menu-item" aria-selected="false" data-list="two"><button class="inline-editable-label">验证清单</button></div>
+</div>
+<div role="treegrid" aria-label="提醒列表"></div>
+<script>
+// 该页面只包含合成数据，用来验证重复标题、完成回执和列表切换，绝不访问 Apple。
+window.fixtureClicks = 0;
+window.fixtureDisableUpdates = false;
+window.fixtureRequiresPointerDown = false;
+window.fixturePointerDown = false;
+function renderFixture(list) {
+  const complete = sessionStorage.getItem('fixture-complete') === 'true';
+  const titles = list === 'two' ? ['随行验证 · 第二个同名清单'] : ['随行验证 · 同名事项', '随行验证 · 同名事项'];
+  document.querySelector('[role="treegrid"]').innerHTML = titles.map((title, index) =>
+    '<div class="reminder-item" id="reminder-item-fixture-' + list + '-' + index + '" role="row" aria-level="1" aria-setsize="' + titles.length + '">' +
+    '<button class="mark-completed" data-completed="' + (index === 0 && complete) + '" aria-label="切换完成状态"></button>' +
+    '<div class="title"><div role="textbox" contenteditable="true">' + title + '</div></div>' +
+    '<div class="notes"><div role="textbox" contenteditable="true"></div></div><div class="metadata">2026/11/04<span aria-hidden="true">重复无障碍文字</span></div></div>'
+  ).join('');
+  document.querySelectorAll('.mark-completed').forEach(button => {
+    button.addEventListener('mousedown', () => { window.fixturePointerDown = true; });
+    button.addEventListener('click', () => {
+    if (window.fixtureRequiresPointerDown && !window.fixturePointerDown) return;
+    window.fixturePointerDown = false;
+    window.fixtureClicks++;
+    if (window.fixtureDisableUpdates) return;
+    const next = button.dataset.completed !== 'true';
+    button.dataset.completed = String(next);
+    sessionStorage.setItem('fixture-complete', String(next));
+  }); });
+}
+document.querySelectorAll('[role="treeitem"]').forEach(node => node.addEventListener('click', () => {
+  document.querySelectorAll('[role="treeitem"]').forEach(other => other.setAttribute('aria-selected', String(other === node)));
+  renderFixture(node.dataset.list);
+}));
+renderFixture('one');
+</script></body></html>
