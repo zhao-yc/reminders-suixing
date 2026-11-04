@@ -158,7 +158,7 @@ async function verifyTestSorting(expected) {
     picker.querySelector('.sort-picker-label').click();
     for (let attempt=0;attempt<30;attempt++) {
       if (!scope()) return false;
-      const options=[...document.querySelectorAll('.uni-picker-select .uni-picker-item')].filter(node=>node.textContent.trim()===label);
+      const options=[...document.querySelectorAll('.uni-picker-select .uni-picker-item, .sort-menu .sort-option')].filter(node=>(node.querySelector('.sort-option-label')?.textContent || node.textContent).trim()===label);
       if (options.length===1) {options[0].click();await pause();return scope() && selected()===label;}
       await pause();
     }

@@ -160,3 +160,22 @@ test('排序通道只读取核对，不发送事项写入，读回冲突时不�
   const conflict=await testOperation(changed,'verify-test-sorting',{sendSnapshot(){},ui:{webContents:{executeJavaScript:async()=>true}}});
   assert.equal(conflict.code,'TEST_SORTING_UNCONFIRMED');assert.equal(conflict.webItemsUnchanged,false);
 });
+
+test('排序验收识别受控菜单的选项标签，不把勾选标记读进标签，仍恢复原设置',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="synthetic-page" data-list-id="synthetic-list"><div class="sort-picker"><div class="sort-picker-label">清单顺序 ⌄</div></div><div class="reminder-row" data-record-id="synthetic-record"><span class="reminder-title">随行验证 · 合成排序</span></div></div>',{runScripts:'outside-only'});
+  t.after(()=>dom.window.close());dom.window.setTimeout=callback=>setTimeout(callback,0);
+  const doc=dom.window.document,field=doc.querySelector('.sort-picker-label'),changes=[];
+  field.addEventListener('click',()=>{
+    const menu=doc.createElement('div');menu.className='sort-menu';
+    for(const label of ['清单顺序','日期：从早到晚','标题：升序']) {
+      const option=doc.createElement('div');option.className='sort-option';
+      option.innerHTML='<span class="sort-option-label">'+label+'</span><span aria-hidden="true">✓</span>';
+      option.addEventListener('click',()=>{changes.push(label);field.textContent=label+' ⌄';menu.remove();});menu.append(option);
+    }
+    doc.body.append(menu);
+  });
+  const expected={pageId:'synthetic-page',listId:'synthetic-list',ids:['synthetic-record']};
+  assert.equal(await dom.window.eval('('+verifyTestSorting.toString()+')('+JSON.stringify(expected)+')'),true);
+  assert.deepEqual(changes,['日期：从早到晚','标题：升序','清单顺序']);
+  assert.equal(field.textContent,'清单顺序 ⌄');
+});

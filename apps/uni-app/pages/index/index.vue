@@ -48,7 +48,22 @@
       </view>
       <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId">
         <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title">{{ snapshot.activeListTitle }}</text><text class="heading-count">{{ incompleteCount }}</text></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
-        <view class="list-controls"><view class="tabs"><button data-status="pending" :disabled="busy || !!editing" :class="{ active: tab === 'pending' }" @click="selectTab('pending')">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :disabled="busy || !!editing" :class="{ active: tab === 'completed' }" @click="selectTab('completed')">已完成 <text>{{ completeCount }}</text></button></view><view class="list-view-tools"><text class="current-scope">当前清单已加载</text><picker class="sort-picker" :range="sortLabels" :value="sortIndex" :disabled="busy || !!editing" @change="changeSort"><view class="sort-picker-label" role="button" :aria-label="'显示排序：' + sortLabels[sortIndex]">{{ sortLabels[sortIndex] }} ⌄</view></picker></view></view>
+        <view class="list-controls">
+          <view class="tabs"><button data-status="pending" :disabled="busy || !!editing" :class="{ active: tab === 'pending' }" @click="selectTab('pending')">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :disabled="busy || !!editing" :class="{ active: tab === 'completed' }" @click="selectTab('completed')">已完成 <text>{{ completeCount }}</text></button></view>
+          <view class="list-view-tools"><text class="current-scope">当前清单已加载</text>
+            <!-- #ifdef H5 -->
+            <view class="sort-picker desktop-sort" :data-sort-mode="sortMode">
+              <view class="sort-picker-label" role="button" :tabindex="busy || editing ? -1 : 0" :aria-disabled="String(busy || !!editing)" aria-haspopup="menu" :aria-expanded="String(sortMenuOpen)" aria-controls="list-sort-menu" :aria-label="'显示排序：' + sortLabels[sortIndex]" @click="toggleSortMenu">{{ sortLabels[sortIndex] }} ⌄</view>
+              <view v-if="sortMenuOpen" id="list-sort-menu" class="sort-menu" role="menu" aria-label="当前清单显示排序">
+                <view v-for="(option,index) in SORT_OPTIONS" :key="option.value" class="sort-option" :class="{ 'sort-option-focused': index === sortFocusIndex }" :data-sort-value="option.value" role="menuitemradio" :aria-checked="String(sortMode === option.value)" tabindex="-1" @focus="sortFocusIndex = index" @click="chooseSort(option.value)"><text class="sort-option-label">{{ option.label }}</text><text v-if="sortMode === option.value" aria-hidden="true">✓</text></view>
+              </view>
+            </view>
+            <!-- #endif -->
+            <!-- #ifndef H5 -->
+            <picker class="sort-picker" :range="sortLabels" :value="sortIndex" :disabled="busy || !!editing" @change="changeSort"><view class="sort-picker-label" role="button" :aria-label="'显示排序：' + sortLabels[sortIndex]">{{ sortLabels[sortIndex] }} ⌄</view></picker>
+            <!-- #endif -->
+          </view>
+        </view>
         <text v-if="sortMode !== 'manual'" class="sort-description">仅本地显示排序，子事项跟随主事项{{ sortMode.startsWith('date-') ? '；日期不可读的主事项列在末尾' : '' }}</text>
         <scroll-view class="items-scroll" scroll-y>
           <view v-if="editing?.creating" class="reminder-row new-reminder-row"><view class="draft-circle"></view><view class="inline-editor"><text class="editor-label">新提醒事项 · {{ snapshot.activeListTitle }}</text><input v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" placeholder="提醒我…" aria-label="新事项标题" @confirm="confirmEdit" @keydown="editKeydown" /><view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '添加中…' : '添加' }}</button><button :disabled="busy" @click="endEdit">取消</button></view></view></view>
@@ -88,7 +103,7 @@
 </template>
 
 <script setup>
-import { computed, ref, nextTick, onMounted, onUnmounted } from 'vue';
+import { computed, ref, nextTick, onMounted, onUnmounted, watch } from 'vue';
 import { createBridge } from '../../lib/bridge.js';
 import { demoSnapshot } from '../../lib/demo.js';
 import { readRegionPreference, saveRegionPreference } from '../../lib/region-preference.js';
@@ -113,6 +128,8 @@ const region = ref(readRegionPreference(settingsStorage));
 const sortLabels = SORT_OPTIONS.map(option => option.label);
 const sortMode = ref(readSortPreference(settingsStorage));
 const sortIndex = computed(() => SORT_OPTIONS.findIndex(option => option.value === sortMode.value));
+const sortMenuOpen = ref(false);
+const sortFocusIndex = ref(0);
 const snapshot = ref(null);
 const busy = ref(false);
 const live = ref(false);
@@ -233,10 +250,14 @@ function changeRegion(event) {
 }
 
 function changeSort(event) {
-  if (busy.value || editing.value) return;
   const index = Number(event.detail.value);
   if (!Number.isInteger(index) || !SORT_OPTIONS[index]) return;
-  sortMode.value = SORT_OPTIONS[index].value;
+  setSort(SORT_OPTIONS[index].value);
+}
+
+function setSort(mode) {
+  if (busy.value || editing.value || !SORT_OPTIONS.some(option => option.value === mode)) return;
+  sortMode.value = mode;
   if (!saveSortPreference(settingsStorage,sortMode.value)) {
     notice.value = '本次排序已切换，但未能保存设置；下次启动请重新选择。';
     noticeError.value = true;
@@ -347,8 +368,54 @@ async function saveEdit() {
 }
 
 // #ifdef H5
+function focusSortOption() {
+  nextTick(() => document.querySelectorAll('.desktop-sort .sort-option')[sortFocusIndex.value]?.focus());
+}
+
+function closeSortMenu(restoreFocus = false) {
+  sortMenuOpen.value = false;
+  if (restoreFocus) nextTick(() => document.querySelector('.desktop-sort .sort-picker-label')?.focus());
+}
+
+function toggleSortMenu() {
+  if (busy.value || editing.value) return;
+  if (sortMenuOpen.value) { closeSortMenu(true); return; }
+  sortFocusIndex.value = sortIndex.value;sortMenuOpen.value = true;focusSortOption();
+}
+
+function chooseSort(mode) { setSort(mode);closeSortMenu(true); }
+
+function sortKeydown(event) {
+  if (event.isComposing || event.keyCode === 229 || busy.value || editing.value) return false;
+  if (event.key === 'Tab') { closeSortMenu(); return false; }
+  if (!['Enter',' ','ArrowDown','ArrowUp','Home','End','Escape'].includes(event.key)) return false;
+  event.preventDefault();event.stopPropagation();
+  if (event.key === 'Escape') { closeSortMenu(true); return true; }
+  if (event.repeat && ['Enter',' '].includes(event.key)) return true;
+  if (!sortMenuOpen.value) {
+    sortFocusIndex.value = event.key === 'Home' ? 0 : event.key === 'End' ? SORT_OPTIONS.length-1 : sortIndex.value;
+    sortMenuOpen.value = true;focusSortOption();return true;
+  }
+  if (['Enter',' '].includes(event.key)) { chooseSort(SORT_OPTIONS[sortFocusIndex.value].value); return true; }
+  sortFocusIndex.value = event.key === 'Home' ? 0 : event.key === 'End' ? SORT_OPTIONS.length-1 : (sortFocusIndex.value + (event.key === 'ArrowUp' ? -1 : 1) + SORT_OPTIONS.length)%SORT_OPTIONS.length;
+  focusSortOption();
+  return true;
+}
+
+function sortFocusout(event) {
+  const root=event.target?.closest?.('.desktop-sort');
+  if (root && !root.contains(event.relatedTarget)) closeSortMenu();
+}
+
+function sortOutsidePointer(event) {
+  if (sortMenuOpen.value && !event.target?.closest?.('.desktop-sort')) closeSortMenu();
+}
+
+watch([busy,editing], () => { if (busy.value || editing.value) closeSortMenu(); });
+
 function workspaceKeydown(event) {
   if (event.isComposing || event.keyCode === 229 || !snapshot.value) return;
+  if (event.target?.closest?.('.desktop-sort') && sortKeydown(event)) return;
   if (editing.value) {
     if (event.target?.closest?.('.inline-editor')) handleEditKeydown(event);
     return;
@@ -356,11 +423,15 @@ function workspaceKeydown(event) {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); startCreate(); }
   else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
     event.preventDefault(); searchFocused.value = false; nextTick(() => { searchFocused.value = true; });
-  } else if (event.key === 'Escape') search.value = '';
+  } else if (event.key === 'Escape' && !event.target?.closest?.('.sort-picker')) search.value = '';
 }
 // 捕获原始 DOM 事件，避免输入组件包装时丢失 isComposing；远程官方网页不加载此界面代码。
 onMounted(() => document.addEventListener('keydown', workspaceKeydown, true));
 onUnmounted(() => document.removeEventListener('keydown', workspaceKeydown, true));
+onMounted(() => document.addEventListener('pointerdown', sortOutsidePointer, true));
+onUnmounted(() => document.removeEventListener('pointerdown', sortOutsidePointer, true));
+onMounted(() => document.addEventListener('focusout', sortFocusout, true));
+onUnmounted(() => document.removeEventListener('focusout', sortFocusout, true));
 // #endif
 
 // 验证客户端仍通过相同的快照入口更新界面，不把诊断读取伪装成示例数据。
@@ -400,6 +471,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .search-mark { width:11px; height:11px; border:1.6px solid #97a3b3; border-radius:50%; position:relative; flex-shrink:0; margin-right:2px; }.search-mark::after { content:''; position:absolute; width:5px; height:1.6px; background:#97a3b3; right:-4px; bottom:-2px; transform:rotate(45deg); }
 .current-scope { font-size:10px; color:#a3adba; }.list-content { padding:24px 34px 0; }.list-heading { margin-bottom:16px; }.eyebrow { margin-bottom:5px; }.list-title { font-size:32px; }.reminder-row { padding:16px 2px; }.reminder-copy { gap:4px; }
 .list-view-tools { display:flex; align-items:center; gap:12px; min-width:0; }.sort-picker { flex-shrink:0; max-width:132px; }.sort-picker-label { padding:10px 0; color:#71829a; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.sort-description { display:block; color:#98a4b4; font-size:10px; line-height:1.6; padding:9px 0 2px; }
+.desktop-sort { position:relative; }.desktop-sort .sort-picker-label { cursor:pointer; }.desktop-sort .sort-picker-label:focus-visible { outline:2px solid #1687ff; outline-offset:3px; border-radius:4px; }.desktop-sort .sort-picker-label[aria-disabled="true"] { cursor:default; opacity:.5; }.sort-menu { position:absolute; right:0; top:100%; z-index:20; min-width:186px; padding:5px; border:1px solid #e5eaf1; border-radius:10px; background:#fff; box-shadow:0 8px 28px #24334d20; }.sort-option { display:flex; justify-content:space-between; gap:16px; padding:9px 11px; border-radius:6px; color:#62738a; font-size:12px; cursor:pointer; outline:none; }.sort-option:hover,.sort-option-focused { background:#edf5ff; color:#1687ff; }
 .new-reminder-row { background:#f8fbff; border-radius:9px; padding:16px 10px; margin-top:10px; gap:15px; }.draft-circle { width:22px; height:22px; border:1.5px solid #cbd4df; border-radius:50%; margin-top:29px; flex-shrink:0; }.new-reminder-row .inline-editor { min-width:0; flex:1; }.empty-add { color:#1687ff; font-size:12px; padding:8px 12px; }
 .schedule-editor { max-width:320px; width:100%; display:flex; flex-direction:column; gap:10px; }.schedule-toggle-row { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#62738a; font-size:12px; }.schedule-toggle { margin:0; width:42px; padding:3px 8px; border-radius:14px; background:#e5eaf0; color:#8492a5; font-size:11px; }.schedule-toggle[aria-checked="true"] { background:#e2f0ff; color:#1687ff; }.schedule-value-row { display:flex; align-items:center; gap:8px; min-width:0; }.schedule-value-row input { flex:1; min-width:0; }.schedule-picker-button { width:35px; height:35px; border-radius:7px; display:flex; align-items:center; justify-content:center; color:#1687ff; background:#edf5ff; font-size:20px; }.schedule-presets { display:flex; gap:8px; }.schedule-presets button { margin:0; padding:3px 9px; color:#1687ff; background:#f0f6ff; font-size:11px; border-radius:5px; }.schedule-zone { color:#98a4b4; font-size:10px; overflow-wrap:anywhere; }
 @media (max-width:760px) { .sidebar { position:fixed; top:0; bottom:0; left:0; z-index:30; transform:translateX(-100%); transition:transform .2s ease; padding-top:calc(28px + env(safe-area-inset-top)); }.sidebar.is-open { transform:translateX(0); }.sidebar-scrim { display:block; position:fixed; inset:0; z-index:25; background:#26324735; }.mobile-menu { display:block; color:#74839a; font-size:19px; width:28px; }.toolbar { height:calc(68px + env(safe-area-inset-top)); padding:env(safe-area-inset-top) 20px 0; gap:8px; }.toolbar-label { display:none; }.toolbar-actions { gap:10px; }.region-picker { font-size:10px; }.quiet-button { font-size:12px; }.primary-button { font-size:12px; padding:9px 15px; }.notice { margin:12px 20px 0; font-size:11px; }.list-content { padding:28px 24px 0; }.list-title { font-size:32px; }.heading-count { font-size:26px; }.list-heading { margin-bottom:21px; }.search { width:125px; font-size:10px; }.tabs { gap:18px; }.tabs button { font-size:11px; }.reminder-row { gap:13px; padding:21px 0; }.reminder-title { font-size:14px; }.list-footer { padding-bottom:calc(20px + env(safe-area-inset-bottom)); font-size:9px; }.welcome-title { font-size:33px; }.welcome { padding-bottom:40px; }.source-chip { font-size:9px; padding:6px 8px; } }

@@ -24,6 +24,7 @@ async function runSmoke({ frontendURL, root }) {
   let normalUI;
   let normalController;
   let stopIPC;
+  const uiErrors=[];
   try {
     // localhost 与 127.0.0.1 是不同站点，验证登录所用的跨域 iframe 不会退回中文 Electron 标识。
     agentWindow = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } });
@@ -67,7 +68,7 @@ async function runSmoke({ frontendURL, root }) {
     ui = new BrowserWindow({ show: false, width: 1160, height: 830, webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false
     } });
-    ui.webContents.on('console-message', event => { if (event.level === 'error') console.error('界面错误：' + event.message); });
+    ui.webContents.on('console-message', event => { if (event.level === 'error') {uiErrors.push(event.message);console.error('界面错误：' + event.message);} });
     stopIPC=installDesktopIPC({ipcMain,controller,getMainWindow:()=>ui});
     await ui.loadURL(frontendURL);
     await ui.webContents.executeJavaScript('new Promise((resolve,reject) => { const deadline=Date.now()+8000; const timer=setInterval(()=>{if(document.body.innerText.includes("连接我的提醒事项")){clearInterval(timer);resolve(true)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("构建界面未完成加载"))}},50) })');
@@ -106,7 +107,9 @@ async function runSmoke({ frontendURL, root }) {
     ui.webContents.send('suixing:snapshot',{region:'cn',result:sorting});
     const selectSort=async label=>{
       await ui.webContents.executeJavaScript('document.querySelector(".sort-picker-label").click()');
-      await ui.webContents.executeJavaScript('new Promise((resolve,reject)=>{const deadline=Date.now()+4000;const timer=setInterval(()=>{const option=[...document.querySelectorAll(".uni-picker-select .uni-picker-item")].find(node=>node.textContent===' + JSON.stringify(label) + ');if(option){clearInterval(timer);option.click();setTimeout(resolve,80)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("排序选项未出现"))}},30)})');
+      await new Promise(resolve=>setTimeout(resolve,50));
+      assert.equal(await ui.webContents.executeJavaScript('(()=>{const option=[...document.querySelectorAll(".sort-option")].find(option=>option.querySelector(".sort-option-label").textContent==='+JSON.stringify(label)+');if(!option)return false;option.click();return true})()'),true);
+      await new Promise(resolve=>setTimeout(resolve,80));
     };
     const displayedIds=()=>ui.webContents.executeJavaScript('[...document.querySelectorAll(".reminder-row[data-record-id]")].map(row=>row.dataset.recordId)');
     await new Promise(resolve=>setTimeout(resolve,100));
@@ -119,10 +122,52 @@ async function runSmoke({ frontendURL, root }) {
     await ui.webContents.executeJavaScript('new Promise(resolve=>{const timer=setInterval(()=>{if(document.querySelector(".demo-link")){clearInterval(timer);resolve(true)}},30)})');
     ui.webContents.send('suixing:snapshot',{region:'cn',result:sorting});
     await new Promise(resolve=>setTimeout(resolve,100));
-    assert.ok((await ui.webContents.executeJavaScript('document.querySelector(".sort-picker-label").textContent')).includes('标题：升序'));
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".desktop-sort").dataset.sortMode'),'title-ascending');
     assert.deepEqual(await displayedIds(),originalIds.slice().reverse());
     await selectSort('清单顺序');
     assert.deepEqual(await displayedIds(),originalIds);
+    ui.show();ui.focus();ui.webContents.focus();
+    await ui.webContents.executeJavaScript('(()=>{const input=document.querySelector(".toolbar-search input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,"随行验证");input.dispatchEvent(new Event("input",{bubbles:true}));input.focus()})()');
+    const press=async keyCode=>{
+      ui.webContents.sendInputEvent({type:'keyDown',keyCode});
+      ui.webContents.sendInputEvent({type:'keyUp',keyCode});
+      await new Promise(resolve=>setTimeout(resolve,100));
+    };
+    await press('Tab');
+    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".desktop-sort .sort-picker-label")'),true,'Tab 应能到达排序菜单');
+    await press('Enter');
+    assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".sort-menu")'),true,'回车应打开排序选项');
+    await press('Down');
+    await press('Escape');
+    assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".sort-menu")'),false);
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".desktop-sort").dataset.sortMode'),'manual','Esc 应取消未提交的选择');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".toolbar-search input").value'),'随行验证','取消排序不得清空搜索');
+    await press('Enter');await press('Down');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".desktop-sort").dataset.sortMode'),'manual','方向键只移动焦点，不提交选择');
+    await press('Enter');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".desktop-sort").dataset.sortMode'),'date-ascending','回车应确认当前选项');
+    await press('Home');
+    await press('Enter');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".desktop-sort").dataset.sortMode'),'manual');
+    await press('Escape');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".toolbar-search input").value'),'随行验证');
+    await press('Enter');
+    await ui.webContents.executeJavaScript('document.querySelector(".toolbar-search input").focus()');
+    await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".sort-menu")'),false,'焦点移出菜单应取消选择');
+    await ui.webContents.executeJavaScript('(()=>{const input=document.querySelector(".toolbar-search input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,"");input.dispatchEvent(new Event("input",{bubbles:true}))})()');
+    await ui.webContents.executeJavaScript('document.querySelector(".sort-picker-label").click()');
+    await new Promise(resolve=>setTimeout(resolve,100));
+    fs.writeFileSync(path.join(root,'.local/sort-menu-desktop-preview.png'),(await ui.webContents.capturePage()).toPNG());
+    ui.setContentSize(390,844);await new Promise(resolve=>setTimeout(resolve,300));
+    const menuBounds=await ui.webContents.executeJavaScript('(()=>{const r=document.querySelector(".sort-menu").getBoundingClientRect();return {left:r.left,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight}})()');
+    assert.ok(menuBounds.left>=0 && menuBounds.right<=menuBounds.width+1 && menuBounds.bottom<=menuBounds.height,'窄屏排序菜单必须在窗口内');
+    fs.writeFileSync(path.join(root,'.local/sort-menu-mobile-preview.png'),(await ui.webContents.capturePage()).toPNG());
+    await ui.webContents.executeJavaScript('document.querySelector(".toolbar-search").dispatchEvent(new PointerEvent("pointerdown",{bubbles:true}))');
+    await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".sort-menu")'),false,'点击菜单外应取消选择');
+    ui.setContentSize(1160,830);await new Promise(resolve=>setTimeout(resolve,100));
+    ui.hide();
     const unchanged=await controller.execute({type:'read'},'cn');
     assert.deepEqual(unchanged.snapshot.items.map(item=>item.id),originalIds);
     const sortingWrites=await controller.window().webContents.executeJavaScript('(()=>{const w=document.querySelector("iframe").contentWindow;return {completion:w.fixtureClicks,date:w.fixtureScheduleSaveClicks,text:w.fixtureTextSaves}})()');
@@ -312,6 +357,7 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(normalController.window().webContents.getBackgroundThrottling(),false);
     stopIPC();
     normalUI = new BrowserWindow({show:false,webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}});
+    normalUI.webContents.on('console-message',event=>{if(event.level==='error')uiErrors.push(event.message);});
     stopIPC=installDesktopIPC({ipcMain,controller:normalController,getMainWindow:()=>normalUI});
     await normalUI.loadURL(frontendURL);
     await normalUI.webContents.executeJavaScript('new Promise(resolve=>{const timer=setInterval(()=>{if(document.querySelector(".demo-link")){clearInterval(timer);resolve(true)}},30)})');
@@ -393,6 +439,7 @@ async function runSmoke({ frontendURL, root }) {
       assert.ok(rect.scroll <= Math.ceil(rect.width) + 1, selector + ' 不能横向裁切内容');
     }
     fs.writeFileSync(path.join(root, '.local/mobile-preview.png'), (await ui.webContents.capturePage()).toPNG());
+    assert.deepEqual(uiErrors,[],'合成检查不得忽略本地界面的脚本错误');
     const report = {
       passed: true, kind: 'Electron 合成验证，不代表真实 iCloud 或真机验收',
       checks: ['跨站 iframe 浏览器标识', '只读子页面诊断', '同源 iframe 读取', '同名事项按记录 ID 操作', '完成状态重载保持', '旧页面句柄失效', '构建界面加载', '服务区域恢复', '正式 IPC 主框架校验', '构建界面完成及取消完成各派发一次', '已完成页签展开官方隐藏事项且重复不反转', '标题和备注各保存一次及合成重载保持', '顶栏新增与搜索快捷键', '输入法取消不创建', '新增单次输入和官方自动保存', '普通模式隐藏官方容器新增与重载保持', '页面退出后保留固定阶段回执', '固定提醒事项入口恢复', '页面无 Node 权限', '桌面与手机宽度布局'],
@@ -402,6 +449,7 @@ async function runSmoke({ frontendURL, root }) {
     report.checks.push('普通模式隐藏官方窗口日期读写');
     report.checks.push('日期编辑器窄屏布局、选择器展开与取消');
     report.checks.push('本地清单排序、原顺序恢复、设置恢复及窄屏入口');
+    report.checks.push('排序下拉框 Tab 聚焦、回车展开、方向键选择和 Esc 取消');
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });
     fs.writeFileSync(path.join(root, '.local/desktop-smoke.json'), JSON.stringify(report, null, 2));
     console.log('桌面合成验证通过：' + report.checks.join('、'));
