@@ -7,7 +7,7 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
 const { installDesktopIPC } = require('./ipc.cjs');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, clickTestFlag } = require('./verification-ui.cjs');
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
 async function runSmoke({ frontendURL, root }) {
@@ -134,6 +134,8 @@ async function runSmoke({ frontendURL, root }) {
       await new Promise(resolve=>setTimeout(resolve,100));
     };
     await press('Tab');
+    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".flag-filter")'),true,'Tab 应先到达旗标筛选');
+    await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".desktop-sort .sort-picker-label")'),true,'Tab 应能到达排序菜单');
     await press('Enter');
     assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".sort-menu")'),true,'回车应打开排序选项');
@@ -183,6 +185,37 @@ async function runSmoke({ frontendURL, root }) {
       w.renderFixture('one');
     })()`);
     console.log('构建界面日期及标题排序、清单顺序恢复和重建页面后设置恢复通过，未派发事项写入。');
+    const flagStart=await controller.execute({type:'read'},'cn');const flagTarget=flagStart.snapshot.items[1];
+    ui.webContents.send('suixing:snapshot',{region:'cn',result:flagStart});
+    await new Promise(resolve=>setTimeout(resolve,100));ui.show();ui.focus();ui.webContents.focus();
+    await ui.webContents.executeJavaScript('document.querySelector(".flag-toggle-button").focus()');
+    await press('Space');
+    let flagged;
+    for(let attempt=0;attempt<35;attempt++) {
+      flagged=await controller.execute({type:'read'},'cn');
+      if(flagged.snapshot?.items.find(item=>item.id===flagTarget.id)?.flagged===true) break;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    assert.equal(flagged.snapshot.items.find(item=>item.id===flagTarget.id).flagged,true,'空格应通过正式 IPC 添加旗标');
+    await ui.webContents.executeJavaScript('document.querySelector(".flag-filter").focus()');await press('Space');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".flag-filter").getAttribute("aria-pressed")'),'true');
+    assert.deepEqual(await displayedIds(),[flagTarget.id]);
+    assert.equal(await ui.webContents.executeJavaScript('('+clickTestFlag.toString()+')('+JSON.stringify({pageId:flagged.snapshot.pageId,listId:flagTarget.listId,id:flagTarget.id,completed:false,flagged:true})+')',true),true);
+    let unflagged;
+    for(let attempt=0;attempt<35;attempt++) {
+      unflagged=await controller.execute({type:'read'},'cn');
+      if(unflagged.snapshot?.items.find(item=>item.id===flagTarget.id)?.flagged===false) break;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    assert.equal(unflagged.snapshot.items.find(item=>item.id===flagTarget.id).flagged,false);
+    assert.deepEqual(await displayedIds(),[],'移除最后一个旗标后该行应离开旗标筛选');
+    await ui.webContents.executeJavaScript('document.querySelector(".flag-filter").click()');
+    await new Promise(resolve=>setTimeout(resolve,100));
+    const flagWrites=await controller.window().webContents.executeJavaScript('(()=>{const w=document.querySelector("iframe").contentWindow;return {flags:w.fixtureFlagSaves,toggles:w.fixtureFlagToggleClicks,saves:w.fixtureScheduleSaveClicks,dates:w.fixtureScheduleSaves,completed:w.fixtureClicks}})()');
+    assert.deepEqual(flagWrites,{flags:2,toggles:2,saves:2,dates:0,completed:0});
+    await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureScheduleSaveClicks=0');
+    ui.hide();
+    console.log('旗标空格操作、正式 IPC、两次单次保存和本地筛选通过，没有日期或完成状态写入。');
     // 使用真实构建出的 uni-button，验证完成与取消完成均走本地界面、受限 IPC 和共用适配器。
     for (const completed of [true, false]) {
       const current = await controller.execute({ type: 'read' }, 'cn');
@@ -450,6 +483,7 @@ async function runSmoke({ frontendURL, root }) {
     report.checks.push('日期编辑器窄屏布局、选择器展开与取消');
     report.checks.push('本地清单排序、原顺序恢复、设置恢复及窄屏入口');
     report.checks.push('排序下拉框 Tab 聚焦、回车展开、方向键选择和 Esc 取消');
+    report.checks.push('旗标空格操作、正式 IPC 单次保存、移除及本地筛选');
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });
     fs.writeFileSync(path.join(root, '.local/desktop-smoke.json'), JSON.stringify(report, null, 2));
     console.log('桌面合成验证通过：' + report.checks.join('、'));

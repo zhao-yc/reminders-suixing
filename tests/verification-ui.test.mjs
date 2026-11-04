@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { clickTestCompletion, showTestCompleted, editTestSchedule, verifyTestSorting } = require('../apps/desktop/verification-ui.cjs');
+const { clickTestCompletion, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag } = require('../apps/desktop/verification-ui.cjs');
 const { testOperation, summarize } = require('../apps/desktop/live-check.cjs');
 
 for (const tag of ['button', 'uni-button']) {
@@ -178,4 +178,26 @@ test('排序验收识别受控菜单的选项标签，不把勾选标记读进�
   assert.equal(await dom.window.eval('('+verifyTestSorting.toString()+')('+JSON.stringify(expected)+')'),true);
   assert.deepEqual(changes,['日期：从早到晚','标题：升序','清单顺序']);
   assert.equal(field.textContent,'清单顺序 ⌄');
+});
+
+test('旗标验证只点击匹配页面、清单、记录和原状态的本地按钮一次',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="synthetic-page" data-list-id="synthetic-list"><div class="tabs"><button data-status="pending" class="active"></button></div><div class="reminder-row" data-record-id="synthetic-record"><button class="flag-toggle-button" aria-pressed="false"></button></div></div>',{runScripts:'outside-only'});
+  t.after(()=>dom.window.close());dom.window.setTimeout=callback=>setTimeout(callback,0);
+  const button=dom.window.document.querySelector('.flag-toggle-button');let clicks=0;button.addEventListener('click',()=>clicks++);
+  const expected={pageId:'synthetic-page',listId:'synthetic-list',id:'synthetic-record',completed:false,flagged:false};
+  assert.equal(await dom.window.eval('('+clickTestFlag.toString()+')('+JSON.stringify({...expected,flagged:true})+')'),false);
+  assert.equal(clicks,0);
+  assert.equal(await dom.window.eval('('+clickTestFlag.toString()+')('+JSON.stringify(expected)+')'),true);assert.equal(clicks,1);
+});
+
+test('真实旗标通道只允许唯一未完成、无日期的既有专用新增事项',async()=>{
+  const snapshot={pageId:'test-page',activeListId:'test-list',activeListTitle:'随行验证 · 合成清单',lists:[{id:'test-list',title:'随行验证 · 合成清单'}],items:[{id:'synthetic-created',listId:'test-list',title:'随行验证 · Windows 新增验证',completed:false,flagged:false,schedule:{date:null,time:null,timeZone:null}}]};
+  let reads=0,clicks=0;
+  const controller={async execute(command){assert.equal(command.type,'read');const result=structuredClone(snapshot);if(reads++)result.items[0].flagged=true;return {ok:true,snapshot:result};}};
+  const result=await testOperation(controller,'flag-created-test-item',{sendSnapshot(){},ui:{webContents:{async executeJavaScript(){clicks++;return true;}}}});
+  assert.equal(result.code,'WEB_STATE_OBSERVED');assert.equal(clicks,1);
+  for(const changed of [{completed:true},{schedule:{date:'2030-01-15',time:null,timeZone:null}},{flagged:null}]) {
+    const blocked=structuredClone(snapshot);Object.assign(blocked.items[0],changed);
+    assert.equal((await testOperation({execute:async()=>({ok:true,snapshot:blocked})},'flag-created-test-item',{ui:null})).code,'TEST_CREATED_STATE_UNSUPPORTED');
+  }
 });

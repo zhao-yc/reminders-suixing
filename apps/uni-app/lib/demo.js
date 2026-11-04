@@ -14,6 +14,6 @@ export function demoSnapshot() {
       { id: 'demo-3', listId: 'demo-life', title: '买鲜花和水果', metadata: '明天', notes: '', completed: false },
       { id: 'demo-4', listId: 'demo-life', title: '整理书桌', metadata: '', notes: '', completed: false },
       { id: 'demo-5', listId: 'demo-life', title: '给自己留一点空闲', metadata: '', notes: '', completed: true }
-    ]
+    ].map((item,index) => ({...item,flagged:index === 2}))
   };
 }

@@ -1,7 +1,7 @@
 const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag } = require('./verification-ui.cjs');
 
 const TEST_PREFIX = '随行验证';
 const TEST_ITEM = '随行验证 · 最小读写验证';
@@ -19,6 +19,24 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
     return controller.execute({ type: 'selectList', pageId: result.snapshot.pageId, listId: lists[0].id }, 'cn');
   }
   if (result.snapshot.activeListId !== lists[0].id) return { ok: false, code: 'TEST_LIST_NOT_SELECTED' };
+  if (['flag-created-test-item','unflag-created-test-item'].includes(command)) {
+    const created=result.snapshot.items.filter(item=>item.title===TEST_CREATED_ITEM);
+    if(created.length!==1) return {ok:false,code:'TEST_CREATED_NOT_UNIQUE'};
+    const item=created[0],flagged=command==='flag-created-test-item';
+    if(typeof item.flagged!=='boolean' || item.schedule?.date!==null || item.schedule.time!==null || item.completed) return {ok:false,code:'TEST_CREATED_STATE_UNSUPPORTED'};
+    if(item.flagged===flagged) return {...result,code:'UNCHANGED',dispatched:false};
+    sendSnapshot(result);
+    let clicked;
+    try {clicked=await ui.webContents.executeJavaScript('('+clickTestFlag.toString()+')('+JSON.stringify({pageId:result.snapshot.pageId,listId:item.listId,id:item.id,completed:item.completed,flagged:item.flagged})+')',true);}
+    catch {return {ok:false,code:'UNCERTAIN_WRITE',cloudConfirmed:false};}
+    if(!clicked) return {ok:false,code:'TEST_UI_NOT_READY'};
+    for(let attempt=0;attempt<70;attempt++) {
+      await new Promise(resolve=>setTimeout(resolve,200));result=await controller.execute({type:'read'},'cn');
+      const actual=result.snapshot?.items.find(candidate=>candidate.id===item.id);
+      if(actual?.flagged===flagged) return {...result,code:'WEB_STATE_OBSERVED',dispatched:true,cloudConfirmed:false,via:'Windows 本地旗标按钮 IPC'};
+    }
+    return {ok:false,code:'UNCERTAIN_WRITE',dispatched:true,cloudConfirmed:false};
+  }
   if (command === 'verify-test-sorting') {
     if (!result.snapshot.items.length || result.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX))) return {ok:false,code:'TEST_ITEMS_REQUIRED'};
     sendSnapshot(result);
@@ -139,6 +157,7 @@ function summarize(result) {
     testNoteEmpty: items.length === 1 ? items[0].notes === '' : undefined,
     testCreatedCount: testList ? created.length : undefined,
     testCreatedPending: created.length === 1 ? !created[0].completed : undefined,
+    testCreatedFlagged: created.length === 1 ? created[0].flagged : undefined,
     testScheduleEmpty: result.schedule ? result.schedule.date === null && result.schedule.time === null : undefined,
     testScheduleDate: result.schedule ? result.schedule.date === '2030-01-15' && result.schedule.time === null : undefined,
     testScheduleTimed: result.schedule ? result.schedule.date === '2030-01-15' && result.schedule.time === '14:35' : undefined,
@@ -156,7 +175,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (!['environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date', 'cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
+    if (!['flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date', 'cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
     if (command === 'quit') { quit(); return; }
     if (busy) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));
@@ -187,7 +206,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result }, null, 2));
       console.log('开发验证结果：' + JSON.stringify(result));
     } catch {
-      const write = ['complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'set-test-date', 'set-test-time', 'clear-test-schedule'].includes(command);
+      const write = ['flag-created-test-item', 'unflag-created-test-item', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'set-test-date', 'set-test-time', 'clear-test-schedule'].includes(command);
       const result = { ok: false, code: write ? 'UNCERTAIN_WRITE' : 'VERIFICATION_FAILED', cloudConfirmed: false };
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result }));
       console.log('验证命令未完成，请先只读核对，不重放写入。');

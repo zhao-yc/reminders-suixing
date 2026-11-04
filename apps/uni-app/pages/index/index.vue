@@ -51,6 +51,7 @@
         <view class="list-controls">
           <view class="tabs"><button data-status="pending" :disabled="busy || !!editing" :class="{ active: tab === 'pending' }" @click="selectTab('pending')">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :disabled="busy || !!editing" :class="{ active: tab === 'completed' }" @click="selectTab('completed')">已完成 <text>{{ completeCount }}</text></button></view>
           <view class="list-view-tools"><text class="current-scope">当前清单已加载</text>
+            <button class="flag-filter" role="button" :tabindex="busy || editing || !flagReadable ? -1 : 0" :disabled="busy || !!editing || !flagReadable" :aria-pressed="String(flagOnly)" :class="{ 'flag-active': flagOnly }" aria-label="只看当前清单已加载的旗标事项" @click="flagOnly = !flagOnly">⚑ {{ flaggedCount }}</button>
             <!-- #ifdef H5 -->
             <view class="sort-picker desktop-sort" :data-sort-mode="sortMode">
               <view class="sort-picker-label" role="button" :tabindex="busy || editing ? -1 : 0" :aria-disabled="String(busy || !!editing)" aria-haspopup="menu" :aria-expanded="String(sortMenuOpen)" aria-controls="list-sort-menu" :aria-label="'显示排序：' + sortLabels[sortIndex]" @click="toggleSortMenu">{{ sortLabels[sortIndex] }} ⌄</view>
@@ -65,9 +66,10 @@
           </view>
         </view>
         <text v-if="sortMode !== 'manual'" class="sort-description">仅本地显示排序，子事项跟随主事项{{ sortMode.startsWith('date-') ? '；日期不可读的主事项列在末尾' : '' }}</text>
+        <text v-if="flagOnly" class="sort-description">只显示当前清单已加载的旗标事项{{ unreadableFlags ? '；还有旗标状态不可读的事项，请在官方页面核对' : '' }}</text>
         <scroll-view class="items-scroll" scroll-y>
           <view v-if="editing?.creating" class="reminder-row new-reminder-row"><view class="draft-circle"></view><view class="inline-editor"><text class="editor-label">新提醒事项 · {{ snapshot.activeListTitle }}</text><input v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" placeholder="提醒我…" aria-label="新事项标题" @confirm="confirmEdit" @keydown="editKeydown" /><view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '添加中…' : '添加' }}</button><button :disabled="busy" @click="endEdit">取消</button></view></view></view>
-          <view v-if="!visibleItems.length && !editing?.creating" class="empty-list"><text class="empty-circle">✓</text><text>{{ search ? '没有找到相关事项' : tab === 'completed' ? '这里会显示网页已加载的完成事项' : '这份清单暂时没有待办事项' }}</text><button v-if="canCreate && tab === 'pending' && !search" class="empty-add" :disabled="busy || !!editing || (!live && !isDemo)" @click="startCreate">添加提醒事项</button></view>
+          <view v-if="!visibleItems.length && !editing?.creating" class="empty-list"><text class="empty-circle">✓</text><text>{{ search ? '没有找到相关事项' : flagOnly ? '当前已加载内容中没有符合筛选的旗标事项' : tab === 'completed' ? '这里会显示网页已加载的完成事项' : '这份清单暂时没有待办事项' }}</text><button v-if="flagOnly" class="empty-add" @click="flagOnly = false">显示全部事项</button><button v-else-if="canCreate && tab === 'pending' && !search" class="empty-add" :disabled="busy || !!editing || (!live && !isDemo)" @click="startCreate">添加提醒事项</button></view>
           <view v-for="item in visibleItems" :key="item.id" class="reminder-row" :data-record-id="item.id" :class="{ completed: item.completed }">
             <button class="completion-button" :class="{ checked: item.completed }" :disabled="busy || !!editing || (!live && !isDemo) || item.disabled" :aria-label="(item.completed ? '取消完成：' : '完成：') + item.title" @click="toggle(item)"><text v-if="item.completed">✓</text></button>
             <view class="reminder-copy">
@@ -87,11 +89,11 @@
                 </view>
                 <view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '保存中…' : '保存' }}</button><button :disabled="busy" @click="endEdit">取消</button></view>
               </view>
-              <template v-else><text class="reminder-title" @dblclick="startEdit(item, 'title')">{{ item.title }}</text><text v-if="item.notes" class="reminder-notes" @dblclick="startEdit(item, 'notes')">{{ item.notes }}</text><text v-if="item.notesTruncated" class="reminder-metadata">备注较长，请在官方页面查看完整内容</text></template>
+              <template v-else><view class="reminder-title-line"><text v-if="item.flagged" class="flag-mark" aria-label="已添加旗标">⚑</text><text class="reminder-title" @dblclick="startEdit(item, 'title')">{{ item.title }}</text></view><text v-if="item.notes" class="reminder-notes" @dblclick="startEdit(item, 'notes')">{{ item.notes }}</text><text v-if="item.notesTruncated" class="reminder-metadata">备注较长，请在官方页面查看完整内容</text></template>
               <text v-if="item.metadata" class="reminder-metadata">{{ item.metadata }}</text>
               <text v-if="item.metadataPartial" class="reminder-metadata">部分日期附注请在官方页面查看</text>
             </view>
-            <view v-if="(canEdit || canEditSchedule) && !editing" class="row-actions"><button v-if="canEdit" class="edit-title-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑标题" @click="startEdit(item, 'title')">✎</button><button v-if="canEdit" class="edit-notes-button" :disabled="busy || (!live && !isDemo) || item.disabled || item.notesTruncated" aria-label="编辑备注" @click="startEdit(item, 'notes')">≡</button><button v-if="canEditSchedule" class="edit-schedule-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑日期与时间" @click="startScheduleEdit(item)">▦</button></view>
+            <view v-if="(canEdit || canEditSchedule || canEditFlag) && !editing" class="row-actions"><button v-if="canEdit" class="edit-title-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑标题" @click="startEdit(item, 'title')">✎</button><button v-if="canEdit" class="edit-notes-button" :disabled="busy || (!live && !isDemo) || item.disabled || item.notesTruncated" aria-label="编辑备注" @click="startEdit(item, 'notes')">≡</button><button v-if="canEditSchedule" class="edit-schedule-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑日期与时间" @click="startScheduleEdit(item)">▦</button><button v-if="canEditFlag" class="flag-toggle-button" role="button" :tabindex="busy || item.disabled || typeof item.flagged !== 'boolean' ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled || typeof item.flagged !== 'boolean'" :aria-pressed="String(item.flagged === true)" :aria-label="item.flagged ? '移除旗标' : '添加旗标'" :class="{ 'flag-active': item.flagged }" @click="toggleFlag(item)">⚑</button></view>
             <text v-if="item.level > 1" class="subtask-tag">子事项</text>
           </view>
           <view class="list-bottom-space"></view>
@@ -137,16 +139,21 @@ const isDemo = ref(false);
 const editing = ref(null);
 const canEdit = computed(() => isDemo.value || bridge.capabilities?.editText === true);
 const canEditSchedule = computed(() => isDemo.value || bridge.capabilities?.editSchedule === true);
+const canEditFlag = computed(() => isDemo.value || bridge.capabilities?.editFlag === true);
 const canCreate = computed(() => isDemo.value || bridge.capabilities?.openNewItem === true);
 const notice = ref('');
 const noticeError = ref(false);
 const sidebarOpen = ref(false);
 const tab = ref('pending');
+const flagOnly = ref(false);
 const search = ref('');
 const searchFocused = ref(false);
 const incompleteCount = computed(() => snapshot.value?.items.filter(item => !item.completed).length || 0);
 const completeCount = computed(() => snapshot.value?.items.filter(item => item.completed).length || 0);
-const visibleItems = computed(() => sortLoadedItems(snapshot.value?.items || [],sortMode.value).filter(item => item.completed === (tab.value === 'completed') && (!search.value || (item.title + item.notes).toLowerCase().includes(search.value.toLowerCase()))));
+const flagReadable = computed(() => snapshot.value?.items.some(item => typeof item.flagged === 'boolean') || false);
+const unreadableFlags = computed(() => snapshot.value?.items.some(item => typeof item.flagged !== 'boolean') || false);
+const flaggedCount = computed(() => snapshot.value?.items.filter(item => item.flagged === true && item.completed === (tab.value === 'completed')).length || 0);
+const visibleItems = computed(() => sortLoadedItems(snapshot.value?.items || [],sortMode.value).filter(item => item.completed === (tab.value === 'completed') && (!flagOnly.value || item.flagged === true) && (!search.value || (item.title + item.notes).toLowerCase().includes(search.value.toLowerCase()))));
 const formattedTime = computed(() => snapshot.value ? '读取于 ' + new Date(snapshot.value.capturedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '');
 
 /** 只在成功取得新快照时允许写入；失败后保留展示，但将旧内容设为只读。 */
@@ -223,6 +230,13 @@ async function toggle(item) {
     id: item.id, fingerprint: item.fingerprint, expectedCompleted: item.completed, completed: !item.completed });
 }
 
+async function toggleFlag(item) {
+  if (!canEditFlag.value || busy.value || editing.value || item.disabled || typeof item.flagged !== 'boolean') return;
+  if (isDemo.value) {item.flagged = !item.flagged;return;}
+  if (!live.value) return;
+  await run({type:'setFlagged',pageId:snapshot.value.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed,expectedFlagged:item.flagged,flagged:!item.flagged});
+}
+
 function showDemo() {
   if (busy.value || editing.value) return;
   snapshot.value = demoSnapshot();
@@ -231,6 +245,7 @@ function showDemo() {
   notice.value = '正在查看界面示例，所有操作仅影响本地示例数据。';
   noticeError.value = false;
   tab.value = 'pending';
+  flagOnly.value = false;
   search.value = '';
 }
 
@@ -241,6 +256,7 @@ function changeRegion(event) {
   const next = index === 0 ? 'cn' : 'global';
   if (next === region.value) return;
   region.value = next;
+  flagOnly.value = false;
   snapshot.value = null;
   isDemo.value = false;
   live.value = false;
@@ -322,6 +338,7 @@ async function startCreate() {
     return;
   }
   tab.value = 'pending';
+  flagOnly.value = false;
   search.value = '';
   editing.value = { creating: true, field: 'title', value: '', pageId: snapshot.value.pageId, listId: snapshot.value.activeListId,
     requestId: 'create-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2), blocked: false };
@@ -355,7 +372,7 @@ async function saveEdit() {
   if (current.field === 'schedule') { await saveSchedule(current); return; }
   if (current.field === 'title' && !current.value.trim()) { notice.value = '请填写事项标题。'; noticeError.value = true; return; }
   if (isDemo.value) {
-    if (current.creating) snapshot.value.items.push({ id: current.requestId, listId: current.listId, title: current.value.trim(), notes: '', metadata: '', completed: false, level: 1, disabled: false });
+    if (current.creating) snapshot.value.items.push({ id: current.requestId, listId: current.listId, title: current.value.trim(), notes: '', metadata: '', completed: false, flagged: false, level: 1, disabled: false });
     else snapshot.value.items.find(item => item.id === current.id)[current.field] = current.value;
     editing.value = null; return;
   }
@@ -416,6 +433,12 @@ watch([busy,editing], () => { if (busy.value || editing.value) closeSortMenu(); 
 function workspaceKeydown(event) {
   if (event.isComposing || event.keyCode === 229 || !snapshot.value) return;
   if (event.target?.closest?.('.desktop-sort') && sortKeydown(event)) return;
+  const flagButton=event.target?.closest?.('.flag-toggle-button,.flag-filter');
+  if (flagButton && ['Enter',' '].includes(event.key)) {
+    event.preventDefault();
+    if (!event.repeat && !flagButton.hasAttribute('disabled')) flagButton.click();
+    return;
+  }
   if (editing.value) {
     if (event.target?.closest?.('.inline-editor')) handleEditKeydown(event);
     return;
@@ -460,6 +483,8 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .items-scroll { flex:1; min-height:0; height:1px; }.reminder-row { display:flex; align-items:flex-start; gap:15px; border-bottom:1px solid #f0f2f5; padding:23px 2px; }.completion-button { width:22px; height:22px; border:1.5px solid #cbd4df; border-radius:50%; flex-shrink:0; margin-top:1px; color:#fff; display:flex; align-items:center; justify-content:center; font-size:13px; }.completion-button.checked { background:#a4b4c8; border-color:#a4b4c8; }.reminder-copy { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }.reminder-title { font-size:15px; color:#3d4859; line-height:1.6; word-break:break-word; }.completed .reminder-title { color:#a6afbb; text-decoration:line-through; }.reminder-notes { color:#8f9aaa; font-size:12px; line-height:1.6; white-space:pre-wrap; }.reminder-metadata { color:#9aa5b4; font-size:11px; line-height:1.6; }.subtask-tag { font-size:10px; color:#a3adba; padding-top:5px; }.list-footer { flex-shrink:0; border-top:1px solid #f1f3f7; padding:17px 0 20px; display:flex; justify-content:space-between; color:#a3adba; font-size:10px; gap:10px; }.list-bottom-space { height:30px; }.empty-list { display:flex; align-items:center; flex-direction:column; gap:18px; padding:85px 20px; font-size:12px; color:#9aa5b4; text-align:center; }.empty-circle { width:42px; height:42px; border:1px solid #dfe6ef; border-radius:50%; line-height:42px; color:#a6b8ce; font-size:22px; }
 .mobile-menu { display:none; }.sidebar-scrim { display:none; }
 .row-actions { display:flex; gap:3px; flex-shrink:0; opacity:0; transition:opacity .15s; }.reminder-row:hover .row-actions,.reminder-row:focus-within .row-actions { opacity:1; }.row-actions button { margin:0; padding:0; width:25px; height:28px; color:#8393a8; font-size:17px; }.row-actions button:hover { color:#1687ff; background:#eef5ff; border-radius:6px; }
+.flag-mark,.row-actions .flag-active { color:#ed9b38; }.flag-filter { margin:0; padding:8px 6px; color:#8492a5; background:transparent; font-size:11px; flex-shrink:0; }.flag-filter.flag-active { color:#b77d23; background:#fff5e5; border-radius:6px; }.flag-toggle-button:focus-visible,.flag-filter:focus-visible { outline:2px solid #1687ff; outline-offset:2px; border-radius:4px; }
+.reminder-title-line { display:flex; align-items:baseline; gap:5px; min-width:0; }.reminder-title-line .reminder-title { min-width:0; }.flag-mark { flex-shrink:0; }
 .inline-editor { display:flex; flex-direction:column; gap:9px; width:100%; }.editor-label { color:#8393a8; font-size:11px; }.edit-field { box-sizing:border-box; width:100%; height:38px; padding:8px 10px; color:#3d4859; font-size:14px; border:1px solid #a3caff; border-radius:7px; background:#fafcff; }.edit-notes { min-height:95px; line-height:1.7; }.editor-actions { display:flex; gap:10px; }.editor-actions button { margin:0; padding:6px 11px; font-size:12px; color:#8491a4; border-radius:6px; }.editor-actions .save-edit { color:#fff; background:#1687ff; }.editor-actions .save-edit[disabled] { background:#aebed2; }.edit-recovery { margin:8px 34px 0; display:flex; align-items:center; gap:12px; font-size:12px; color:#b36139; }.edit-recovery button { margin:0; padding:5px; font-size:12px; color:#1687ff; }.reminder-notes { overflow-wrap:anywhere; }
 @media (hover:none) { .row-actions { opacity:1; } }
 .toolbar { height:68px; gap:16px; }

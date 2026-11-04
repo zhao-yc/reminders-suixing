@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.3') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.4') return;
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   var listHandles = new WeakMap();
@@ -90,13 +90,23 @@
       schedule: loadedDate ? loadedDate.schedule : null,
       scheduleFingerprint: loadedDate ? loadedDate.fingerprint : null,
       completed: completed,
+      flagged: readFlag(row),
       listId: activeListId,
       level: Number(row.getAttribute('aria-level') || 1),
       disabled: button.disabled || button.getAttribute('aria-disabled') === 'true'
     };
     // 记录 ID 与内容指纹同时匹配，避免同名事项、切换列表或旧缓存导致误操作。
-    item.fingerprint = JSON.stringify([item.id, item.title, item.notes, item.metadata, item.completed, activeListId,item.scheduleFingerprint]);
+    item.fingerprint = JSON.stringify([item.id, item.title, item.notes, item.metadata, item.completed, activeListId,item.scheduleFingerprint,item.flagged]);
     return item;
+  }
+
+  /** 只认当前行的独立旗标格；结构未知不当成“没有旗标”。 */
+  function readFlag(row) {
+    var cells = Array.from(row.querySelectorAll('.flag-container[role="gridcell"]')).filter(function (node) { return !node.closest('.details-popover'); });
+    if (cells.length !== 1) return null;
+    var children = Array.from(cells[0].children);
+    if (children.length > 1 || children.some(function (node) { return !node.matches('.flag'); })) return null;
+    return children.length === 1;
   }
 
   function editableText(node) {
@@ -536,7 +546,7 @@
     return text(clone);
   }
 
-  function scheduleContext(command) {
+  function itemContext(command) {
     var doc = application();
     if (!doc || !lastSnapshot || command.pageId !== pageId || lastSnapshot.activeListId !== command.listId || typeof command.expectedCompleted !== 'boolean') return null;
     var selected = listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
@@ -548,7 +558,7 @@
   }
 
   /** 只通过官方详情的语义控件编辑，不访问内部模型、存储或私有网络接口。 */
-  async function openScheduleDetails(context) {
+  async function openItemDetails(context) {
     var doc = context.doc;
     if (doc.querySelector('.details-popover')) return null;
     var buttons = context.row.querySelectorAll('button[data-edit-open][aria-haspopup="dialog"]');
@@ -568,7 +578,7 @@
     return buttons.length === 1 && !buttons[0].disabled && buttons[0].getAttribute('aria-disabled') !== 'true' ? buttons[0] : null;
   }
 
-  async function cancelScheduleDetails(details) {
+  async function cancelItemDetails(details) {
     if (!details.panel.isConnected) return true;
     var cancel = detailAction(details,false);
     if (!cancel) return false;
@@ -622,7 +632,7 @@
   }
 
   async function getSchedule(command) {
-    var context = scheduleContext(command);
+    var context = itemContext(command);
     if (!context) return result(false,'STALE_VIEW','事项已变化，请先刷新。');
     var loaded = loadedSchedule(context.row);
     if (!loaded) return result(false,'SCHEDULE_UNAVAILABLE','暂不能安全读取日期，请在官方页面查看。');
@@ -674,30 +684,30 @@
   async function setSchedule(command) {
     if (!validSchedule(command.value) || !validSchedule(command.expectedSchedule) || typeof command.expectedScheduleFingerprint !== 'string' || command.expectedScheduleFingerprint.length > 200) return result(false,'INVALID_COMMAND','日期或时间格式不正确。');
     if (command.value.time !== null && command.value.timeZone !== editorTimeZone()) return result(false,'STALE_VIEW','系统时区已变化，请重新读取日期。');
-    var context = scheduleContext(command);
+    var context = itemContext(command);
     if (!context) return result(false,'STALE_VIEW','事项已变化，请先刷新。');
     var loaded = loadedSchedule(context.row);
     if (!loaded) return result(false,'SCHEDULE_UNAVAILABLE','暂不能安全读取日期，请在官方页面编辑。');
     if (loaded.fingerprint !== command.expectedScheduleFingerprint || !sameSchedule(loaded.schedule,command.expectedSchedule)) return result(false,'STALE_VIEW','日期已变化，请重新读取。');
     if (sameSchedule(loaded.schedule,command.value)) return result(true,'UNCHANGED','日期已经处于目标状态，未再次存储。',{snapshot:read().snapshot,dispatched:false,cloudConfirmed:false});
-    var details = await openScheduleDetails(context);
+    var details = await openItemDetails(context);
     if (!details) return result(false,'EDIT_UNAVAILABLE','请先关闭官方页面中已有的编辑窗口，再刷新。');
     var current = readScheduleDetails(details);
     var save = detailAction(details,true);
     if (!current || !save || details.panel.querySelector('.repeat-info')) {
-      await cancelScheduleDetails(details); lastSnapshot = null;
+      await cancelItemDetails(details); lastSnapshot = null;
       return result(false,'SCHEDULE_UNAVAILABLE','当前事项需要在官方页面编辑日期。');
     }
     if (!detailsMatchLoadedSchedule(current,loaded)) {
-      await cancelScheduleDetails(details); lastSnapshot = null;
+      await cancelItemDetails(details); lastSnapshot = null;
       return result(false,'SCHEDULE_UNAVAILABLE','官方日期与当前读取不一致，请在官方页面核对。',{dispatched:false,cloudConfirmed:false});
     }
-    if (!await fillScheduleDraft(details,command.value) || !scheduleContext(command)) {
-      await cancelScheduleDetails(details); lastSnapshot = null;
+    if (!await fillScheduleDraft(details,command.value) || !itemContext(command)) {
+      await cancelItemDetails(details); lastSnapshot = null;
       return result(false,'UNCERTAIN_WRITE','日期草稿未通过核对，请先刷新；不要重复保存。',{dispatched:true,cloudConfirmed:false});
     }
     save = detailAction(details,true);
-    if (!save) { await cancelScheduleDetails(details); lastSnapshot = null; return result(false,'UNCERTAIN_WRITE','存储控件已变化，请先读取核对。',{dispatched:true,cloudConfirmed:false}); }
+    if (!save) { await cancelItemDetails(details); lastSnapshot = null; return result(false,'UNCERTAIN_WRITE','存储控件已变化，请先读取核对。',{dispatched:true,cloudConfirmed:false}); }
     activate(save);
     lastSnapshot = null;
     if (!await until(function () { return !details.panel.isConnected; },1800)) return result(false,'UNCERTAIN_WRITE','日期存储结果尚未确认，请在官方页面核对。',{dispatched:true,cloudConfirmed:false});
@@ -709,12 +719,47 @@
     return result(true,'WEB_STATE_OBSERVED','网页日期已更新；云端保存仍需核对。',{snapshot:refreshed.snapshot,dispatched:true,cloudConfirmed:false});
   }
 
+  async function setFlagged(command) {
+    if (typeof command.flagged !== 'boolean' || typeof command.expectedFlagged !== 'boolean') return result(false,'INVALID_COMMAND','请提交明确的旗标状态。');
+    var context = itemContext(command);
+    if (!context) return result(false,'STALE_VIEW','事项已变化，请先刷新。');
+    if (typeof context.item.flagged !== 'boolean') return result(false,'FLAG_UNAVAILABLE','暂不能安全读取旗标，请在官方页面查看。');
+    if (context.item.flagged !== command.expectedFlagged) return result(false,'STALE_VIEW','旗标已变化，请重新读取。');
+    if (context.item.flagged === command.flagged) return result(true,'UNCHANGED','旗标已经处于目标状态，未再次存储。',{snapshot:read().snapshot,dispatched:false,cloudConfirmed:false});
+    var details = await openItemDetails(context);
+    if (!details) return result(false,'EDIT_UNAVAILABLE','请先关闭官方页面已有的编辑窗口，再刷新。');
+    var buttons = details.panel.querySelectorAll('button.flag-edit-button[aria-pressed]');
+    var toggle = buttons.length === 1 && buttons[0];
+    var save = detailAction(details,true);
+    if (!toggle || toggle.disabled || toggle.getAttribute('aria-disabled') === 'true' || !['true','false'].includes(toggle.getAttribute('aria-pressed')) || !save || details.panel.querySelector('.repeat-info')) {
+      await cancelItemDetails(details);lastSnapshot = null;
+      return result(false,'FLAG_UNAVAILABLE','当前事项需要在官方页面编辑旗标。',{dispatched:false,cloudConfirmed:false});
+    }
+    if ((toggle.getAttribute('aria-pressed') === 'true') !== command.expectedFlagged) {
+      await cancelItemDetails(details);lastSnapshot = null;
+      return result(false,'STALE_VIEW','官方详情的旗标已变化，请重新核对。',{dispatched:false,cloudConfirmed:false});
+    }
+    activate(toggle);
+    if (!await until(function () { return toggle.isConnected && toggle.getAttribute('aria-pressed') === String(command.flagged); },900) || !itemContext(command)) {
+      await cancelItemDetails(details);lastSnapshot = null;
+      return result(false,'UNCERTAIN_WRITE','旗标草稿尚未确认，请先读取核对，不要重复提交。',{dispatched:true,cloudConfirmed:false});
+    }
+    save = detailAction(details,true);
+    if (!save) { await cancelItemDetails(details);lastSnapshot = null;return result(false,'UNCERTAIN_WRITE','存储控件已变化，请先读取核对。',{dispatched:true,cloudConfirmed:false}); }
+    activate(save);lastSnapshot = null;
+    var closed = await until(function () { return !details.panel.isConnected; },1800);
+    var observed = closed && await until(function () { var row = context.doc.getElementById(command.id);return row && rowNodes(context.doc).includes(row) && readFlag(row) === command.flagged; },1800);
+    var refreshed = read();
+    if (!observed || !refreshed.ok) return result(false,'UNCERTAIN_WRITE','网页尚未确认目标旗标，请先读取核对。',{dispatched:true,cloudConfirmed:false});
+    return result(true,'WEB_STATE_OBSERVED','网页旗标已更新；云端保存仍需核对。',{snapshot:refreshed.snapshot,dispatched:true,cloudConfirmed:false});
+  }
+
   root.__suixingAdapter = {
-    version: '0.3.3',
+    version: '0.3.4',
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');
-      if (!command || !['read', 'selectList', 'showCompleted', 'getSchedule', 'setSchedule', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
+      if (!command || !['read', 'selectList', 'showCompleted', 'getSchedule', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
       inFlight = true;
       if (command.type === 'createItem') { creationDiagnosticSequence = root.__suixingDiagnosticWriteSequence; setCreationStage('preflight'); }
       try {
@@ -723,12 +768,13 @@
         if (command.type === 'showCompleted') return await showCompleted(command);
         if (command.type === 'getSchedule') return await getSchedule(command);
         if (command.type === 'setSchedule') return await setSchedule(command);
+        if (command.type === 'setFlagged') return await setFlagged(command);
         if (command.type === 'setText') return await setText(command);
         if (command.type === 'createItem') return await createItem(command);
         return await setCompleted(command);
       } catch (_) {
         lastSnapshot = null;
-        return result(false, ['setCompleted', 'setText', 'createItem', 'setSchedule'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
+        return result(false, ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
       } finally { inFlight = false; }
     }
   };

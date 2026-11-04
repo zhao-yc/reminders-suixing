@@ -29,6 +29,9 @@ window.fixtureHideCompleted = false;
 window.fixtureCompletedMenuClicks = 0;
 window.fixtureCompletedActionClicks = 0;
 window.fixtureScheduleSaves = 0;
+window.fixtureFlagSaves = 0;
+window.fixtureFlagToggleClicks = 0;
+window.fixtureFlagRejectToggle = false;
 window.fixtureScheduleSaveClicks = 0;
 window.fixtureScheduleCancels = 0;
 window.fixtureScheduleInputs = [];
@@ -51,10 +54,11 @@ function renderFixture(list) {
     '<div class="reminder-item" id="' + id + '" role="row" aria-level="1" aria-setsize="' + records.length + '">' +
     '<button class="mark-completed" data-completed="' + (index === 0 && complete) + '" aria-label="切换完成状态"></button>' +
     '<div class="title"><div role="textbox" contenteditable="true">' + title + '</div></div>' +
-    '<div class="notes"><div role="textbox" contenteditable="true"></div></div><div class="metadata">2026/11/04<span aria-hidden="true">重复无障碍文字</span></div><button class="info" data-edit-open="false" aria-haspopup="dialog">详情</button></div>'
+    '<div class="notes"><div role="textbox" contenteditable="true"></div></div><div class="flag-container" role="gridcell"></div><div class="metadata">2026/11/04<span aria-hidden="true">重复无障碍文字</span></div><button class="info" data-edit-open="false" aria-haspopup="dialog">详情</button></div>'
   ).join('');
   if (window.fixtureHideCompleted) document.querySelectorAll('.mark-completed[data-completed="true"]').forEach(button => button.closest('.reminder-item').remove());
   document.querySelectorAll('.reminder-item').forEach(row => {
+    if (sessionStorage.getItem('fixture-flag-'+row.id)==='true') row.querySelector('.flag-container').innerHTML='<div class="flag" aria-label="合成旗标"></div>';
     const schedule=JSON.parse(sessionStorage.getItem('fixture-schedule-'+row.id) || '{"date":null,"time":null,"timeZone":null}');
     let due=null;
     if (schedule.date) {const civil=schedule.date.split('-').map(Number),clock=(schedule.time || '00:00').split(':').map(Number);const local=new Date(0);local.setFullYear(civil[0],civil[1]-1,civil[2]);local.setHours(clock[0],clock[1],0,0);due=local.getTime();}
@@ -112,8 +116,11 @@ function openFixtureSchedule(row) {
   const opener=row.querySelector('.info');opener.setAttribute('data-edit-open','true');
   const key='fixture-schedule-'+row.id;
   let state=JSON.parse(sessionStorage.getItem(key) || '{"date":null,"time":null,"timeZone":null}');
+  const initialSchedule=JSON.stringify(state),initialFlag=sessionStorage.getItem('fixture-flag-'+row.id)==='true';let flagged=initialFlag;
   const popup=document.createElement('div');popup.className='details-popover';
-  popup.innerHTML='<div class="reminder-item-details"><div class="content-title"><div class="title"><div role="textbox"></div></div></div><div class="reminder-edit-date"><div id="atDate" role="switch" aria-checked="false" tabindex="0"></div><div class="fixture-date-fields"></div></div><button class="secondary">取消</button><button class="primary">存储</button></div>';
+  popup.innerHTML='<div class="reminder-item-details"><div class="content-title"><div class="title"><div role="textbox"></div></div></div><button class="flag-edit-button"></button><div class="reminder-edit-date"><div id="atDate" role="switch" aria-checked="false" tabindex="0"></div><div class="fixture-date-fields"></div></div><button class="secondary">取消</button><button class="primary">存储</button></div>';
+  const flagButton=popup.querySelector('.flag-edit-button');flagButton.setAttribute('aria-pressed',String(flagged));
+  flagButton.addEventListener('click',()=>{window.fixtureFlagToggleClicks++;if(window.fixtureFlagRejectToggle)return;flagged=!flagged;flagButton.setAttribute('aria-pressed',String(flagged));});
   popup.querySelector('.content-title [role="textbox"]').textContent=row.querySelector('.title [role="textbox"]').textContent;
   const dateSwitch=popup.querySelector('#atDate');
   function close() {popup.remove();opener.setAttribute('data-edit-open','false');}
@@ -161,7 +168,9 @@ function openFixtureSchedule(row) {
   popup.querySelector('.secondary').addEventListener('click',()=>{window.fixtureScheduleCancels++;close();});
   popup.querySelector('.primary').addEventListener('click',()=>{
     window.fixtureScheduleSaveClicks++;if (window.fixtureScheduleDisableSave) return;
-    sessionStorage.setItem(key,JSON.stringify(state));window.fixtureScheduleSaves++;close();renderFixture(document.querySelector('[role="treeitem"][aria-selected="true"]').dataset.list);
+    if (JSON.stringify(state)!==initialSchedule) {sessionStorage.setItem(key,JSON.stringify(state));window.fixtureScheduleSaves++;}
+    if (flagged!==initialFlag) {sessionStorage.setItem('fixture-flag-'+row.id,String(flagged));window.fixtureFlagSaves++;}
+    close();renderFixture(document.querySelector('[role="treeitem"][aria-selected="true"]').dataset.list);
   });
   renderFields();document.body.append(popup);
 }

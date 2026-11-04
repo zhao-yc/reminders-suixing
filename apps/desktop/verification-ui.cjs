@@ -170,4 +170,21 @@ async function verifyTestSorting(expected) {
   return verified && scope() && selected()===original;
 }
 
-module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting };
+/** 旗标验收只点击本地目标行一次，使用正式命令；不访问官方详情或私有写入接口。 */
+async function clickTestFlag(expected) {
+  const pause=()=>new Promise(resolve=>setTimeout(resolve,80));
+  for(let attempt=0;attempt<50;attempt++) {
+    const list=document.querySelector('.list-content');
+    if(list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId) {await pause();continue;}
+    const tab=document.querySelector('.tabs [data-status="'+(expected.completed?'completed':'pending')+'"]');
+    if(!tab || tab.hasAttribute('disabled')) return false;
+    if(!tab.classList.contains('active')) {tab.click();await pause();continue;}
+    const rows=[...document.querySelectorAll('.reminder-row')].filter(row=>row.dataset.recordId===expected.id);
+    const button=rows.length===1 && rows[0].querySelector('.flag-toggle-button');
+    if(!button || button.disabled || button.hasAttribute('disabled') || button.getAttribute('aria-pressed')!==String(expected.flagged)) return false;
+    button.click();return true;
+  }
+  return false;
+}
+
+module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag };
