@@ -9,6 +9,29 @@ const { testOperation, summarize } = require('../apps/desktop/live-check.cjs');
 const {editTestListAppearance}=require('../apps/desktop/verification-ui.cjs');
 const {editTestSubtask}=require('../apps/desktop/verification-ui.cjs');
 
+test('日期往返专项只定位新专用事项，不回退到原日期中断事项',async()=>{
+  const original={id:'original',title:'随行验证 · 最小读写验证',listId:'list',completed:false,notes:'',flagged:false,level:1};
+  const snapshot={pageId:'page',activeListId:'list',activeListTitle:'随行验证（2026-11-04）',lists:[{id:'list',title:'随行验证（2026-11-04）'}],items:[original]};
+  const controller={execute:async command=>{assert.equal(command.type,'read');return {ok:true,snapshot};}};
+  for(const command of ['read-date-roundtrip-test-item','set-date-roundtrip-test-time','clear-date-roundtrip-test-time','delete-date-roundtrip-test-item'])assert.equal((await testOperation(controller,command,{sendSnapshot(){assert.fail('无专项事项不得发送界面操作');}})).code,'TEST_DATE_ITEM_NOT_UNIQUE');
+});
+
+test('日期专项使用正式写入回执，失败停止，不把旧状态轮询成成功',async()=>{
+  const target={id:'date-test',title:'随行验证 · Windows 日期往返验证',listId:'list',completed:false,notes:'',flagged:false,level:1,fingerprint:'date-fingerprint'};
+  const snapshot={pageId:'page',activeListId:'list',activeListTitle:'随行验证（2026-11-04）',lists:[{id:'list',title:'随行验证（2026-11-04）'}],items:[target]};
+  let outcome=null,clicked=0;
+  const controller={lastWriteOutcome:()=>outcome,execute:async command=>{if(command.type==='read')return {ok:true,snapshot};assert.equal(command.type,'getSchedule');assert.equal(command.id,'date-test');return {ok:true,snapshot,schedule:{date:null,time:null,timeZone:null},editorTimeZone:'UTC'};}};
+  const result=await testOperation(controller,'set-date-roundtrip-test-time',{sendSnapshot(){},ui:{webContents:{async executeJavaScript(script){clicked++;assert.match(script,/Windows 日期往返验证/);outcome={sequence:1,ok:false,replyPending:false,code:'UNCERTAIN_WRITE',dispatched:true};return true;}}}});
+  assert.equal(result.code,'UNCERTAIN_WRITE');assert.equal(result.dispatched,true);assert.equal(clicked,1);
+});
+
+test('日期专项汇总只含固定状态和来源，不输出日期值、标题或未知来源',()=>{
+  for(const source of ['loaded-fields','official-details','synthetic-private-source']){
+    const result=summarize({ok:true,code:'READY',dateTestState:'timed',dateTestSource:source,scheduleSource:source,schedule:{date:'2031-02-16',time:'10:25',timeZone:'UTC'}});
+    assert.equal(result.dateTestState,'timed');assert.equal(result.dateTestSource,source.startsWith('synthetic-')?undefined:source);assert.doesNotMatch(JSON.stringify(result),/2031-02-16|10:25|synthetic-private/);
+  }
+});
+
 test('子事项验收只在匹配行确认一次，取消不触发保存',async t=>{
   for(const cancel of [false,true]){
     const dom=new JSDOM('<div class="list-content" data-page-id="page" data-list-id="list"><div class="reminder-row" data-record-id="item"><div class="reminder-title">随行验证 · 合成子项</div><button class="subtask-item-button"></button></div></div>',{runScripts:'outside-only'});t.after(()=>dom.window.close());const doc=dom.window.document;let saved=0;

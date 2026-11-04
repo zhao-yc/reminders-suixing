@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.11') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.12') return;
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   var listHandles = new WeakMap();
@@ -12,6 +12,7 @@
   var deletionRequests = new Set();
   var listRequests = new Set();
   var hierarchyRequests = new Set();
+  var detailScheduleReads = new Map();
   var creationStage = 'preflight';
   var creationDiagnosticSequence = 0;
 
@@ -587,7 +588,7 @@
   }
 
   /** 仅取这一 DOM 行的直接子组件所绑定的同一记录；不遍历 Fiber、祖先、根状态或其他清单。 */
-  function loadedSchedule(row) {
+  function loadedSchedule(row, detailsAllowed) {
     try {
       var keys = Object.getOwnPropertyNames(row).filter(function (key) { return key.startsWith('__reactProps$') || key.startsWith('__reactEventHandlers$'); });
       if (keys.length !== 1 || !row.id.startsWith('reminder-item-')) return null;
@@ -612,7 +613,7 @@
         value.date = padded(Number(parts.year),4)+'-'+parts.month+'-'+parts.day;
         if (!allDay) { value.time = parts.hour+':'+parts.minute; value.timeZone = effectiveZone; }
         if (!validSchedule(value)) return null;
-      } else if (row.querySelector('.due-date')) return null;
+      } else if (row.querySelector('.due-date')) return detailsAllowed && row.querySelectorAll('.due-date').length===1 ? {detailsOnly:true,allDay:allDay===true} : null;
       return {schedule:value,fingerprint:JSON.stringify([due == null ? null : due,allDay === true,zone || null]),allDay:allDay === true,due:due};
     } catch (_) { return null; }
   }
@@ -702,11 +703,13 @@
   function padded(number, length) { return String(number).padStart(length || 2,'0'); }
   function readScheduleDetails(details) {
     var panel = details.panel;
-    var enabled = panel.querySelector('#atDate[role="switch"]');
+    var switches = panel.querySelectorAll('#atDate[role="switch"]');
+    var enabled = switches.length === 1 && switches[0];
     if (!enabled || !['true','false'].includes(enabled.getAttribute('aria-checked'))) return null;
-    if (enabled.getAttribute('aria-checked') === 'false') return {date:null,time:null,timeZone:null};
+    if (enabled.getAttribute('aria-checked') === 'false') return panel.querySelector('.date-field [role="spinbutton"], #editTime') ? null : {date:null,time:null,timeZone:null};
     var date = scheduleSegments(panel,false);
-    var timeSwitch = panel.querySelector('#editTime[role="checkbox"], #editTime[role="switch"]');
+    var timeSwitchNodes = panel.querySelectorAll('#editTime[role="checkbox"], #editTime[role="switch"]');
+    var timeSwitch = timeSwitchNodes.length === 1 && timeSwitchNodes[0];
     if (!date || !timeSwitch || !['true','false'].includes(timeSwitch.getAttribute('aria-checked'))) return null;
     var value = {date:[padded(Number(date.year.getAttribute('aria-valuenow')),4),padded(Number(date.month.getAttribute('aria-valuenow'))),padded(Number(date.day.getAttribute('aria-valuenow')))].join('-'),time:null,timeZone:null};
     if (timeSwitch.getAttribute('aria-checked') === 'true') {
@@ -734,10 +737,50 @@
   async function getSchedule(command) {
     var context = itemContext(command);
     if (!context) return result(false,'STALE_VIEW','事项已变化，请先刷新。');
+    detailScheduleReads.delete(command.id);
     var loaded = loadedSchedule(context.row);
-    if (!loaded) return result(false,'SCHEDULE_UNAVAILABLE','暂不能安全读取日期，请在官方页面查看。');
+    if (!loaded) {
+      var candidate=loadedSchedule(context.row,true);
+      if (!candidate || !candidate.detailsOnly) return result(false,'SCHEDULE_UNAVAILABLE','暂不能安全读取日期，请在官方页面查看。');
+      var details = await openItemDetails(context);
+      if (!details) return result(false,'EDIT_UNAVAILABLE','请先关闭官方页面中已有的编辑窗口，再刷新。');
+      var value = readScheduleDetails(details);
+      var cancelled = await cancelItemDetails(details);
+      if (!cancelled || !itemContext(command)) {lastSnapshot=null;return result(false,'STALE_VIEW','读取期间事项或官方编辑窗口已变化，请先核对。');}
+      // 缺失时间戳时，全天控件可能显示 UTC 日历日，不能推断苹果端日期。
+      if (!value || value.date === null || value.time === null || candidate.allDay) return result(false,'SCHEDULE_UNAVAILABLE','官方日期来源尚未一致，请在官方页面查看。');
+      var fingerprint = JSON.stringify(['official-details',value.date,value.time,value.timeZone]);
+      if (detailScheduleReads.size >= 128) detailScheduleReads.delete(detailScheduleReads.keys().next().value);
+      detailScheduleReads.set(command.id,{listId:command.listId,itemFingerprint:command.fingerprint,scheduleFingerprint:fingerprint,schedule:value});
+      var current = read();
+      if (!current.ok) {detailScheduleReads.delete(command.id);return current;}
+      return result(true,'READY','已从官方详情读取日期。',{snapshot:current.snapshot,schedule:value,scheduleFingerprint:fingerprint,scheduleSource:'official-details',editorTimeZone:editorTimeZone()});
+    }
     var refreshed = read();
-    return result(true,'READY','已读取日期。',{snapshot:refreshed.snapshot,schedule:loaded.schedule,scheduleFingerprint:loaded.fingerprint,editorTimeZone:editorTimeZone()});
+    return result(true,'READY','已读取日期。',{snapshot:refreshed.snapshot,schedule:loaded.schedule,scheduleFingerprint:loaded.fingerprint,scheduleSource:'loaded-fields',editorTimeZone:editorTimeZone()});
+  }
+
+  /** 保存后的只读复核只打开同一事项详情一次，取消后再返回；不依赖已经清空的日期字段。 */
+  async function verifySavedSchedule(context, command) {
+    function currentContext() {
+      var selected=listNodes(context.doc).filter(function(node){return node.getAttribute('aria-selected')==='true';});
+      var row=context.doc.getElementById(command.id);
+      if (selected.length!==1 || handle(selected[0])!==command.listId || !row || !rowNodes(context.doc).includes(row) || isLoading(context.doc)) return null;
+      var item=readItem(row,command.listId);
+      var fields=['id','listId','title','notes','notesTruncated','completed','flagged','priority','level','parentId','hierarchyReadable','disabled'];
+      if (!item || !fields.every(function(key){return item[key]===context.item[key];})) return null;
+      return {doc:context.doc,row:row,item:item};
+    }
+    var after=currentContext();
+    if (!after) return false;
+    var details=await openItemDetails(after);
+    if (!details) return false;
+    var value=readScheduleDetails(details);
+    var loaded=loadedSchedule(after.row);
+    var matches=sameSchedule(value,command.value) || loaded && sameSchedule(loaded.schedule,command.value) && detailsMatchLoadedSchedule(value,loaded);
+    if (loaded && !sameSchedule(loaded.schedule,command.value) || command.value.date===null && after.row.querySelector('.due-date')) matches=false;
+    var cancelled=await cancelItemDetails(details);
+    return !!(cancelled && currentContext() && matches);
   }
 
   async function fillScheduleSegment(details, time, name, number, endpoint) {
@@ -787,9 +830,12 @@
     var context = itemContext(command);
     if (!context) return result(false,'STALE_VIEW','事项已变化，请先刷新。');
     var loaded = loadedSchedule(context.row);
-    if (!loaded) return result(false,'SCHEDULE_UNAVAILABLE','暂不能安全读取日期，请在官方页面编辑。');
-    if (loaded.fingerprint !== command.expectedScheduleFingerprint || !sameSchedule(loaded.schedule,command.expectedSchedule)) return result(false,'STALE_VIEW','日期已变化，请重新读取。');
-    if (sameSchedule(loaded.schedule,command.value)) return result(true,'UNCHANGED','日期已经处于目标状态，未再次存储。',{snapshot:read().snapshot,dispatched:false,cloudConfirmed:false});
+    var receipt = detailScheduleReads.get(command.id);
+    var candidate = !loaded && loadedSchedule(context.row,true);
+    var fromDetails = candidate && candidate.detailsOnly && !candidate.allDay && receipt && receipt.listId===command.listId && receipt.itemFingerprint===command.fingerprint && receipt.scheduleFingerprint===command.expectedScheduleFingerprint && sameSchedule(receipt.schedule,command.expectedSchedule);
+    if (!loaded && !fromDetails) return result(false,'SCHEDULE_UNAVAILABLE','暂不能安全读取日期，请重新读取或在官方页面编辑。');
+    if (loaded && (loaded.fingerprint !== command.expectedScheduleFingerprint || !sameSchedule(loaded.schedule,command.expectedSchedule))) return result(false,'STALE_VIEW','日期已变化，请重新读取。');
+    if (loaded && sameSchedule(loaded.schedule,command.value)) return result(true,'UNCHANGED','日期已经处于目标状态，未再次存储。',{snapshot:read().snapshot,dispatched:false,cloudConfirmed:false});
     var details = await openItemDetails(context);
     if (!details) return result(false,'EDIT_UNAVAILABLE','请先关闭官方页面中已有的编辑窗口，再刷新。');
     var current = readScheduleDetails(details);
@@ -798,9 +844,14 @@
       await cancelItemDetails(details); lastSnapshot = null;
       return result(false,'SCHEDULE_UNAVAILABLE','当前事项需要在官方页面编辑日期。');
     }
-    if (!detailsMatchLoadedSchedule(current,loaded)) {
+    if (fromDetails ? !sameSchedule(current,receipt.schedule) : !detailsMatchLoadedSchedule(current,loaded)) {
       await cancelItemDetails(details); lastSnapshot = null;
       return result(false,'SCHEDULE_UNAVAILABLE','官方日期与当前读取不一致，请在官方页面核对。',{dispatched:false,cloudConfirmed:false});
+    }
+    detailScheduleReads.delete(command.id);
+    if (sameSchedule(current,command.value)) {
+      if (!await cancelItemDetails(details) || !itemContext(command)) {lastSnapshot=null;return result(false,'STALE_VIEW','官方编辑窗口或事项已变化，请先核对。',{dispatched:false,cloudConfirmed:false});}
+      return result(true,'UNCHANGED','日期已经处于目标状态，未再次存储。',{snapshot:read().snapshot,dispatched:false,cloudConfirmed:false});
     }
     if (!await fillScheduleDraft(details,command.value) || !itemContext(command)) {
       await cancelItemDetails(details); lastSnapshot = null;
@@ -813,9 +864,10 @@
     if (!await until(function () { return !details.panel.isConnected; },1800)) return result(false,'UNCERTAIN_WRITE','日期存储结果尚未确认，请在官方页面核对。',{dispatched:true,cloudConfirmed:false});
     var row = context.doc.getElementById(command.id);
     if (!row || !rowNodes(context.doc).includes(row)) return result(false,'UNCERTAIN_WRITE','事项已离开当前视图，请先读取核对。',{dispatched:true,cloudConfirmed:false});
-    var observed = await until(function () { var currentRow = context.doc.getElementById(command.id); var currentDate = currentRow && loadedSchedule(currentRow); return currentDate && sameSchedule(currentDate.schedule,command.value) ? currentDate : false; },1800);
+    var observed = await verifySavedSchedule(context,command);
+    if (!observed) return result(false,'UNCERTAIN_WRITE','官方详情尚未确认目标日期，请先读取核对。',{dispatched:true,cloudConfirmed:false});
     var refreshed = read();
-    if (!observed || !refreshed.ok) return result(false,'UNCERTAIN_WRITE','网页尚未确认目标日期，请先读取核对。',{dispatched:true,cloudConfirmed:false});
+    if (!refreshed.ok) return result(false,'UNCERTAIN_WRITE','网页尚未确认目标日期，请先读取核对。',{dispatched:true,cloudConfirmed:false});
     return result(true,'WEB_STATE_OBSERVED','网页日期已更新；云端保存仍需核对。',{snapshot:refreshed.snapshot,dispatched:true,cloudConfirmed:false});
   }
 
@@ -1251,7 +1303,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.11',
+    version: '0.3.12',
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');

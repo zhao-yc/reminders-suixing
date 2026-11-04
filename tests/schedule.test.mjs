@@ -178,7 +178,7 @@ test('绑定结构未知或记录ID不匹配时日期明确不可用，不回退
   assert.equal(window.fixtureScheduleSaveClicks,0);assert.equal(window.fixtureScheduleCancels,0);
 });
 
-test('日期字段为空但官方行仍有日期时不宣称已清除，也不打开编辑窗口',async t=>{
+test('日期字段为空但官方行仍有日期时不宣称已清除，只读详情冲突后取消',async t=>{
   const {window,execute}=await setup(t);const row=window.document.querySelector('.reminder-item');
   const record=row.__reactProps$fixture.children.props.item;
   row.querySelector('.metadata').innerHTML='<span class="due-date">2030/1/15 14:35</span>';
@@ -189,8 +189,87 @@ test('日期字段为空但官方行仍有日期时不宣称已清除，也不�
     assert.equal((await execute(command(read.snapshot))).code,'SCHEDULE_UNAVAILABLE');
     assert.equal((await execute(command(read.snapshot,'setSchedule',0,{expectedScheduleFingerprint:'synthetic-unavailable',expectedSchedule:empty,value:empty}))).code,'SCHEDULE_UNAVAILABLE');
   }
-  assert.equal(window.fixtureScheduleSaveClicks,0);assert.equal(window.fixtureScheduleCancels,0);
+  assert.equal(window.fixtureScheduleSaveClicks,0);assert.equal(window.fixtureScheduleCancels,2);
   assert.equal(window.document.querySelector('.details-popover'),null);
+});
+
+async function detailOnlyDate(t,time='14:35') {
+  const state=await setup(t),{window,execute,snapshot,zone}=state,id=snapshot.items[0].id;
+  const value={...date,time,timeZone:time===null?null:zone};
+  window.fixtureScheduleOmitLoadedDate=true;
+  window.sessionStorage.setItem('fixture-schedule-'+id,JSON.stringify(value));window.renderFixture('one');
+  return {...state,snapshot:(await execute({type:'read'})).snapshot,value,id};
+}
+
+test('时间戳缺失时只读同一事项的官方日期控件，取消后发放页面内读回凭据',async t=>{
+  const {window,execute,snapshot,value}=await detailOnlyDate(t);
+  assert.equal(snapshot.items[0].schedule,null);
+  const result=await execute(command(snapshot));
+  assert.equal(result.code,'READY');assert.equal(result.scheduleSource,'official-details');
+  assert.deepEqual(JSON.parse(JSON.stringify(result.schedule)),value);
+  assert.equal(result.snapshot.items[0].schedule,null,'详情读回不把列表字段伪装成已恢复');
+  assert.equal(window.fixtureScheduleCancels,1);assert.equal(window.fixtureScheduleSaveClicks,0);
+  assert.equal(window.fixtureScheduleInputs.length,0);assert.equal(window.document.querySelector('.details-popover'),null);
+});
+
+test('缺失时间戳的全天控件仍拒绝猜测 UTC 日历日',async t=>{
+  const {window,execute,snapshot}=await detailOnlyDate(t,null);
+  assert.equal((await execute(command(snapshot))).code,'SCHEDULE_UNAVAILABLE');
+  assert.equal(window.fixtureScheduleCancels,1);assert.equal(window.fixtureScheduleSaveClicks,0);
+});
+
+test('详情来源保存前重新核对，单次存储后打开一次详情读回并取消',async t=>{
+  const {window,execute,snapshot,value,zone}=await detailOnlyDate(t);
+  const read=await execute(command(snapshot)),target={...date,time:'16:20',timeZone:zone};
+  const write=command(read.snapshot,'setSchedule',0,{expectedSchedule:value,expectedScheduleFingerprint:read.scheduleFingerprint,value:target});
+  const result=await execute(write);assert.equal(result.code,'WEB_STATE_OBSERVED');assert.equal(result.cloudConfirmed,false);
+  assert.equal(window.fixtureScheduleSaveClicks,1);assert.equal(window.fixtureScheduleCancels,2);
+  assert.equal(window.document.querySelector('.details-popover'),null);
+  const after=await execute(command(result.snapshot));assert.deepEqual(JSON.parse(JSON.stringify(after.schedule)),target);
+  assert.equal(window.fixtureScheduleSaveClicks,1);
+});
+
+test('仅伪造详情指纹不能写入，读取之后未反映在行摘要的详情变化也停止',async t=>{
+  const {window,execute,snapshot,value,zone,id}=await detailOnlyDate(t);
+  const patch={expectedSchedule:value,expectedScheduleFingerprint:JSON.stringify(['official-details',value.date,value.time,value.timeZone]),value:{...date,time:'16:20',timeZone:zone}};
+  assert.equal((await execute(command(snapshot,'setSchedule',0,patch))).code,'SCHEDULE_UNAVAILABLE');
+  const before=await execute(command(snapshot));
+  window.sessionStorage.setItem('fixture-schedule-'+id,JSON.stringify({...value,time:'15:00'}));
+  const result=await execute(command(before.snapshot,'setSchedule',0,{...patch,expectedScheduleFingerprint:before.scheduleFingerprint}));
+  assert.equal(result.code,'SCHEDULE_UNAVAILABLE');assert.equal(result.dispatched,false);
+  assert.equal(window.fixtureScheduleInputs.length,0);assert.equal(window.fixtureScheduleSaveClicks,0);assert.equal(window.fixtureScheduleCancels,2);
+});
+
+test('存储后日期字段虽清空但官方详情仍是旧时间时返回不确定，不重放',async t=>{
+  const {window,execute,snapshot,value,id}=await detailOnlyDate(t);
+  const read=await execute(command(snapshot));
+  window.document.addEventListener('click',event=>{if(event.target.matches('button.primary'))window.sessionStorage.setItem('fixture-schedule-'+id,JSON.stringify(value));});
+  const write=command(read.snapshot,'setSchedule',0,{expectedSchedule:value,expectedScheduleFingerprint:read.scheduleFingerprint,value:empty});
+  const result=await execute(write);assert.equal(result.code,'UNCERTAIN_WRITE');assert.equal(result.cloudConfirmed,false);
+  assert.equal(window.fixtureScheduleSaveClicks,1);assert.equal(window.fixtureScheduleCancels,2);
+  const after=await execute({type:'read'});
+  assert.equal((await execute(command(after.snapshot,'setSchedule',0,{expectedSchedule:value,expectedScheduleFingerprint:read.scheduleFingerprint,value:empty}))).code,'STALE_VIEW');
+  assert.equal(window.fixtureScheduleSaveClicks,1);assert.equal(window.document.querySelector('.details-popover'),null);
+});
+
+test('详情读取无法取消或控件重复时不返回可写日期凭据',async t=>{
+  const {window,execute,snapshot}=await detailOnlyDate(t);
+  window.document.querySelector('.info').addEventListener('click',()=>{window.document.querySelector('.reminder-item-details').append(window.document.querySelector('#atDate').cloneNode(true));});
+  assert.equal((await execute(command(snapshot))).code,'SCHEDULE_UNAVAILABLE');assert.equal(window.fixtureScheduleCancels,1);
+  window.document.querySelector('.info').addEventListener('click',()=>{window.document.querySelector('button.secondary').disabled=true;});
+  assert.equal((await execute(command(snapshot))).code,'STALE_VIEW');
+  assert.equal(window.fixtureScheduleSaveClicks,0);
+});
+
+test('日期保存后官方切换清单时停止，不读取自动选中的其他事项',async t=>{
+  const {window,execute,snapshot}=await setup(t);
+  window.document.addEventListener('click',event=>{
+    if(!event.target.matches('button.primary'))return;
+    window.document.querySelectorAll('[role="treeitem"]')[1].click();
+    window.document.querySelectorAll('.reminder-item').forEach(row=>{row.querySelector=()=>assert.fail('不可读取被自动改选的事项字段');});
+  });
+  const result=await execute(command(snapshot,'setSchedule',0,{expectedSchedule:empty,value:date}));
+  assert.equal(result.code,'UNCERTAIN_WRITE');assert.equal(result.snapshot,undefined);assert.equal(window.fixtureScheduleSaveClicks,1);
 });
 
 test('清除后字段与官方日期显示不一致时返回未知，后续只读不能变成自动重放',async t=>{

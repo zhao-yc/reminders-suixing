@@ -16,9 +16,11 @@ const TEST_SYNC_ITEM = '随行验证 · Windows 同步验证';
 const TEST_DELETE_ITEM = '随行验证 · Windows 删除验证';
 const TEST_SUBTASK_PARENT = '随行验证 · Windows 子事项父项';
 const TEST_SUBTASK_CHILD = '随行验证 · Windows 子事项子项';
+const TEST_DATE_ROUNDTRIP_ITEM = '随行验证 · Windows 日期往返验证';
 
 /** 固定验收命令的中断分类；新增命令不能把可能已写入的异常降为普通失败。 */
 function isWriteTestCommand(command) {
+  if(['create-date-roundtrip-test-item','set-date-roundtrip-test-time','clear-date-roundtrip-test-time','delete-date-roundtrip-test-item'].includes(command))return true;
   return ['create-subtask-test-parent','create-subtask-test-child','indent-subtask-test-item','outdent-subtask-test-item','delete-subtask-test-child','delete-subtask-test-parent','create-appearance-test-list','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list','delete-management-test-list','create-management-test-list','rename-management-test-list','restore-management-test-list','create-delete-test-item','delete-test-item','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','flag-created-test-item','unflag-created-test-item','complete-test-item','uncomplete-test-item','edit-test-title','restore-test-title','edit-test-note','clear-test-note','create-test-item','set-test-date','set-test-time','clear-test-schedule'].includes(command);
 }
 
@@ -39,6 +41,38 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
   if (!result.ok) return result;
   const lists = result.snapshot.lists.filter(list => list.title===TEST_LIST);
   if (lists.length !== 1) return { ok: false, code: 'TEST_LIST_NOT_UNIQUE' };
+  if (['read-date-roundtrip-test-item','set-date-roundtrip-test-time','clear-date-roundtrip-test-time','delete-date-roundtrip-test-item'].includes(command)) {
+    if(result.snapshot.activeListId!==lists[0].id || result.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX)))return {ok:false,code:'TEST_SCOPE_REQUIRED'};
+    const targets=result.snapshot.items.filter(item=>item.title===TEST_DATE_ROUNDTRIP_ITEM);
+    if(targets.length!==1)return {ok:false,code:'TEST_DATE_ITEM_NOT_UNIQUE'};
+    const target=targets[0],others=result.snapshot.items.filter(item=>item.id!==target.id).map(item=>item.fingerprint);
+    if(target.completed || target.notes || target.flagged!==false || target.level!==1)return {ok:false,code:'TEST_DATE_ITEM_NOT_CLEAN'};
+    const current=await controller.execute({type:'getSchedule',pageId:result.snapshot.pageId,listId:target.listId,id:target.id,fingerprint:target.fingerprint,expectedCompleted:false},'cn');
+    if(!current.ok)return current;
+    const state=current.schedule?.date===null && current.schedule.time===null?'empty':current.schedule?.date==='2031-02-16' && current.schedule.time==='10:25' && current.schedule.timeZone===current.editorTimeZone?'timed':'other';
+    if(command==='read-date-roundtrip-test-item')return {...current,dateTestState:state,dateTestSource:current.scheduleSource};
+    if(state==='other' || command==='set-date-roundtrip-test-time' && state!=='empty' || command==='clear-date-roundtrip-test-time' && state!=='timed')return {ok:false,code:'TEST_DATE_STATE_UNSUPPORTED'};
+    const deleting=command==='delete-date-roundtrip-test-item',value={date:deleting || command==='clear-date-roundtrip-test-time'?null:'2031-02-16',time:deleting || command==='clear-date-roundtrip-test-time'?null:'10:25',timeZone:deleting || command==='clear-date-roundtrip-test-time'?null:current.editorTimeZone};
+    const beforeSequence=controller.lastWriteOutcome()?.sequence || 0;
+    sendSnapshot(current);let clicked;
+    try{clicked=await ui.webContents.executeJavaScript('('+(deleting?deleteTestItem:editTestSchedule).toString()+')('+JSON.stringify({pageId:current.snapshot.pageId,listId:target.listId,id:target.id,title:TEST_DATE_ROUNDTRIP_ITEM,completed:false,value})+')',true);}catch{return {ok:false,code:'UNCERTAIN_WRITE',cloudConfirmed:false};}
+    if(!clicked)return {ok:false,code:'TEST_DATE_UI_UNCONFIRMED'};
+    for(let attempt=0;attempt<70;attempt++) {
+      await new Promise(resolve=>setTimeout(resolve,150));
+      const outcome=controller.lastWriteOutcome();
+      if(!outcome || outcome.sequence<=beforeSequence || outcome.replyPending)continue;
+      if(!outcome.ok)return {ok:false,code:outcome.code,dispatched:outcome.dispatched,cloudConfirmed:false};
+      const after=await controller.execute({type:'readList',pageId:current.snapshot.pageId,listId:target.listId},'cn');if(!after.ok)return after;
+      if(!others.every(fingerprint=>after.snapshot.items.some(item=>item.fingerprint===fingerprint)))return {ok:false,code:'TEST_DATE_OTHER_ITEMS_CHANGED'};
+      const actual=after.snapshot.items.find(item=>item.id===target.id);
+      if(deleting)return !actual?{...after,code:'WEB_STATE_OBSERVED',dispatched:true,cloudConfirmed:false,via:'Windows 本地日期专项删除确认 IPC'}:{ok:false,code:'UNCERTAIN_WRITE',cloudConfirmed:false};
+      if(!actual)return {ok:false,code:'UNCERTAIN_WRITE',cloudConfirmed:false};
+      const schedule=await controller.execute({type:'getSchedule',pageId:after.snapshot.pageId,listId:actual.listId,id:actual.id,fingerprint:actual.fingerprint,expectedCompleted:false},'cn');
+      if(schedule.ok && JSON.stringify(schedule.schedule)===JSON.stringify(value))return {...schedule,code:'WEB_STATE_OBSERVED',dateTestState:value.date===null?'empty':'timed',dateTestSource:schedule.scheduleSource,dispatched:true,cloudConfirmed:false,via:'Windows 本地日期往返编辑 IPC'};
+      return {ok:false,code:'UNCERTAIN_WRITE',dispatched:true,cloudConfirmed:false};
+    }
+    return {ok:false,code:'UNCERTAIN_WRITE',cloudConfirmed:false};
+  }
   if(['create-appearance-test-list','read-appearance-test-style','cancel-appearance-test-edit','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list'].includes(command)) {
     const matches=result.snapshot.lists.filter(list=>list.title===TEST_APPEARANCE_LIST),creating=command==='create-appearance-test-list';
     if(creating && matches.length)return {...result,code:'UNCHANGED',dispatched:false};
@@ -235,8 +269,9 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
     const unchanged=after.ok && JSON.stringify(after.snapshot.items.map(item=>item.fingerprint))===JSON.stringify(result.snapshot.items.map(item=>item.fingerprint));
     return {ok:observed && unchanged,code:observed && unchanged?'TEST_SORTING_OBSERVED':'TEST_SORTING_UNCONFIRMED',restored:observed,webItemsUnchanged:unchanged};
   }
-  if (['create-test-item','create-sync-test-item','create-delete-test-item'].includes(command)) {
-    const title=command==='create-delete-test-item'?TEST_DELETE_ITEM:command==='create-sync-test-item'?TEST_SYNC_ITEM:TEST_CREATED_ITEM;
+  if (['create-test-item','create-sync-test-item','create-delete-test-item','create-date-roundtrip-test-item'].includes(command)) {
+    if(command==='create-date-roundtrip-test-item' && (result.snapshot.activeListId!==lists[0].id || result.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX))))return {ok:false,code:'TEST_SCOPE_REQUIRED'};
+    const title=command==='create-date-roundtrip-test-item'?TEST_DATE_ROUNDTRIP_ITEM:command==='create-delete-test-item'?TEST_DELETE_ITEM:command==='create-sync-test-item'?TEST_SYNC_ITEM:TEST_CREATED_ITEM;
     const existing = result.snapshot.items.filter(item => item.title === title);
     if (existing.length > 1) return { ok:false, code:'TEST_CREATED_NOT_UNIQUE' };
     if (existing.length === 1) return { ...result, code:'UNCHANGED', dispatched:false };
@@ -358,6 +393,10 @@ function summarize(result) {
     testSyncFlagged:sync.length===1?sync[0].flagged:undefined,
     reconnectBeforeSyncFlagged:typeof result.reconnectBeforeSyncFlagged==='boolean'?result.reconnectBeforeSyncFlagged:undefined,
     testSyncPriority:sync.length===1?['none','low','medium','high'].includes(sync[0].priority)?sync[0].priority:null:undefined,
+    dateTestCount:testList?snapshot.items.filter(item=>item.title===TEST_DATE_ROUNDTRIP_ITEM).length:undefined,
+    dateTestState:['empty','timed','other'].includes(result.dateTestState)?result.dateTestState:undefined,
+    dateTestSource:['loaded-fields','official-details'].includes(result.dateTestSource)?result.dateTestSource:undefined,
+    testScheduleSource:['loaded-fields','official-details'].includes(result.scheduleSource)?result.scheduleSource:undefined,
     deleteReady:result.deleteReady===true?true:undefined,
     testDeleteCount:testList?deletion.length:undefined,
     testSubtaskParentCount:testList?snapshot.items.filter(item=>item.title===TEST_SUBTASK_PARENT).length:undefined,
@@ -387,7 +426,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (!['create-subtask-test-parent','create-subtask-test-child','read-subtask-test-state','cancel-subtask-test-indent','indent-subtask-test-item','outdent-subtask-test-item','delete-subtask-test-child','delete-subtask-test-parent','select-appearance-test-list','create-appearance-test-list','read-appearance-test-style','cancel-appearance-test-edit','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list','read-test-list-appearance','read-test-lists','select-test-list-in-client','cancel-management-list-delete','delete-management-test-list','inspect-management-list-delete','select-management-test-list','cancel-management-list-create','create-management-test-list','rename-management-test-list','restore-management-test-list','inspect-new-test-list','create-delete-test-item','cancel-delete-test-item','delete-test-item','inspect-sync-delete','open-sync-priority','inspect-sync-priority','cancel-sync-priority','reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date','cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
+    if (!['create-date-roundtrip-test-item','read-date-roundtrip-test-item','set-date-roundtrip-test-time','clear-date-roundtrip-test-time','delete-date-roundtrip-test-item','create-subtask-test-parent','create-subtask-test-child','read-subtask-test-state','cancel-subtask-test-indent','indent-subtask-test-item','outdent-subtask-test-item','delete-subtask-test-child','delete-subtask-test-parent','select-appearance-test-list','create-appearance-test-list','read-appearance-test-style','cancel-appearance-test-edit','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list','read-test-list-appearance','read-test-lists','select-test-list-in-client','cancel-management-list-delete','delete-management-test-list','inspect-management-list-delete','select-management-test-list','cancel-management-list-create','create-management-test-list','rename-management-test-list','restore-management-test-list','inspect-new-test-list','create-delete-test-item','cancel-delete-test-item','delete-test-item','inspect-sync-delete','open-sync-priority','inspect-sync-priority','cancel-sync-priority','reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date','cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
     if (command === 'quit') { quit(); return; }
     if (busy) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));

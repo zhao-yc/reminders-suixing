@@ -424,6 +424,14 @@ async function runSmoke({ frontendURL, root }) {
     }
     assert.equal(normalSnapshot.snapshot?.items.filter(item=>item.title===normalTitle).length,1);
     for(const value of [{date:'2030-01-15',time:'14:35',timeZone:zone},{date:null,time:null,timeZone:null}]) {
+      if (value.date===null) {
+        await normalController.window().webContents.executeJavaScript('(()=>{const w=document.querySelector("iframe").contentWindow;w.fixtureScheduleOmitLoadedDate=true;w.renderFixture("one")})()');
+        normalSnapshot=await normalController.execute({type:'read'},'cn');
+        const item=normalSnapshot.snapshot.items.find(item=>item.title===normalTitle);
+        assert.equal(item.schedule,null);
+        const details=await normalController.execute({type:'getSchedule',pageId:normalSnapshot.snapshot.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed},'cn');
+        assert.equal(details.scheduleSource,'official-details');assert.equal(details.schedule.time,'14:35');
+      }
       const target=normalSnapshot.snapshot.items.find(item=>item.title===normalTitle);
       normalUI.webContents.send('suixing:snapshot',{region:'cn',result:normalSnapshot});
       assert.equal(await normalUI.webContents.executeJavaScript('('+editTestSchedule.toString()+')('+JSON.stringify({pageId:normalSnapshot.snapshot.pageId,listId:target.listId,id:target.id,completed:target.completed,value})+')',true),true);
@@ -438,6 +446,8 @@ async function runSmoke({ frontendURL, root }) {
       assert.deepEqual(actual.schedule,value);
     }
     assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureScheduleSaveClicks'),2);
+    await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureScheduleOmitLoadedDate=false');
+    console.log('普通模式日期字段缺失时经官方详情只读并取消，单次清除后再次打开详情核对且取消通过。');
     assert.equal(normalController.lastWriteOutcome(),null,'普通模式日期读写不依赖开发诊断');
     assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureCreationClicks'),1);
     assert.equal(normalController.lastWriteOutcome(),null,'普通窗口不启用开发诊断');
