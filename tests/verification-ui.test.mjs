@@ -6,6 +6,21 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { clickTestCompletion, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList, deleteTestList, selectTestListClient } = require('../apps/desktop/verification-ui.cjs');
 const { testOperation, summarize } = require('../apps/desktop/live-check.cjs');
+const {editTestListAppearance}=require('../apps/desktop/verification-ui.cjs');
+
+test('外观验收只选择本地匹配的选项，取消不触发保存',async t=>{
+  for(const cancel of [false,true]){
+    const dom=new JSDOM('<div class="list-content" data-page-id="page" data-list-id="list"><div class="list-title">随行验证 · 合成外观</div><button class="list-appearance-button"></button></div>',{runScripts:'outside-only'});t.after(()=>dom.window.close());const doc=dom.window.document;let selected=0,saved=0;
+    doc.querySelector('button').addEventListener('click',()=>{const panel=doc.createElement('div');panel.className='inline-editor appearance-editor';panel.innerHTML='<button class="color-choice" data-key="color"></button><button class="icon-choice" data-key="icon"></button><button class="save-list-appearance"></button><button class="cancel-list-appearance"></button>';panel.querySelectorAll('.color-choice,.icon-choice').forEach(button=>button.addEventListener('click',()=>selected++));panel.querySelector('.save-list-appearance').addEventListener('click',()=>saved++);panel.querySelector('.cancel-list-appearance').addEventListener('click',()=>panel.remove());doc.body.append(panel);});
+    assert.equal(await dom.window.eval('('+editTestListAppearance.toString()+')('+JSON.stringify({pageId:'page',listId:'list',title:'随行验证 · 合成外观',color:'color',iconKey:'icon',cancel})+')'),true);assert.equal(selected,2);assert.equal(saved,cancel?0:1);
+  }
+});
+
+test('外观验收拒绝普通清单、旧句柄及已有编辑，不激活按钮',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="page" data-list-id="list"><div class="list-title">随行验证 · 合成外观</div><button class="list-appearance-button"></button></div>',{runScripts:'outside-only'});t.after(()=>dom.window.close());let clicked=0;dom.window.document.querySelector('button').addEventListener('click',()=>clicked++);
+  for(const changes of [{title:'合成普通清单'},{pageId:'old'},{listId:'old'}])assert.equal(await dom.window.eval('('+editTestListAppearance.toString()+')('+JSON.stringify({pageId:'page',listId:'list',title:'随行验证 · 合成外观',...changes})+')'),false);
+  assert.equal(clicked,0);
+});
 
 for (const tag of ['button', 'uni-button']) {
   for (const completed of [false, true]) {

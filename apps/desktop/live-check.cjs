@@ -1,12 +1,13 @@
 const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList, deleteTestList, selectTestListClient } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList, deleteTestList, selectTestListClient, editTestListAppearance } = require('./verification-ui.cjs');
 
 const TEST_PREFIX = '随行验证';
 const TEST_LIST = '随行验证（2026-11-04）';
 const TEST_MANAGEMENT_LIST = '随行验证 · Windows 清单管理验证';
 const TEST_MANAGEMENT_RENAMED = '随行验证 · Windows 清单管理验证 · 重命名';
+const TEST_APPEARANCE_LIST = '随行验证 · Windows 清单外观验证';
 const TEST_ITEM = '随行验证 · 最小读写验证';
 const TEST_EDITED_ITEM = '随行验证 · 最小读写验证 · 编辑验证';
 const TEST_NOTE = '随行验证 · 备注写入验证\n随行验证 · 第二行';
@@ -16,17 +17,18 @@ const TEST_DELETE_ITEM = '随行验证 · Windows 删除验证';
 
 /** 固定验收命令的中断分类；新增命令不能把可能已写入的异常降为普通失败。 */
 function isWriteTestCommand(command) {
-  return ['delete-management-test-list','create-management-test-list','rename-management-test-list','restore-management-test-list','create-delete-test-item','delete-test-item','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','flag-created-test-item','unflag-created-test-item','complete-test-item','uncomplete-test-item','edit-test-title','restore-test-title','edit-test-note','clear-test-note','create-test-item','set-test-date','set-test-time','clear-test-schedule'].includes(command);
+  return ['create-appearance-test-list','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list','delete-management-test-list','create-management-test-list','rename-management-test-list','restore-management-test-list','create-delete-test-item','delete-test-item','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','flag-created-test-item','unflag-created-test-item','complete-test-item','uncomplete-test-item','edit-test-title','restore-test-title','edit-test-note','clear-test-note','create-test-item','set-test-date','set-test-time','clear-test-schedule'].includes(command);
 }
 
 /** 自动写入只能命中唯一的专用验证清单与验证事项，名称仅用于限定测试范围。实际写入仍使用记录 ID 与指纹。 */
 async function testOperation(controller, command, { sendSnapshot, ui }) {
-  if(command==='select-test-list-in-client') {
+  if(['select-test-list-in-client','select-appearance-test-list'].includes(command)) {
     const navigation=await controller.execute({type:'readLists'},'cn');if(!navigation.ok)return navigation;
-    const targets=navigation.snapshot.lists.filter(list=>list.title===TEST_LIST);
+    const selectedTitle=command==='select-appearance-test-list'?TEST_APPEARANCE_LIST:TEST_LIST;
+    const targets=navigation.snapshot.lists.filter(list=>list.title===selectedTitle);
     if(targets.length!==1)return {ok:false,code:'TEST_LIST_NOT_UNIQUE'};
     sendSnapshot(navigation);let selected;
-    try{selected=await ui.webContents.executeJavaScript('('+selectTestListClient.toString()+')('+JSON.stringify({pageId:navigation.snapshot.pageId,listId:targets[0].id,title:TEST_LIST})+')',true);}catch{return {ok:false,code:'TEST_LIST_SELECTION_UNCONFIRMED'};}
+    try{selected=await ui.webContents.executeJavaScript('('+selectTestListClient.toString()+')('+JSON.stringify({pageId:navigation.snapshot.pageId,listId:targets[0].id,title:selectedTitle})+')',true);}catch{return {ok:false,code:'TEST_LIST_SELECTION_UNCONFIRMED'};}
     if(!selected)return {ok:false,code:'TEST_LIST_SELECTION_UNCONFIRMED'};
     const result=await controller.execute({type:'read'},'cn');
     return result.ok && result.snapshot.activeListId===targets[0].id?{...result,via:'Windows 本地侧栏选择及正式读取 IPC'}:{ok:false,code:'TEST_LIST_SELECTION_UNCONFIRMED'};
@@ -35,6 +37,35 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
   if (!result.ok) return result;
   const lists = result.snapshot.lists.filter(list => list.title===TEST_LIST);
   if (lists.length !== 1) return { ok: false, code: 'TEST_LIST_NOT_UNIQUE' };
+  if(['create-appearance-test-list','read-appearance-test-style','cancel-appearance-test-edit','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list'].includes(command)) {
+    const matches=result.snapshot.lists.filter(list=>list.title===TEST_APPEARANCE_LIST),creating=command==='create-appearance-test-list';
+    if(creating && matches.length)return {...result,code:'UNCHANGED',dispatched:false};
+    const target=creating?lists[0]:matches.length===1?matches[0]:null;
+    if(!target || result.snapshot.activeListId!==target.id || !creating && result.snapshot.items.length || creating && result.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX)))return {ok:false,code:'TEST_APPEARANCE_SCOPE_REQUIRED'};
+    sendSnapshot(result);let expected;
+    if(creating)expected={pageId:result.snapshot.pageId,listId:target.id,title:target.title,operation:'create',value:TEST_APPEARANCE_LIST};
+    else if(command==='delete-appearance-test-list')expected={pageId:result.snapshot.pageId,listId:target.id,title:TEST_APPEARANCE_LIST};
+    else {
+      const view=await controller.execute({type:'getListAppearance',pageId:result.snapshot.pageId,listId:target.id,expectedListFingerprint:target.fingerprint},'cn');
+      if(!view.ok)return view;const a=view.appearance;
+      if(a.colors.length!==12 || a.icons.length!==72 || a.colors[5].key!=='rgb(0, 122, 255)' || a.colors[1].key!=='rgb(255, 149, 0)')return {ok:false,code:'TEST_APPEARANCE_OPTIONS_CHANGED'};
+      const original=a.color===a.colors[5].key && a.iconKey===a.icons[0].key,changed=a.color===a.colors[1].key && a.iconKey===a.icons[7].key;
+      if(command==='read-appearance-test-style')return {...result,code:'TEST_APPEARANCE_READ',appearanceStyle:original?'original':changed?'changed':'other',dispatched:false};
+      const restore=command==='restore-appearance-test-style';
+      if(restore && !changed || !restore && !original)return {ok:false,code:'TEST_APPEARANCE_STATE_UNSUPPORTED'};
+      expected={pageId:result.snapshot.pageId,listId:target.id,title:TEST_APPEARANCE_LIST,color:a.colors[restore?5:1].key,iconKey:a.icons[restore?0:7].key,cancel:command==='cancel-appearance-test-edit'};
+    }
+    let clicked;try{clicked=await ui.webContents.executeJavaScript('('+(creating?editTestList:command==='delete-appearance-test-list'?deleteTestList:editTestListAppearance).toString()+')('+JSON.stringify(expected)+')',true);}catch{return {ok:false,code:isWriteTestCommand(command)?'UNCERTAIN_WRITE':'VERIFICATION_FAILED',cloudConfirmed:false};}
+    if(!clicked)return {ok:false,code:'TEST_APPEARANCE_UI_UNCONFIRMED'};
+    if(command==='cancel-appearance-test-edit')return {...result,code:'TEST_APPEARANCE_CANCELLED',dispatched:false};
+    for(let attempt=0;attempt<90;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,200));const current=await controller.execute({type:command==='delete-appearance-test-list'?'readLists':'read'},'cn');if(!current.ok)continue;
+      const found=current.snapshot.lists.filter(list=>list.title===TEST_APPEARANCE_LIST);
+      const observed=command==='delete-appearance-test-list'?!found.length && current.snapshot.lists.length===result.snapshot.lists.length-1:found.length===1 && current.snapshot.activeListId===found[0].id && current.snapshot.items.length===0 && (creating?!result.snapshot.lists.some(list=>list.id===found[0].id):found[0].id===target.id && found[0].color===expected.color && found[0].icon?.key===expected.iconKey);
+      if(observed && result.snapshot.lists.filter(list=>creating || list.id!==target.id).every(old=>current.snapshot.lists.some(list=>list.fingerprint===old.fingerprint)))return {...current,code:'WEB_STATE_OBSERVED',dispatched:true,cloudConfirmed:false,via:'Windows 本地清单外观专项 IPC'};
+    }
+    return {ok:false,code:'UNCERTAIN_WRITE',dispatched:true,cloudConfirmed:false};
+  }
   if(['cancel-management-list-delete','delete-management-test-list'].includes(command)) {
     const targets=result.snapshot.lists.filter(list=>list.title===TEST_MANAGEMENT_LIST);
     if(targets.length!==1 || result.snapshot.activeListId!==targets[0].id || result.snapshot.items.length) return {ok:false,code:'TEST_EMPTY_MANAGEMENT_REQUIRED'};
@@ -258,6 +289,7 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
 
 /** 只输出数量及专用测试事项的布尔状态，不把个人清单标题、正文或标识写入日志。 */
 function summarize(result) {
+  if(result.appearanceStyle && result.snapshot)return {...summarize({...result,appearanceStyle:undefined}),appearanceStyle:result.appearanceStyle};
   const snapshot = result.snapshot;
   const testList = snapshot?.activeListTitle.startsWith(TEST_PREFIX);
   const items = testList ? snapshot.items.filter(item => [TEST_ITEM, TEST_EDITED_ITEM].includes(item.title)) : [];
@@ -281,6 +313,7 @@ function summarize(result) {
     deleteReady:result.deleteReady===true?true:undefined,
     testDeleteCount:testList?deletion.length:undefined,
     testDeletePending:deletion.length===1?!deletion[0].completed:undefined,
+    testAppearanceListCount:snapshot?snapshot.lists.filter(list=>list.title===TEST_APPEARANCE_LIST).length:undefined,
     testManagedListCount:snapshot?managed.length:undefined,
     testManagedListRenamed:managed.length===1?managed[0].title===TEST_MANAGEMENT_RENAMED:undefined,
     testManagementSelected:managed.length===1?snapshot.activeListId===managed[0].id:undefined,
@@ -304,7 +337,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (!['read-test-lists','select-test-list-in-client','cancel-management-list-delete','delete-management-test-list','inspect-management-list-delete','select-management-test-list','cancel-management-list-create','create-management-test-list','rename-management-test-list','restore-management-test-list','inspect-new-test-list','create-delete-test-item','cancel-delete-test-item','delete-test-item','inspect-sync-delete','open-sync-priority','inspect-sync-priority','cancel-sync-priority','reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date','cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
+    if (!['select-appearance-test-list','create-appearance-test-list','read-appearance-test-style','cancel-appearance-test-edit','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list','read-test-list-appearance','read-test-lists','select-test-list-in-client','cancel-management-list-delete','delete-management-test-list','inspect-management-list-delete','select-management-test-list','cancel-management-list-create','create-management-test-list','rename-management-test-list','restore-management-test-list','inspect-new-test-list','create-delete-test-item','cancel-delete-test-item','delete-test-item','inspect-sync-delete','open-sync-priority','inspect-sync-priority','cancel-sync-priority','reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date','cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
     if (command === 'quit') { quit(); return; }
     if (busy) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));
@@ -323,6 +356,11 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
         result = await controller.diagnostics();
       } else if (command === 'inspect-test-editor') {
         result = await controller.inspectTestEditor();
+      } else if(command==='read-test-list-appearance') {
+        const current=await controller.execute({type:'read'},'cn');
+        const list=current.snapshot?.lists.find(list=>list.id===current.snapshot.activeListId);
+        if(!current.ok || list?.title!==TEST_LIST || current.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX)))result={ok:false,code:'TEST_SCOPE_REQUIRED'};
+        else {const value=await controller.execute({type:'getListAppearance',pageId:current.snapshot.pageId,listId:list.id,expectedListFingerprint:list.fingerprint},'cn');result={ok:value.ok,code:value.code,colors:value.appearance?.colors.length,icons:value.appearance?.icons.length,selectedColorKnown:!!value.appearance?.color,selectedIconKnown:!!value.appearance?.iconKey,dispatched:value.dispatched,shape:value.appearanceShape};}
       } else if(command==='inspect-new-test-list') {
         result=await controller.inspectNewTestList();
       } else if(command==='inspect-management-list-delete') {

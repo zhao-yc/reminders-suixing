@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.8') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.9') return;
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   var listHandles = new WeakMap();
@@ -70,10 +70,50 @@
 
   function listName(node) { return text(node && node.querySelector('.inline-editable-label')); }
 
+  /** 图标只投影静态几何与本地蒙版引用；不复制 HTML、脚本、样式、外链或事件属性。 */
+  function listIcon(svg) {
+    if(!svg || svg.tagName.toLowerCase()!=='svg' || svg.getAttribute('viewBox')!=='0 0 64 64')return null;
+    var nodes=[svg].concat(Array.from(svg.querySelectorAll('*'))),ids=new Map(),failed=false;
+    if(nodes.length>100)return null;
+    nodes.forEach(function(node){var id=node.getAttribute('id');if(id){if(!/^[\w-]{1,80}$/.test(id) || ids.has(id))failed=true;else ids.set(id,'shape-'+ids.size);}});
+    var numeric=/^[\d+.,\sEe-]{1,100}$/;
+    function project(node) {
+      var tag=node.tagName.toLowerCase(),attributes=[],allowed={svg:['viewBox','xmlns','xmlns:xlink'],path:['d','fill','fill-rule','clip-rule','id','transform'],g:['fill','fill-rule','clip-rule','id','transform','mask'],circle:['cx','cy','r','fill','id','transform'],defs:[],mask:['id','fill'],use:['href','xlink:href','fill','transform','mask']}[tag];
+      if(!allowed)throw Error('unknown-geometry');
+      if(!['svg','defs'].includes(tag))allowed=allowed.concat(['fill-rule','clip-rule','mask']);
+      Array.from(node.attributes).forEach(function(attr){
+        var name=attr.name,value=attr.value;
+        if(node===svg && ['class','style'].includes(name))return;
+        if(!allowed.includes(name))throw Error('unknown-attribute');
+        if(name==='xmlns' || name==='xmlns:xlink')return;
+        if(name==='viewBox'){if(node!==svg || value!=='0 0 64 64')throw Error('unknown-viewbox');}
+        else if(name==='id')value=ids.get(value);
+        else if(name==='href' || name==='xlink:href'){if(value[0]!=='#' || !ids.has(value.slice(1)))throw Error('external-reference');value='#'+ids.get(value.slice(1));name='href';}
+        else if(name==='mask'){var match=/^url\(#([\w-]+)\)$/.exec(value);if(!match || !ids.has(match[1]))throw Error('external-mask');value='url(#'+ids.get(match[1])+')';}
+        else if(name==='d'){if(!/^[MmZzLlHhVvCcSsQqTtAa\d.,+\sEe-]{1,30000}$/.test(value))throw Error('unknown-path');}
+        else if(name==='fill'){if(!/^(none|black|white|currentColor|#[0-9a-f]{3}|#[0-9a-f]{6})$/i.test(value))throw Error('unknown-fill');}
+        else if(name==='fill-rule' || name==='clip-rule'){if(!/^(nonzero|evenodd)$/.test(value))throw Error('unknown-rule');}
+        else if(name==='transform'){if(!/^(?:(?:translate|scale|rotate|matrix|skewX|skewY)\([\d+.,\sEe-]+\)\s*){1,8}$/.test(value))throw Error('unknown-transform');}
+        else if(!numeric.test(value))throw Error('unknown-number');
+        attributes.push([name,value]);
+      });
+      if(Array.from(node.childNodes).some(function(child){return child.nodeType!==1 && child.textContent.trim();}))throw Error('unknown-content');
+      attributes.sort(function(a,b){return a[0].localeCompare(b[0]);});
+      return '<'+tag+attributes.map(function(attr){return ' '+attr[0]+'="'+attr[1]+'"';}).join('')+'>'+Array.from(node.children).map(project).join('')+'</'+tag+'>';
+    }
+    try {
+      if(failed)return null;
+      var geometry=project(svg);if(geometry.length>60000)return null;
+      var a=2166136261,b=2246822519;for(var i=0;i<geometry.length;i++){a=Math.imul(a^geometry.charCodeAt(i),16777619);b=Math.imul(b^geometry.charCodeAt(i),3266489917);}
+      return {key:'shape-'+(a>>>0).toString(16)+'-'+(b>>>0).toString(16)+'-'+geometry.length,svg:geometry};
+    }catch(_){return null;}
+  }
+
   function readList(node) {
     var icon=node.querySelector('.reminder-list-icon');
-    var list={id:handle(node),title:listName(node),selected:node.getAttribute('aria-selected')==='true',color:icon && icon.style.backgroundColor || '#1687ff'};
-    list.fingerprint=JSON.stringify([list.id,list.title,list.color]);
+    var geometry=listIcon(icon);
+    var list={id:handle(node),title:listName(node),selected:node.getAttribute('aria-selected')==='true',color:icon && icon.style.backgroundColor || '#1687ff',icon:geometry};
+    list.fingerprint=JSON.stringify([list.id,list.title,list.color,geometry && geometry.key]);
     return list;
   }
 
@@ -872,11 +912,85 @@
         return added.length===1 && added[0].title===value && existing.length===beforeLists.length && current.snapshot.activeListId===added[0].id?current:false;
       }
       var target=lists.find(function(list){return list.id===command.listId;});
-      return lists.length===beforeLists.length && target && target.title===value && target.color===context.list.color && current.snapshot.activeListId===command.listId &&
+      return lists.length===beforeLists.length && target && target.title===value && target.color===context.list.color && (target.icon && target.icon.key)===(context.list.icon && context.list.icon.key) && current.snapshot.activeListId===command.listId &&
         JSON.stringify(current.snapshot.items.map(function(item){return item.fingerprint;}))===JSON.stringify(beforeItems)?current:false;
     },2600);
     if(!observed) {lastSnapshot=null;return result(false,'UNCERTAIN_WRITE','网页尚未确认目标清单，请先读取，不要重复保存。',{dispatched:true,cloudConfirmed:false});}
     return result(true,'WEB_STATE_OBSERVED',creating?'网页已新增清单；云端保存仍需核对。':'网页清单名称已更新；云端保存仍需核对。',{snapshot:observed.snapshot,dispatched:true,cloudConfirmed:false});
+  }
+
+  function appearancePanel(panel) {
+    var groups=['color-picker','badge-emblem-picker'].map(function(kind){
+      var pickers=panel.querySelectorAll('.'+kind);if(pickers.length!==1)return null;
+      var buttons=Array.from(pickers[0].querySelectorAll('button.picker-grid-item')).filter(visibleControl);
+      if(!buttons.length || buttons.length>100 || buttons.some(function(button){return button.disabled || button.getAttribute('aria-disabled')==='true';}))return null;
+      var options=buttons.map(function(button,index){
+        if(kind==='color-picker'){
+          var color=button.style.backgroundColor,match=/^rgb\((\d+), (\d+), (\d+)\)$/.exec(color);
+          if(!match || match.slice(1).some(function(value){return +value>255;}) || button.children.length)return null;
+          return {key:color,color:color,index:index,selected:button.classList.contains('is-selected')};
+        }
+        var icon=button.children.length===1 && listIcon(button.children[0]);
+        return icon?{key:icon.key,icon:icon,index:index,selected:button.classList.contains('is-selected')}:null;
+      });
+      if(options.some(function(option){return !option;}) || new Set(options.map(function(option){return option.key;})).size!==options.length || options.filter(function(option){return option.selected;}).length!==1)return null;
+      return options;
+    });
+    if(groups.some(function(group){return !group;}))return null;
+    var colors=groups[0],icons=groups[1];
+    return {colors:colors,icons:icons,color:colors.find(function(option){return option.selected;}).key,iconKey:icons.find(function(option){return option.selected;}).key,
+      fingerprint:JSON.stringify(groups.map(function(group){return group.map(function(option){return option.key;});}))};
+  }
+
+  async function listAppearance(command,writing) {
+    if(typeof command.expectedListFingerprint!=='string' || !command.expectedListFingerprint || command.expectedListFingerprint.length>4000 || writing &&
+      (typeof command.color!=='string' || !/^rgb\(\d{1,3}, \d{1,3}, \d{1,3}\)$/.test(command.color) || command.color.length>30 || typeof command.iconKey!=='string' || !/^shape-[a-f0-9]+-[a-f0-9]+-\d{1,5}$/.test(command.iconKey) ||
+       typeof command.expectedAppearanceFingerprint!=='string' || command.expectedAppearanceFingerprint.length>20000 || !command.expectedAppearanceFingerprint ||
+       typeof command.requestId!=='string' || !/^[a-z0-9-]{1,100}$/.test(command.requestId)))return result(false,'INVALID_COMMAND','清单外观参数无效。');
+    if(writing && listRequests.has(command.requestId))return result(false,'ALREADY_SUBMITTED','本次外观修改已提交，请先读取核对。');
+    if(writing && listRequests.size>=512)return result(false,'LIST_OPERATION_LIMIT','本页操作较多，请重载后核对。');
+    var context=listContext(command);if(!context)return result(false,'STALE_VIEW','清单已变化，请先刷新。');
+    var beforeLists=listNodes(context.doc).map(readList),beforeItems=rowNodes(context.doc).map(function(row){var item=readItem(row,command.listId);return item && item.fingerprint;});
+    var panel=await openListPanel(context,false,command);
+    if(!panel){lastSnapshot=null;return result(false,'LIST_UNAVAILABLE','当前网页暂不能编辑清单外观。');}
+    var input=panel.querySelectorAll('.name-textfield input'),appearance=appearancePanel(panel);
+    if(input.length!==1 || input[0].value!==context.list.title || !appearance || appearance.color!==context.list.color || !context.list.icon || appearance.iconKey!==context.list.icon.key || !listAction(panel,'cancel')){
+      var shape={currentIconKnown:!!context.list.icon,colorMatches:appearance && appearance.color===context.list.color,iconMatches:appearance && appearance.iconKey===(context.list.icon && context.list.icon.key),
+        colorButtons:panel.querySelectorAll('.color-picker button.picker-grid-item').length,selectedColors:panel.querySelectorAll('.color-picker button.picker-grid-item.is-selected').length,
+        iconButtons:panel.querySelectorAll('.badge-emblem-picker button.picker-grid-item').length,selectedIcons:panel.querySelectorAll('.badge-emblem-picker button.picker-grid-item.is-selected').length,
+        unknownIcons:Array.from(panel.querySelectorAll('.badge-emblem-picker button.picker-grid-item')).map(function(button,index){return listIcon(button.children[0])?null:index;}).filter(function(index){return index!==null;})};
+      await cancelListPanel(panel);lastSnapshot=null;return result(false,'LIST_APPEARANCE_UNAVAILABLE','清单图标或颜色不可核对，请在官方页面设置。',{dispatched:false,cloudConfirmed:false,appearanceShape:shape});
+    }
+    if(!writing || appearance.color===command.color && appearance.iconKey===command.iconKey){
+      if(!await cancelListPanel(panel)){lastSnapshot=null;return result(false,'LIST_UNAVAILABLE','官方外观窗口尚未关闭，请先核对。');}
+      if(!listContext(command)){lastSnapshot=null;return result(false,'STALE_VIEW','清单已变化，请先刷新。');}
+      return result(true,writing?'UNCHANGED':'LIST_APPEARANCE_READY',writing?'外观未改变，未再次存储。':'请选择清单颜色与图标。',{appearance:appearance,dispatched:false,cloudConfirmed:false});
+    }
+    var color=appearance.colors.find(function(option){return option.key===command.color;}),icon=appearance.icons.find(function(option){return option.key===command.iconKey;});
+    if(appearance.fingerprint!==command.expectedAppearanceFingerprint || !color || !icon || !listContext(command)){
+      await cancelListPanel(panel);lastSnapshot=null;return result(false,'STALE_VIEW','外观选项已变化，请重新打开编辑器。',{dispatched:false,cloudConfirmed:false});
+    }
+    listRequests.add(command.requestId);
+    for(var change of [{group:'color-picker',option:color,value:'color'},{group:'badge-emblem-picker',option:icon,value:'iconKey'}]){
+      var current=appearancePanel(panel);
+      if(!current || current.fingerprint!==appearance.fingerprint || !listContext(command))break;
+      if(current[change.value]!==change.option.key){activate(Array.from(panel.querySelectorAll('.'+change.group+' button.picker-grid-item')).filter(visibleControl)[change.option.index]);await until(function(){var state=appearancePanel(panel);return state && state[change.value]===change.option.key;},700);}
+    }
+    var changed=appearancePanel(panel),done=listAction(panel,'done');
+    if(!changed || changed.color!==command.color || changed.iconKey!==command.iconKey || changed.fingerprint!==appearance.fingerprint || input[0].value!==context.list.title || !listContext(command) || !done){
+      await cancelListPanel(panel);lastSnapshot=null;return result(false,'UNCERTAIN_WRITE','外观草稿未通过核对，请先读取，不要重复提交。',{dispatched:true,cloudConfirmed:false});
+    }
+    lastSnapshot=null;activate(done);
+    if(!await until(function(){return !panel.isConnected;},1800))return result(false,'UNCERTAIN_WRITE','外观保存尚未确认，请先读取核对。',{dispatched:true,cloudConfirmed:false});
+    var observed=await until(function(){
+      var current=read();if(!current.ok || current.snapshot.activeListId!==command.listId || current.snapshot.lists.length!==beforeLists.length)return false;
+      var target=current.snapshot.lists.find(function(list){return list.id===command.listId;});
+      return target && target.title===context.list.title && target.color===command.color && target.icon && target.icon.key===command.iconKey &&
+        beforeLists.filter(function(list){return list.id!==command.listId;}).every(function(old){return current.snapshot.lists.some(function(list){return list.fingerprint===old.fingerprint;});}) &&
+        JSON.stringify(current.snapshot.items.map(function(item){return item.fingerprint;}))===JSON.stringify(beforeItems)?current:false;
+    },2600);
+    if(!observed){lastSnapshot=null;return result(false,'UNCERTAIN_WRITE','清单外观尚未准确确认，请先读取核对，不要重复保存。',{dispatched:true,cloudConfirmed:false});}
+    return result(true,'WEB_STATE_OBSERVED','网页清单外观已更新；云端保存仍需核对。',{snapshot:observed.snapshot,dispatched:true,cloudConfirmed:false});
   }
 
   function visibleControl(node) {
@@ -1012,11 +1126,11 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.8',
+    version: '0.3.9',
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');
-      if (!command || !['read','readLists', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
+      if (!command || !['read','readLists', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
       inFlight = true;
       if (command.type === 'createItem') { creationDiagnosticSequence = root.__suixingDiagnosticWriteSequence; setCreationStage('preflight'); }
       try {
@@ -1029,6 +1143,7 @@
         if (command.type === 'deleteItem') return await deleteItem(command);
         if (['createList','renameList'].includes(command.type)) return await changeList(command);
         if (command.type === 'deleteList') return await deleteList(command);
+        if (['getListAppearance','setListAppearance'].includes(command.type))return await listAppearance(command,command.type==='setListAppearance');
         if (command.type === 'setSchedule') return await setSchedule(command);
         if (command.type === 'setFlagged') return await setFlagged(command);
         if (command.type === 'setText') return await setText(command);
@@ -1036,7 +1151,7 @@
         return await setCompleted(command);
       } catch (_) {
         lastSnapshot = null;
-        return result(false, ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList','deleteList'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
+        return result(false, ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList','deleteList','setListAppearance'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
       } finally { inFlight = false; }
     }
   };

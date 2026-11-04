@@ -60,7 +60,13 @@ async function inspectNewTestListDocument(doc=document) {
   const panel=panels[0],inputs=[...panel.querySelectorAll('.name-textfield input')],cancel=[...panel.querySelectorAll('.cancel-button')],done=[...panel.querySelectorAll('.done-button')];
   const shape={nameInputs:inputs.length,inputTypes:inputs.map(node=>['text','search'].includes(node.type)?node.type:'other'),
     maximums:inputs.map(node=>node.maxLength),cancelButtons:cancel.length,doneButtons:done.length,
-    colorPickers:panel.querySelectorAll('.color-picker').length,iconPickers:panel.querySelectorAll('.badge-emblem-picker').length};
+    colorPickers:panel.querySelectorAll('.color-picker').length,iconPickers:panel.querySelectorAll('.badge-emblem-picker').length,
+    appearanceOptions:['color-picker','badge-emblem-picker'].map(kind=>({kind,count:panel.querySelectorAll('.'+kind+' .picker-grid-item').length,selected:panel.querySelectorAll('.'+kind+' .picker-grid-item.is-selected').length,options:[...panel.querySelectorAll('.'+kind+' .picker-grid-item')].slice(0,3).map(node=>({
+      tag:node.tagName.toLowerCase(),role:node.getAttribute('role') || '',classes:[...node.classList].filter(name=>/^[a-z][a-z0-9_-]{0,63}$/i.test(name)),
+      attributes:node.getAttributeNames().filter(name=>name!=='id'),selected:node.classList.contains('is-selected'),
+      color:/^rgb\(\d{1,3}, \d{1,3}, \d{1,3}\)$/.test(node.style.backgroundColor)?node.style.backgroundColor:null,
+      children:[...node.children].map(child=>({tag:child.tagName.toLowerCase(),classes:[...child.classList].filter(name=>/^[a-z][a-z0-9_-]{0,63}$/i.test(name)),attributes:child.getAttributeNames().filter(name=>name!=='id')}))
+    }))}))};
   if(cancel.length!==1 || disabled(cancel[0])) return {ok:false,code:'TEST_NEW_LIST_CANCEL_UNAVAILABLE',shape};
   activate(cancel[0]);
   for(let attempt=0;attempt<25 && panel.isConnected;attempt++) await pause();

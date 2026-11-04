@@ -319,4 +319,22 @@ async function selectTestListClient(expected) {
   return false;
 }
 
-module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList, deleteTestList, selectTestListClient };
+/** 验收仅选择本地已读取的外观选项；正式 IPC 会重新核对官方面板。 */
+async function editTestListAppearance(expected) {
+  const pause=()=>new Promise(resolve=>setTimeout(resolve,100)),disabled=node=>!node || node.disabled || node.hasAttribute('disabled');
+  const list=document.querySelector('.list-content'),button=document.querySelector('.list-appearance-button');
+  if(!expected.title?.startsWith('随行验证') || list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId || document.querySelector('.list-title')?.textContent.trim()!==expected.title || document.querySelector('.inline-editor') || disabled(button))return false;
+  button.click();let editor;
+  for(let attempt=0;attempt<60;attempt++){await pause();editor=document.querySelector('.appearance-editor');if(editor)break;if(document.querySelector('.notice.error'))return false;}
+  if(!editor)return false;
+  const color=[...editor.querySelectorAll('.color-choice')].find(node=>node.dataset.key===expected.color),icon=[...editor.querySelectorAll('.icon-choice')].find(node=>node.dataset.key===expected.iconKey);
+  if(disabled(color) || disabled(icon))return false;
+  color.click();icon.click();await pause();
+  if(expected.preview===true)return true;
+  const action=editor.querySelector(expected.cancel?'.cancel-list-appearance':'.save-list-appearance');
+  if(disabled(action))return false;action.click();
+  if(expected.cancel){await pause();return !document.querySelector('.inline-editor');}
+  return true;
+}
+
+module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList, deleteTestList, selectTestListClient, editTestListAppearance };

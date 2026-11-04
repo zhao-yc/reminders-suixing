@@ -217,10 +217,16 @@ document.querySelector('.fixture-list-menu [role="menuitem"]').addEventListener(
   renderFixture(document.querySelector('[role="treeitem"][aria-selected="true"]').dataset.list);
 });
 
+const fixtureAppearanceColors=['rgb(22, 135, 255)','rgb(255, 59, 48)','rgb(52, 199, 89)'];
+const fixtureAppearanceIcons=['<path d="M10 10H54V54H10Z"></path>','<circle cx="32" cy="32" r="20" fill-rule="evenodd"></circle>','<defs><path id="123-synthetic-original" d="M12 12L52 32L12 52Z"></path></defs><mask id="123-synthetic-mask" fill="#fff"><use xlink:href="#123-synthetic-original"></use></mask><path d="M0 0H64V64H0Z" mask="url(#123-synthetic-mask)" fill-rule="evenodd"></path>'];
+function fixtureIcon(index=0) {return '<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">'+fixtureAppearanceIcons[index]+'</svg>';}
+function applyFixtureAppearance(node,color,index) {
+  node.querySelector('.reminder-list-icon')?.remove();const span=document.createElement('span');span.innerHTML=fixtureIcon(index);const svg=span.firstChild;svg.classList.add('reminder-list-icon');svg.style.backgroundColor=color;node.prepend(svg);
+}
 function appendFixtureList(record) {
   const node=document.createElement('div');node.setAttribute('role','treeitem');node.className='rm-list-menu-item';node.dataset.list=record.key;node.setAttribute('aria-selected','false');
   node.innerHTML='<span class="reminder-list-icon"></span><button class="inline-editable-label"></button>';
-  node.querySelector('.inline-editable-label').textContent=record.title;node.querySelector('.reminder-list-icon').style.backgroundColor=record.color || '#1687ff';
+  node.querySelector('.inline-editable-label').textContent=record.title;applyFixtureAppearance(node,record.color || '#1687ff',record.icon || 0);
   let tree=document.querySelector('[role="tree"]');if(!tree){tree=document.createElement('div');tree.setAttribute('role','tree');tree.setAttribute('aria-label','提醒事项列表');document.body.prepend(tree);}
   tree.append(node);return node;
 }
@@ -235,6 +241,15 @@ function openFixtureList(creating) {
   const panel=document.createElement('div');panel.className='reminder-list-detail';
   panel.innerHTML='<div class="name-textfield"><input type="text"></div><div class="color-picker"></div><div class="badge-emblem-picker"></div><button class="done-button">完成</button><button class="cancel-button">取消</button>';
   const input=panel.querySelector('input'),done=panel.querySelector('.done-button');input.value=value;done.disabled=!value.trim();
+  let color=creating?fixtureAppearanceColors[0]:selected.querySelector('.reminder-list-icon').style.backgroundColor,icon=creating?0:Number(sessionStorage.getItem('fixture-list-icon-'+selected.dataset.list) || 0);
+  function choices() {
+    for(const [kind,values,current] of [['color-picker',fixtureAppearanceColors,color],['badge-emblem-picker',fixtureAppearanceIcons,icon]]) {
+      const root=panel.querySelector('.'+kind);root.innerHTML='';
+      values.forEach((value,index)=>{const button=document.createElement('button');button.className='picker-grid-item';button.classList.toggle('is-selected',kind==='color-picker'?value===current:index===current);
+        if(kind==='color-picker')button.style.backgroundColor=value;else button.innerHTML=fixtureIcon(index);
+        button.addEventListener('click',()=>{window.fixtureAppearanceClicks=(window.fixtureAppearanceClicks || 0)+1;if(window.fixtureAppearanceReject)return;if(kind==='color-picker')color=value;else icon=index;choices();});root.append(button);});
+    }
+  }choices();if(window.fixtureAfterAppearanceOpen)window.fixtureAfterAppearanceOpen(panel);
   input.addEventListener('beforeinput',event=>{if(window.fixtureListRejectInput)event.preventDefault();});
   input.addEventListener('input',()=>{window.fixtureListInputs++;value=input.value;done.disabled=!value.trim();});
   panel.querySelector('.cancel-button').addEventListener('click',()=>{window.fixtureListCancels++;panel.remove();});
@@ -242,12 +257,13 @@ function openFixtureList(creating) {
     window.fixtureListSaves++;if(window.fixtureListRejectDone)return;
     const records=JSON.parse(sessionStorage.getItem('fixture-lists') || '[]');
     if(creating) {
-      const record={key:'list-created-'+Date.now()+'-'+records.length,title:value,color:'#1687ff'};records.push(record);sessionStorage.setItem('fixture-lists',JSON.stringify(records));
+      const record={key:'list-created-'+Date.now()+'-'+records.length,title:value,color,icon};records.push(record);sessionStorage.setItem('fixture-lists',JSON.stringify(records));
       document.querySelector('.no-lists-note')?.remove();
       const node=appendFixtureList(record);node.addEventListener('click',()=>selectFixtureList(node));selectFixtureList(node);
     } else {
       selected.querySelector('.inline-editable-label').textContent=value;sessionStorage.setItem('fixture-list-name-'+selected.dataset.list,value);
-      const record=records.find(record=>record.key===selected.dataset.list);if(record){record.title=value;sessionStorage.setItem('fixture-lists',JSON.stringify(records));}
+      applyFixtureAppearance(selected,color,icon);sessionStorage.setItem('fixture-list-color-'+selected.dataset.list,color);sessionStorage.setItem('fixture-list-icon-'+selected.dataset.list,String(icon));
+      const record=records.find(record=>record.key===selected.dataset.list);if(record){record.title=value;record.color=color;record.icon=icon;sessionStorage.setItem('fixture-lists',JSON.stringify(records));}
     }
     panel.remove();if(window.fixtureAfterListSave)window.fixtureAfterListSave();
   });document.body.append(panel);
@@ -273,6 +289,7 @@ document.querySelector('.fixture-list-menu [data-action="delete-list"]').addEven
 for(const record of JSON.parse(sessionStorage.getItem('fixture-lists') || '[]'))appendFixtureList(record);
 for(const key of JSON.parse(sessionStorage.getItem('fixture-deleted-lists') || '[]')){const node=[...document.querySelectorAll('[role="treeitem"]')].find(node=>node.dataset.list===key);node?.remove();}
 document.querySelectorAll('[role="treeitem"]').forEach(node=>{const name=sessionStorage.getItem('fixture-list-name-'+node.dataset.list);if(name!==null)node.querySelector('.inline-editable-label').textContent=name;});
+document.querySelectorAll('[role="treeitem"]').forEach(node=>applyFixtureAppearance(node,sessionStorage.getItem('fixture-list-color-'+node.dataset.list) || node.querySelector('.reminder-list-icon')?.style.backgroundColor || '#1687ff',Number(sessionStorage.getItem('fixture-list-icon-'+node.dataset.list) || 0)));
 document.querySelectorAll('[role="treeitem"]').forEach(node => node.addEventListener('click', () => {
   document.querySelectorAll('[role="treeitem"]').forEach(other => other.setAttribute('aria-selected', String(other === node)));
   renderFixture(node.dataset.list);

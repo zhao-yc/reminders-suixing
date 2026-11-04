@@ -7,7 +7,7 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
 const { installDesktopIPC } = require('./ipc.cjs');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, clickTestFlag, deleteTestItem, editTestList, deleteTestList } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, clickTestFlag, deleteTestItem, editTestList, deleteTestList, editTestListAppearance } = require('./verification-ui.cjs');
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
 async function runSmoke({ frontendURL, root }) {
@@ -147,6 +147,8 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".reconnect-button")'),true,'Tab 应能到达重新连接');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".rename-list-button")'),true,'Tab 应能到达清单重命名');
+    await press('Tab');
+    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".list-appearance-button")'),true,'Tab 应能到达清单颜色与图标');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".delete-list-button")'),true,'Tab 应能到达清单删除');
     await press('Tab');
@@ -523,6 +525,39 @@ async function runSmoke({ frontendURL, root }) {
     for(let attempt=0;attempt<40;attempt++){await new Promise(resolve=>setTimeout(resolve,100));listChanged=await normalController.execute({type:'read'},'cn');if(listChanged.ok)break;}
     assert.equal(listChanged.snapshot.lists.filter(list=>list.title===listTitle).length,1);assert.equal(normalController.lastWriteOutcome(),null);
     console.log('普通模式清单新增与重命名经正式 IPC 各提交一次，取消及输入法保护、窄屏布局和合成重载保持通过。');
+    const appearanceTarget=listChanged.snapshot.lists.find(list=>list.title===listTitle);
+    let appearanceSnapshot=await normalController.execute({type:'selectList',pageId:listChanged.snapshot.pageId,listId:appearanceTarget.id},'cn');
+    normalUI.webContents.send('suixing:snapshot',{region:'cn',result:appearanceSnapshot});await new Promise(resolve=>setTimeout(resolve,100));
+    const appearanceView=await normalController.execute({type:'getListAppearance',pageId:appearanceSnapshot.snapshot.pageId,listId:appearanceTarget.id,expectedListFingerprint:appearanceTarget.fingerprint},'cn');
+    assert.equal(appearanceView.code,'LIST_APPEARANCE_READY');const palette=appearanceView.appearance;
+    const appearanceExpected={pageId:appearanceSnapshot.snapshot.pageId,listId:appearanceTarget.id,title:listTitle,color:palette.colors[1].key,iconKey:palette.icons[2].key};
+    assert.equal(await normalUI.webContents.executeJavaScript('('+editTestListAppearance.toString()+')('+JSON.stringify({...appearanceExpected,cancel:true})+')',true),true);
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureListSaves'),0);
+    assert.equal(await normalUI.webContents.executeJavaScript('('+editTestListAppearance.toString()+')('+JSON.stringify({...appearanceExpected,preview:true})+')',true),true);
+    normalUI.setContentSize(390,780);await new Promise(resolve=>setTimeout(resolve,150));
+    const appearanceBounds=await normalUI.webContents.executeJavaScript('(()=>{const r=document.querySelector(".appearance-editor").getBoundingClientRect();return {left:r.left,right:r.right,width:innerWidth,images:[...document.querySelectorAll(".appearance-editor img")].every(img=>img.complete && img.naturalWidth>0)}})()');
+    assert.ok(appearanceBounds.left>=0 && appearanceBounds.right<=appearanceBounds.width+1);assert.equal(appearanceBounds.images,true);
+    fs.writeFileSync(path.join(root,'.local/list-appearance-mobile-preview.png'),(await normalUI.webContents.capturePage()).toPNG());
+    await normalUI.webContents.executeJavaScript('document.querySelector(".icon-choice[aria-checked=true]").focus()');
+    normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'Home'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'Home'});await new Promise(resolve=>setTimeout(resolve,80));
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".icon-choice").getAttribute("aria-checked")'),'true');
+    normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'End'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'End'});await new Promise(resolve=>setTimeout(resolve,80));
+    assert.equal(await normalUI.webContents.executeJavaScript('document.activeElement.getAttribute("aria-checked")'),'true');
+    normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await normalUI.webContents.executeJavaScript('!!document.querySelector(".appearance-editor")'),false);
+    normalUI.setContentSize(1160,830);await new Promise(resolve=>setTimeout(resolve,100));
+    for(const desired of [appearanceExpected,{...appearanceExpected,color:palette.color,iconKey:palette.iconKey}]) {
+      assert.equal(await normalUI.webContents.executeJavaScript('('+editTestListAppearance.toString()+')('+JSON.stringify(desired)+')',true),true);
+      for(let attempt=0;attempt<50;attempt++){await new Promise(resolve=>setTimeout(resolve,100));appearanceSnapshot=await normalController.execute({type:'read'},'cn');const target=appearanceSnapshot.snapshot?.lists.find(list=>list.id===appearanceTarget.id);if(target?.color===desired.color && target.icon?.key===desired.iconKey)break;}
+      const target=appearanceSnapshot.snapshot.lists.find(list=>list.id===appearanceTarget.id);assert.equal(target.color,desired.color);assert.equal(target.icon.key,desired.iconKey);
+      normalUI.webContents.send('suixing:snapshot',{region:'cn',result:appearanceSnapshot});await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureListSaves'),2);
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureListInputs'),0);
+    normalController.reloadSite('cn');
+    for(let attempt=0;attempt<40;attempt++){await new Promise(resolve=>setTimeout(resolve,100));listChanged=await normalController.execute({type:'read'},'cn');if(listChanged.ok)break;}
+    assert.equal(listChanged.snapshot.lists.find(list=>list.title===listTitle).icon.key,palette.iconKey);
+    console.log('清单颜色/图标经正式 IPC 各单次保存与恢复，取消不保存、静态图片预览、键盘单选组、窄屏及合成重载通过。');
     const removeList=listChanged.snapshot.lists.find(list=>list.title===listTitle);
     const selectedForDelete=await normalController.execute({type:'selectList',pageId:listChanged.snapshot.pageId,listId:removeList.id},'cn');
     normalUI.webContents.send('suixing:snapshot',{region:'cn',result:selectedForDelete});await new Promise(resolve=>setTimeout(resolve,100));

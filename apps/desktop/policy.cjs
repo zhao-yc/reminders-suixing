@@ -18,10 +18,12 @@ function browserUserAgent(chromiumVersion) {
 }
 
 function validCommand(command) {
-  if (!command || typeof command !== 'object' || !['read','readLists', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return false;
+  if (!command || typeof command !== 'object' || !['read','readLists', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return false;
   if (['read','readLists'].includes(command.type)) return true;
   if (typeof command.pageId !== 'string' || command.pageId.length > 150 || typeof command.listId !== 'string' || command.listId.length > 150) return false;
   if (['selectList', 'showCompleted'].includes(command.type)) return true;
+  if(['getListAppearance','setListAppearance'].includes(command.type))return typeof command.expectedListFingerprint==='string' && command.expectedListFingerprint.length>0 && command.expectedListFingerprint.length<=4000 &&
+    (command.type==='getListAppearance' || typeof command.color==='string' && /^rgb\(\d{1,3}, \d{1,3}, \d{1,3}\)$/.test(command.color) && typeof command.iconKey==='string' && /^shape-[a-f0-9]+-[a-f0-9]+-\d{1,5}$/.test(command.iconKey) && typeof command.expectedAppearanceFingerprint==='string' && command.expectedAppearanceFingerprint.length>0 && command.expectedAppearanceFingerprint.length<=20000 && typeof command.requestId==='string' && /^[a-z0-9-]{1,100}$/.test(command.requestId));
   if(command.type==='deleteList') return command.confirmed===true && typeof command.expectedListFingerprint==='string' && command.expectedListFingerprint.length>0 && command.expectedListFingerprint.length<=4000 &&
     typeof command.requestId==='string' && /^[a-z0-9-]{1,100}$/.test(command.requestId);
   if(['createList','renameList'].includes(command.type)) return typeof command.expectedListFingerprint==='string' && command.expectedListFingerprint.length>0 && command.expectedListFingerprint.length<=4000 &&
