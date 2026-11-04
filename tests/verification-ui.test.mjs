@@ -32,6 +32,35 @@ test('日期专项汇总只含固定状态和来源，不输出日期值、标�
   }
 });
 
+test('日期转换专项依次全天、指定时间、清除，正式回执及只读核对各一次',async()=>{
+  let value={date:null,time:null,timeZone:null},sequence=0,outcome=null,clicks=0;
+  const target={id:'transition',title:'随行验证 · Windows 日期转换验证',listId:'list',completed:false,notes:'',flagged:false,level:1,fingerprint:'transition-fingerprint'};
+  const snapshot={pageId:'page',activeListId:'list',activeListTitle:'随行验证（2026-11-04）',lists:[{id:'list',title:'随行验证（2026-11-04）'}],items:[target,{id:'original',title:'随行验证 · 最小读写验证',fingerprint:'original-fingerprint'}]};
+  const controller={lastWriteOutcome:()=>outcome,execute:async command=>{
+    if(command.type==='getSchedule'){assert.equal(command.id,'transition');return {ok:true,snapshot,schedule:value,editorTimeZone:'UTC',scheduleSource:'loaded-fields'};}
+    assert.ok(['read','readList'].includes(command.type));if(command.type==='readList'){assert.equal(command.pageId,'page');assert.equal(command.listId,'list');}return {ok:true,snapshot};
+  }};
+  const ui={webContents:{async executeJavaScript(script){const expected=JSON.parse(script.slice(script.lastIndexOf(')(')+2,-1));assert.equal(expected.title,target.title);assert.equal(expected.id,target.id);value=expected.value;outcome={sequence:++sequence,ok:true,replyPending:false,code:'WEB_STATE_OBSERVED'};clicks++;return true;}}};
+  for(const [command,state] of [['set-date-transition-test-day','all-day'],['set-date-transition-test-time','timed'],['clear-date-transition-test-time','empty']]){
+    const result=await testOperation(controller,command,{sendSnapshot(){},ui});assert.equal(result.code,'WEB_STATE_OBSERVED');assert.equal(result.dateTestState,state);
+  }
+  assert.equal(clicks,3);assert.deepEqual(value,{date:null,time:null,timeZone:null});
+});
+
+test('日期转换拒绝顺序错误或非专项日期，不触碰旧日期与已结束往返事项',async()=>{
+  const target={id:'transition',title:'随行验证 · Windows 日期转换验证',listId:'list',completed:false,notes:'',flagged:false,level:1,fingerprint:'transition-fingerprint'};
+  const snapshot={pageId:'page',activeListId:'list',activeListTitle:'随行验证（2026-11-04）',lists:[{id:'list',title:'随行验证（2026-11-04）'}],items:[target,{id:'roundtrip',title:'随行验证 · Windows 日期往返验证'}]};
+  for(const [command,schedule] of [
+    ['set-date-transition-test-time',{date:null,time:null,timeZone:null}],
+    ['clear-date-transition-test-time',{date:'2032-03-18',time:null,timeZone:null}],
+    ['set-date-transition-test-day',{date:'2032-03-18',time:'16:45',timeZone:'UTC'}],
+    ['delete-date-transition-test-item',{date:'2032-03-19',time:'16:45',timeZone:'UTC'}]
+  ]){
+    const controller={execute:async cmd=>{if(cmd.type==='read')return {ok:true,snapshot};assert.equal(cmd.type,'getSchedule');assert.equal(cmd.id,'transition');return {ok:true,snapshot,schedule,editorTimeZone:'UTC'};}};
+    assert.equal((await testOperation(controller,command,{sendSnapshot(){assert.fail('错误状态不能进入界面操作');}})).code,'TEST_DATE_STATE_UNSUPPORTED');
+  }
+});
+
 test('子事项验收只在匹配行确认一次，取消不触发保存',async t=>{
   for(const cancel of [false,true]){
     const dom=new JSDOM('<div class="list-content" data-page-id="page" data-list-id="list"><div class="reminder-row" data-record-id="item"><div class="reminder-title">随行验证 · 合成子项</div><button class="subtask-item-button"></button></div></div>',{runScripts:'outside-only'});t.after(()=>dom.window.close());const doc=dom.window.document;let saved=0;
