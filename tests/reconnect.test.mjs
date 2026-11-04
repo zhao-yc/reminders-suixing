@@ -7,6 +7,11 @@ const previous={title:'随行验证 · 同步清单',pageId:'old-page'};
 const ready=(active='default-list',lists=[{id:'new-target',title:previous.title},{id:'default-list',title:'合成默认清单'}])=>({ok:true,code:'READY',snapshot:{pageId:'new-page',activeListId:active,lists,items:[]}});
 const fast={wait:async()=>{},attempts:3};
 
+test('空账户重新连接保留新建入口，不把没有清单当作当前空清单',async()=>{
+  const bridge={reconnectSite:async()=>({ok:true}),execute:async()=>({ok:true,needsListSelection:true,snapshot:{pageId:'new-page',lists:[],items:[],activeListId:null,emptyAccount:true}})};
+  const result=await reconnectLoadedList(bridge,'cn',{},fast);assert.equal(result.ok,true);assert.equal(result.needsListSelection,true);assert.match(result.message,/新建第一份清单/);
+});
+
 test('官方重连只在同一容器导航两个固定地址，不读或清理会话数据',async()=>{
   const calls=[],contents={loadURL:async url=>calls.push(url),stop(){assert.fail('成功导航无需停止');}};
   Object.defineProperty(contents,'session',{get(){assert.fail('不读取会话或凭据');}});

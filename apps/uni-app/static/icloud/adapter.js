@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.7') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.8') return;
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   var listHandles = new WeakMap();
@@ -44,6 +44,7 @@
     return documents().find(function (doc) {
       return doc.querySelector('[role="tree"] .rm-list-menu-item') ||
         doc.querySelector('[role="treegrid"] .reminder-item') ||
+        doc.querySelector('.no-lists-note') && doc.querySelector('.new-list-button') ||
         doc.querySelector('[role="tree"][aria-label="Reminder Lists"], [role="tree"][aria-label="提醒事项列表"]');
     });
   }
@@ -74,6 +75,20 @@
     var list={id:handle(node),title:listName(node),selected:node.getAttribute('aria-selected')==='true',color:icon && icon.style.backgroundColor || '#1687ff'};
     list.fingerprint=JSON.stringify([list.id,list.title,list.color]);
     return list;
+  }
+
+  /** 删除后只返回清单导航，不自动读取官方页面可能选中的另一份事项内容。 */
+  function navigationSnapshot(doc,lists) {
+    var snapshot={pageId:pageId,capturedAt:new Date().toISOString(),lists:lists.map(function(list){return Object.assign({},list,{selected:false});}),activeListId:null,activeListTitle:'',items:[],loadedCount:0,expectedCount:0,partial:false,
+      emptyAccount:lists.length===0 && !!doc.querySelector('.no-lists-note') && !!doc.querySelector('.new-list-button'),coverage:'请选择清单后读取网页已加载内容',source:'icloud-web-dom'};
+    lastSnapshot=snapshot;return snapshot;
+  }
+
+  function readLists() {
+    var doc=application();
+    if(!doc || isLoading(doc)) {lastSnapshot=null;return result(false,'PAGE_NOT_READY','官方清单尚未就绪，请稍后读取。');}
+    var lists=listNodes(doc).map(readList);
+    return result(true,'SELECT_A_LIST','请选择清单后继续。',{snapshot:navigationSnapshot(doc,lists),needsListSelection:true});
   }
 
   function rowNodes(doc) {
@@ -161,8 +176,7 @@
     var lists = nodes.map(readList);
     var active = lists.find(function (item) { return item.selected; });
     if (!active) {
-      lastSnapshot = null;
-      return result(false, 'SELECT_A_LIST', '请先在官方页面选择一个提醒事项列表。', { lists: lists });
+      return result(true,'SELECT_A_LIST',lists.length?'请选择一个清单。':'还没有清单，可以新建一份。',{snapshot:navigationSnapshot(doc,lists),needsListSelection:true});
     }
     var rows = rowNodes(doc);
     var items = rows.map(function (node) { return readItem(node, active.id); }).filter(Boolean);
@@ -769,9 +783,11 @@
     return result(true,'WEB_STATE_OBSERVED','网页旗标已更新；云端保存仍需核对。',{snapshot:refreshed.snapshot,dispatched:true,cloudConfirmed:false});
   }
 
-  function listContext(command) {
+  function listContext(command,allowEmpty) {
     var doc=application();
-    if(!doc || !lastSnapshot || command.pageId!==pageId || lastSnapshot.activeListId!==command.listId || isLoading(doc)) return null;
+    if(!doc || !lastSnapshot || command.pageId!==pageId || isLoading(doc)) return null;
+    if(allowEmpty && command.listId==='' && command.expectedListFingerprint==='empty-list-set' && lastSnapshot.emptyAccount && !listNodes(doc).length && doc.querySelector('.no-lists-note')) return {doc:doc,node:null,list:null,empty:true};
+    if(lastSnapshot.activeListId!==command.listId) return null;
     var nodes=listNodes(doc).filter(function(node){return node.getAttribute('aria-selected')==='true';});
     var list=nodes.length===1 && readList(nodes[0]);
     return list && list.id===command.listId && list.fingerprint===command.expectedListFingerprint?{doc:doc,node:nodes[0],list:list}:null;
@@ -829,17 +845,17 @@
        typeof command.requestId!=='string' || !/^[a-z0-9-]{1,100}$/.test(command.requestId)) return result(false,'INVALID_COMMAND','请输入有效的清单名称。');
     if(listRequests.has(command.requestId)) return result(false,'ALREADY_SUBMITTED','本次清单修改已提交，请先读取核对。');
     if(listRequests.size>=512) return result(false,'LIST_OPERATION_LIMIT','本页操作较多，请重载官方页面后核对。');
-    var context=listContext(command),creating=command.type==='createList',value=command.value.trim();
+    var creating=command.type==='createList',context=listContext(command,creating),value=command.value.trim();
     if(!context) return result(false,'STALE_VIEW','清单已变化，请先刷新。');
     if(!creating && context.list.title===value) return result(true,'UNCHANGED','清单名称未改变，未再次存储。',{snapshot:read().snapshot,dispatched:false,cloudConfirmed:false});
-    var beforeLists=listNodes(context.doc).map(readList),beforeItems=rowNodes(context.doc).map(function(row){var item=readItem(row,command.listId);return item && item.fingerprint;});
+    var beforeLists=listNodes(context.doc).map(readList),beforeItems=creating?[]:rowNodes(context.doc).map(function(row){var item=readItem(row,command.listId);return item && item.fingerprint;});
     var panel=await openListPanel(context,creating,command);
     if(!panel) {lastSnapshot=null;return result(false,'LIST_UNAVAILABLE','当前网页暂不能编辑清单，请在官方页面核对。');}
     var inputs=panel.querySelectorAll('.name-textfield input');
     if(inputs.length!==1 || inputs[0].type!=='text' || !creating && inputs[0].value!==context.list.title || panel.querySelectorAll('.done-button').length!==1 || !listAction(panel,'cancel')) {
       await cancelListPanel(panel);lastSnapshot=null;return result(false,'STALE_VIEW','官方清单详情已变化，请重新读取。',{dispatched:false,cloudConfirmed:false});
     }
-    if(!fillListName(panel,value) || !listContext(command)) {
+    if(!fillListName(panel,value) || !(context.empty?application()===context.doc && listNodes(context.doc).length<=1:listContext(command))) {
       await cancelListPanel(panel);lastSnapshot=null;return result(false,'UNCERTAIN_WRITE','清单草稿未通过核对，请先读取，不要重复提交。',{dispatched:true,cloudConfirmed:false});
     }
     var done=await until(function(){return listAction(panel,'done');},900);
@@ -861,6 +877,67 @@
     },2600);
     if(!observed) {lastSnapshot=null;return result(false,'UNCERTAIN_WRITE','网页尚未确认目标清单，请先读取，不要重复保存。',{dispatched:true,cloudConfirmed:false});}
     return result(true,'WEB_STATE_OBSERVED',creating?'网页已新增清单；云端保存仍需核对。':'网页清单名称已更新；云端保存仍需核对。',{snapshot:observed.snapshot,dispatched:true,cloudConfirmed:false});
+  }
+
+  function visibleControl(node) {
+    return !node.closest('[hidden],[aria-hidden="true"]') && node.ownerDocument.defaultView.getComputedStyle(node).display!=='none';
+  }
+
+  function listDeletionControls(panel) {
+    var controls=Array.from(panel.querySelectorAll('ui-alert-footer [role="button"],ui-alert-footer button')).filter(visibleControl);
+    var cancel=controls.filter(function(node){return /^(取消|Cancel)$/i.test(text(node));});
+    var remove=controls.filter(function(node){return /^(删除|Delete)$/i.test(text(node)) && (node.classList.contains('destructive') || node.hasAttribute('destructive'));});
+    var enabled=function(nodes){return nodes.length===1 && !nodes[0].disabled && nodes[0].getAttribute('aria-disabled')!=='true'?nodes[0]:null;};
+    return {cancel:enabled(cancel),remove:enabled(remove)};
+  }
+
+  function unsharedListDeletion(panel,name) {
+    var title=text(panel.querySelector('ui-alert-content h1.title,h1.title'));
+    var normalize=function(value){return value.replace(/[“”]/g,'"').toLowerCase();};
+    return ['删除列表“'+name+'”？','Delete List "'+name+'"?','Delete "'+name+'"?'].some(function(value){return normalize(value)===normalize(title);});
+  }
+
+  async function cancelListDeletion(panel) {
+    if(!panel.isConnected)return true;
+    var cancel=listDeletionControls(panel).cancel;
+    if(!cancel)return false;
+    activate(cancel);return !!await until(function(){return !panel.isConnected;},1000);
+  }
+
+  async function deleteList(command) {
+    if(command.confirmed!==true || typeof command.expectedListFingerprint!=='string' || !command.expectedListFingerprint || command.expectedListFingerprint.length>4000 ||
+       typeof command.requestId!=='string' || !/^[a-z0-9-]{1,100}$/.test(command.requestId)) return result(false,'INVALID_COMMAND','请先确认删除这一份清单及其中全部事项。');
+    if(listRequests.has(command.requestId)) return result(false,'ALREADY_SUBMITTED','本次清单删除已提交，请先读取核对，不要重复删除。');
+    if(listRequests.size>=512)return result(false,'LIST_OPERATION_LIMIT','本页操作较多，请重载官方页面后核对。');
+    var context=listContext(command);
+    if(!context)return result(false,'STALE_VIEW','清单已变化，请先刷新。');
+    var doc=context.doc,focused=doc.activeElement;
+    if(doc.querySelector('.reminder-list-detail,.details-popover') || Array.from(doc.querySelectorAll('[role="alertdialog"]')).some(visibleControl) || focused && focused.closest('[contenteditable="true"],input,textarea')) return result(false,'EDIT_UNAVAILABLE','请先结束官方页面中的编辑或确认窗口。');
+    var buttons=doc.querySelectorAll('.list-detail-button');
+    if(buttons.length!==1 || buttons[0].disabled || buttons[0].getAttribute('aria-disabled')==='true') return result(false,'LIST_DELETE_UNAVAILABLE','请在官方页面删除此清单。');
+    var others=listNodes(doc).map(readList).filter(function(list){return list.id!==command.listId;});
+    activate(buttons[0]);
+    var action=await until(function(){var nodes=Array.from(doc.querySelectorAll('[role="menuitem"]')).filter(function(node){return visibleControl(node) && /^(删除列表|删除清单|Delete List)$/i.test(text(node));});return nodes.length===1 && !nodes[0].disabled && nodes[0].getAttribute('aria-disabled')!=='true'?nodes[0]:false;},1200);
+    if(!action || !listContext(command)) {buttons[0].dispatchEvent(new doc.defaultView.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));lastSnapshot=null;return result(false,'LIST_DELETE_UNAVAILABLE','清单菜单已变化，请在官方页面核对。');}
+    // 在激活可能改变页面的删除入口前登记请求；未知结果不再派发同一请求。
+    listRequests.add(command.requestId);activate(action);
+    var panel=await until(function(){var nodes=Array.from(doc.querySelectorAll('[role="alertdialog"]')).filter(visibleControl);return nodes.length===1?nodes[0]:false;},1800);
+    if(!panel) {lastSnapshot=null;return result(false,'UNCERTAIN_WRITE','官方删除确认尚未就绪，请先读取核对，不要重复提交。',{dispatched:true,cloudConfirmed:false});}
+    var controls=listDeletionControls(panel);
+    if(!unsharedListDeletion(panel,context.list.title) || !controls.remove || !controls.cancel || !listContext(command)) {
+      await cancelListDeletion(panel);lastSnapshot=null;
+      return result(false,'LIST_DELETE_UNAVAILABLE','共享清单或确认内容已变化，请在官方页面处理。',{dispatched:false,cloudConfirmed:false});
+    }
+    lastSnapshot=null;activate(controls.remove);
+    var observed=await until(function(){
+      if(panel.isConnected)return false;
+      var lists=listNodes(doc).map(readList);
+      if(lists.some(function(list){return list.id===command.listId;}) || lists.length!==others.length || !others.every(function(old){return lists.some(function(list){return list.fingerprint===old.fingerprint;});}))return false;
+      if(!lists.length && !doc.querySelector('.no-lists-note'))return false;
+      return lists;
+    },2600);
+    if(!observed) {lastSnapshot=null;return result(false,'UNCERTAIN_WRITE','清单删除尚未准确确认，请先读取核对，不要重复提交。',{dispatched:true,cloudConfirmed:false});}
+    return result(true,'WEB_STATE_OBSERVED','网页已移除清单；请选择另一份清单，云端保存仍需核对。',{snapshot:navigationSnapshot(doc,observed),needsListSelection:true,removed:true,dispatched:true,cloudConfirmed:false});
   }
 
   /** 删除先用官方键盘导航形成单选；不点击标题、不使用内部选区模型或删除接口。 */
@@ -935,21 +1012,23 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.7',
+    version: '0.3.8',
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');
-      if (!command || !['read', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
+      if (!command || !['read','readLists', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
       inFlight = true;
       if (command.type === 'createItem') { creationDiagnosticSequence = root.__suixingDiagnosticWriteSequence; setCreationStage('preflight'); }
       try {
         if (command.type === 'read') return read();
+        if (command.type === 'readLists') return readLists();
         if (command.type === 'selectList') return await selectList(command);
         if (command.type === 'showCompleted') return await showCompleted(command);
         if (command.type === 'getSchedule') return await getSchedule(command);
         if (command.type === 'getDeleteInfo') return await getDeleteInfo(command);
         if (command.type === 'deleteItem') return await deleteItem(command);
         if (['createList','renameList'].includes(command.type)) return await changeList(command);
+        if (command.type === 'deleteList') return await deleteList(command);
         if (command.type === 'setSchedule') return await setSchedule(command);
         if (command.type === 'setFlagged') return await setFlagged(command);
         if (command.type === 'setText') return await setText(command);
@@ -957,7 +1036,7 @@
         return await setCompleted(command);
       } catch (_) {
         lastSnapshot = null;
-        return result(false, ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
+        return result(false, ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList','deleteList'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
       } finally { inFlight = false; }
     }
   };

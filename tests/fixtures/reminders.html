@@ -7,7 +7,7 @@
 <button class="rm-new-reminder" role="button" aria-label="新增提醒事项">新增</button>
 <button class="new-list-button" role="button">添加列表</button>
 <button class="list-detail-button" role="button" aria-label="编辑提醒事项列表">菜单</button>
-<div class="fixture-list-menu" role="menu" hidden><button role="menuitem"></button><button role="menuitem" data-action="info">显示列表信息</button></div>
+<div class="fixture-list-menu" role="menu" hidden><button role="menuitem"></button><button role="menuitem" data-action="info">显示列表信息</button><button role="menuitem" data-action="delete-list">删除列表</button></div>
 <div role="treegrid" aria-label="提醒列表" tabindex="0"></div>
 <script>
 // 该页面只包含合成数据，用来验证重复标题、完成回执和列表切换，绝不访问 Apple。
@@ -17,6 +17,9 @@ window.fixtureDeletionCount = 0;
 window.fixtureListSaves = 0;
 window.fixtureListInputs = 0;
 window.fixtureListCancels = 0;
+window.fixtureListDeleteMenus = 0;
+window.fixtureListDeleteCommits = 0;
+window.fixtureListDeleteCancels = 0;
 window.fixtureDisableUpdates = false;
 window.fixtureRequiresPointerDown = false;
 window.fixturePointerDown = false;
@@ -218,14 +221,16 @@ function appendFixtureList(record) {
   const node=document.createElement('div');node.setAttribute('role','treeitem');node.className='rm-list-menu-item';node.dataset.list=record.key;node.setAttribute('aria-selected','false');
   node.innerHTML='<span class="reminder-list-icon"></span><button class="inline-editable-label"></button>';
   node.querySelector('.inline-editable-label').textContent=record.title;node.querySelector('.reminder-list-icon').style.backgroundColor=record.color || '#1687ff';
-  document.querySelector('[role="tree"]').append(node);return node;
+  let tree=document.querySelector('[role="tree"]');if(!tree){tree=document.createElement('div');tree.setAttribute('role','tree');tree.setAttribute('aria-label','提醒事项列表');document.body.prepend(tree);}
+  tree.append(node);return node;
 }
 function selectFixtureList(node) {
   document.querySelectorAll('[role="treeitem"]').forEach(other=>other.setAttribute('aria-selected',String(other===node)));renderFixture(node.dataset.list);
 }
 function openFixtureList(creating) {
   if(document.querySelector('.reminder-list-detail,.details-popover'))return;
-  const selected=document.querySelector('[role="treeitem"][aria-selected="true"]'),old=selected.querySelector('.inline-editable-label').textContent;
+  const selected=document.querySelector('[role="treeitem"][aria-selected="true"]'),old=selected?.querySelector('.inline-editable-label').textContent || '';
+  if(!creating && !selected)return;
   let value=creating?'':old;
   const panel=document.createElement('div');panel.className='reminder-list-detail';
   panel.innerHTML='<div class="name-textfield"><input type="text"></div><div class="color-picker"></div><div class="badge-emblem-picker"></div><button class="done-button">完成</button><button class="cancel-button">取消</button>';
@@ -238,6 +243,7 @@ function openFixtureList(creating) {
     const records=JSON.parse(sessionStorage.getItem('fixture-lists') || '[]');
     if(creating) {
       const record={key:'list-created-'+Date.now()+'-'+records.length,title:value,color:'#1687ff'};records.push(record);sessionStorage.setItem('fixture-lists',JSON.stringify(records));
+      document.querySelector('.no-lists-note')?.remove();
       const node=appendFixtureList(record);node.addEventListener('click',()=>selectFixtureList(node));selectFixtureList(node);
     } else {
       selected.querySelector('.inline-editable-label').textContent=value;sessionStorage.setItem('fixture-list-name-'+selected.dataset.list,value);
@@ -248,7 +254,24 @@ function openFixtureList(creating) {
 }
 document.querySelector('.new-list-button').addEventListener('click',()=>openFixtureList(true));
 document.querySelector('.fixture-list-menu [data-action="info"]').addEventListener('click',()=>{document.querySelector('.fixture-list-menu').hidden=true;openFixtureList(false);});
+document.querySelector('.fixture-list-menu [data-action="delete-list"]').addEventListener('click',()=>{
+  document.querySelector('.fixture-list-menu').hidden=true;window.fixtureListDeleteMenus++;
+  const selected=document.querySelector('[role="treeitem"][aria-selected="true"]');if(!selected)return;
+  const panel=document.createElement('div');panel.className='for-ui-alert';panel.setAttribute('role','alertdialog');
+  panel.innerHTML='<ui-alert-content><h1 class="title"></h1><p class="description">此操作将删除列表中的所有提醒事项。</p></ui-alert-content><ui-alert-footer><button role="button" class="secondary fixture-cancel">取消</button><button role="button" class="primary destructive">删除</button><div aria-hidden="true"><button role="button">取消</button><button role="button" class="destructive">删除</button></div></ui-alert-footer>';
+  panel.querySelector('h1').textContent=(window.fixtureListShared?'删除共享列表“':'删除列表“')+selected.querySelector('.inline-editable-label').textContent+'”？';
+  panel.querySelector('.fixture-cancel').addEventListener('click',()=>{window.fixtureListDeleteCancels++;panel.remove();});
+  panel.querySelector('ui-alert-footer > .destructive').addEventListener('click',()=>{
+    window.fixtureListDeleteCommits++;if(window.fixtureListDeleteReject)return;
+    const key=selected.dataset.list,deleted=JSON.parse(sessionStorage.getItem('fixture-deleted-lists') || '[]');deleted.push(key);sessionStorage.setItem('fixture-deleted-lists',JSON.stringify(deleted));
+    sessionStorage.setItem('fixture-lists',JSON.stringify(JSON.parse(sessionStorage.getItem('fixture-lists') || '[]').filter(record=>record.key!==key)));selected.remove();panel.remove();
+    const next=document.querySelector('[role="treeitem"]');
+    if(next)selectFixtureList(next);else {document.querySelector('[role="treegrid"]').innerHTML='';document.querySelector('[role="treegrid"]').setAttribute('aria-rowcount','0');const note=document.createElement('div');note.className='no-lists-note';document.body.append(note);}
+    if(window.fixtureAfterListDelete)window.fixtureAfterListDelete();
+  });document.body.append(panel);
+});
 for(const record of JSON.parse(sessionStorage.getItem('fixture-lists') || '[]'))appendFixtureList(record);
+for(const key of JSON.parse(sessionStorage.getItem('fixture-deleted-lists') || '[]')){const node=[...document.querySelectorAll('[role="treeitem"]')].find(node=>node.dataset.list===key);node?.remove();}
 document.querySelectorAll('[role="treeitem"]').forEach(node=>{const name=sessionStorage.getItem('fixture-list-name-'+node.dataset.list);if(name!==null)node.querySelector('.inline-editable-label').textContent=name;});
 document.querySelectorAll('[role="treeitem"]').forEach(node => node.addEventListener('click', () => {
   document.querySelectorAll('[role="treeitem"]').forEach(other => other.setAttribute('aria-selected', String(other === node)));
@@ -275,5 +298,6 @@ document.querySelector('[role="treegrid"]').addEventListener('keydown',event=>{
     if(window.fixtureAfterDelete)window.fixtureAfterDelete();
   }
 });
-renderFixture('one');
+const initialList=document.querySelector('[role="treeitem"][aria-selected="true"]') || document.querySelector('[role="treeitem"]');
+if(initialList)selectFixtureList(initialList);else {const note=document.createElement('div');note.className='no-lists-note';document.body.append(note);document.querySelector('[role="treegrid"]').setAttribute('aria-rowcount','0');}
 </script></body></html>

@@ -21,6 +21,7 @@ export async function reconnectLoadedList(bridge, region, previous={}, options={
     if(!reopened.ok) return reopened;
     let result=await readReady();
     if(!result.ok) return result;
+    if(result.needsListSelection && !previous.title) return {...result,code:'RECONNECTED_SELECT_LIST',message:result.snapshot.emptyAccount?'已重新连接，可以新建第一份清单。':'已重新连接，请选择清单。'};
     if(previous.title) {
       const lists=result.snapshot.lists.filter(list=>list.title===previous.title);
       if(lists.length!==1) return {...result,code:'RECONNECTED_SELECT_LIST',needsListSelection:true,message:'重新连接完成，请重新选择清单后继续编辑。'};

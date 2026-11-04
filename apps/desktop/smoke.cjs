@@ -7,7 +7,7 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
 const { installDesktopIPC } = require('./ipc.cjs');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, clickTestFlag, deleteTestItem, editTestList } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, clickTestFlag, deleteTestItem, editTestList, deleteTestList } = require('./verification-ui.cjs');
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
 async function runSmoke({ frontendURL, root }) {
@@ -147,6 +147,8 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".reconnect-button")'),true,'Tab 应能到达重新连接');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".rename-list-button")'),true,'Tab 应能到达清单重命名');
+    await press('Tab');
+    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".delete-list-button")'),true,'Tab 应能到达清单删除');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".flag-filter")'),true,'Tab 应先到达旗标筛选');
     await press('Tab');
@@ -521,6 +523,54 @@ async function runSmoke({ frontendURL, root }) {
     for(let attempt=0;attempt<40;attempt++){await new Promise(resolve=>setTimeout(resolve,100));listChanged=await normalController.execute({type:'read'},'cn');if(listChanged.ok)break;}
     assert.equal(listChanged.snapshot.lists.filter(list=>list.title===listTitle).length,1);assert.equal(normalController.lastWriteOutcome(),null);
     console.log('普通模式清单新增与重命名经正式 IPC 各提交一次，取消及输入法保护、窄屏布局和合成重载保持通过。');
+    const removeList=listChanged.snapshot.lists.find(list=>list.title===listTitle);
+    const selectedForDelete=await normalController.execute({type:'selectList',pageId:listChanged.snapshot.pageId,listId:removeList.id},'cn');
+    normalUI.webContents.send('suixing:snapshot',{region:'cn',result:selectedForDelete});await new Promise(resolve=>setTimeout(resolve,100));
+    const deleteListExpected={pageId:selectedForDelete.snapshot.pageId,listId:removeList.id,title:listTitle};
+    assert.equal(await normalUI.webContents.executeJavaScript('('+deleteTestList.toString()+')('+JSON.stringify({...deleteListExpected,preview:true})+')',true),true);
+    assert.equal(await normalUI.webContents.executeJavaScript('document.activeElement.classList.contains("cancel-list-delete")'),true);
+    normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureListDeleteMenus'),0,'本地取消不打开官方删除确认');
+    assert.equal(await normalUI.webContents.executeJavaScript('('+deleteTestList.toString()+')('+JSON.stringify({...deleteListExpected,preview:true})+')',true),true);
+    normalUI.setContentSize(390,780);await new Promise(resolve=>setTimeout(resolve,150));
+    const listDeleteBounds=await normalUI.webContents.executeJavaScript('(()=>{const r=document.querySelector(".list-delete-confirmation").getBoundingClientRect();return {left:r.left,right:r.right,width:innerWidth}})()');
+    assert.ok(listDeleteBounds.left>=0 && listDeleteBounds.right<=listDeleteBounds.width+1);
+    fs.writeFileSync(path.join(root,'.local/list-delete-mobile-preview.png'),(await normalUI.webContents.capturePage()).toPNG());
+    normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await new Promise(resolve=>setTimeout(resolve,100));
+    normalUI.setContentSize(1160,830);await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await normalUI.webContents.executeJavaScript('('+deleteTestList.toString()+')('+JSON.stringify(deleteListExpected)+')',true),true);
+    let navigation;
+    for(let attempt=0;attempt<50;attempt++){await new Promise(resolve=>setTimeout(resolve,100));navigation=await normalController.execute({type:'readLists'},'cn');if(navigation.ok && !navigation.snapshot.lists.some(list=>list.id===removeList.id))break;}
+    assert.equal(navigation.snapshot.lists.length,2);assert.equal(navigation.snapshot.activeListId,null);assert.equal(navigation.snapshot.items.length,0);
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureListDeleteCommits'),1);
+    await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'false');
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelectorAll(".reminder-row").length'),0,'删除后不自动展示其他清单事项');
+    const nextList=navigation.snapshot.lists[0];
+    await normalUI.webContents.executeJavaScript('document.querySelector('+JSON.stringify('.list-button[data-list-id="'+nextList.id+'"]')+').click()');
+    await new Promise(resolve=>setTimeout(resolve,150));
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'true','明确选择另一清单后恢复编辑');
+    // 合成空账户场景；只改变本地固定夹具，不删除真实清单。
+    await normalController.window().webContents.executeJavaScript('(()=>{const w=document.querySelector("iframe").contentWindow;w.sessionStorage.setItem("fixture-deleted-lists",JSON.stringify(["one","two"]));w.document.querySelector("[role=tree]").remove();w.document.querySelector("[role=treegrid]").innerHTML="";const note=w.document.createElement("div");note.className="no-lists-note";w.document.body.append(note)})()');
+    const emptyAccount=await normalController.execute({type:'read'},'cn');assert.equal(emptyAccount.snapshot.emptyAccount,true);
+    normalUI.webContents.send('suixing:snapshot',{region:'cn',result:emptyAccount});await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".account-title").textContent'),'已连接 iCloud');
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".add-list-button").hasAttribute("disabled")'),false);
+    await normalUI.webContents.executeJavaScript('document.querySelector(".empty-add").click()');await new Promise(resolve=>setTimeout(resolve,100));
+    const firstListTitle='随行验证 · 空账户首份清单';
+    await normalUI.webContents.executeJavaScript('(()=>{const input=document.querySelector(".list-name-input input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,'+JSON.stringify(firstListTitle)+');input.dispatchEvent(new Event("input",{bubbles:true}))})()');
+    normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
+    let firstList;
+    for(let attempt=0;attempt<50;attempt++){await new Promise(resolve=>setTimeout(resolve,100));firstList=await normalController.execute({type:'read'},'cn');if(firstList.snapshot?.activeListTitle===firstListTitle)break;}
+    assert.equal(firstList.snapshot.lists.length,1);assert.equal(firstList.snapshot.activeListTitle,firstListTitle);
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'true','空账户新建后解除选择保护');
+    assert.equal(await normalUI.webContents.executeJavaScript('('+deleteTestList.toString()+')('+JSON.stringify({pageId:firstList.snapshot.pageId,listId:firstList.snapshot.activeListId,title:firstListTitle})+')',true),true);
+    for(let attempt=0;attempt<50;attempt++){await new Promise(resolve=>setTimeout(resolve,100));navigation=await normalController.execute({type:'readLists'},'cn');if(navigation.snapshot?.emptyAccount)break;}
+    assert.equal(navigation.snapshot.emptyAccount,true);assert.equal(navigation.snapshot.lists.length,0);
+    normalController.reloadSite('cn');
+    for(let attempt=0;attempt<40;attempt++){await new Promise(resolve=>setTimeout(resolve,100));navigation=await normalController.execute({type:'read'},'cn');if(navigation.snapshot?.emptyAccount)break;}
+    assert.equal(navigation.snapshot.emptyAccount,true);assert.equal(normalController.lastWriteOutcome(),null);
+    console.log('清单删除经本地与官方确认单次提交，取消、其他清单保护、删除后显式选择、空账户新增与删除最后清单及合成重载通过。');
     stopIPC();
     normalUI.destroy();normalUI=null;
     normalController.dispose();normalController=null;

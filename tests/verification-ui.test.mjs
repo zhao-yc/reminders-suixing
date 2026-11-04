@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { clickTestCompletion, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList } = require('../apps/desktop/verification-ui.cjs');
+const { clickTestCompletion, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList, deleteTestList, selectTestListClient } = require('../apps/desktop/verification-ui.cjs');
 const { testOperation, summarize } = require('../apps/desktop/live-check.cjs');
 
 for (const tag of ['button', 'uni-button']) {
@@ -238,6 +238,24 @@ test('多个测试清单仍只定位原固定清单；原清单缺失时不改�
   assert.equal((await testOperation(controller,'uncomplete-test-item',{ui:null})).code,'UNCHANGED');
   const wrong=scopedController(false,'随行验证 · Windows 清单管理验证');
   assert.equal((await testOperation(wrong,'uncomplete-test-item',{ui:null})).code,'TEST_LIST_NOT_UNIQUE');
+});
+
+test('清单删除验收必须匹配本地确认目标，取消不提交，确认仅点击一次',async t=>{
+  for(const cancel of [true,false]) {
+    const dom=new JSDOM('<div class="list-content" data-page-id="page" data-list-id="list"><span class="list-title">随行验证 · 管理清单</span><button class="delete-list-button"></button></div>',{runScripts:'outside-only'});
+    t.after(()=>dom.window.close());dom.window.setTimeout=callback=>setTimeout(callback,0);const doc=dom.window.document;let opened=0,deleted=0,cancelled=0;
+    doc.querySelector('button').addEventListener('click',()=>{opened++;const panel=doc.createElement('div');panel.className='inline-editor list-delete-confirmation';panel.innerHTML='<span class="delete-title">删除清单“随行验证 · 管理清单”？</span><button class="confirm-list-delete"></button><button class="cancel-list-delete"></button>';panel.querySelector('.confirm-list-delete').addEventListener('click',()=>deleted++);panel.querySelector('.cancel-list-delete').addEventListener('click',()=>{cancelled++;panel.remove();});doc.body.append(panel);});
+    const expected={pageId:'page',listId:'list',title:'随行验证 · 管理清单',cancel};
+    assert.equal(await dom.window.eval('('+deleteTestList.toString()+')('+JSON.stringify({...expected,title:'合成普通清单'})+')'),false);assert.equal(opened,0);
+    assert.equal(await dom.window.eval('('+deleteTestList.toString()+')('+JSON.stringify(expected)+')'),true);assert.equal(opened,1);assert.equal(deleted,cancel?0:1);assert.equal(cancelled,cancel?1:0);
+  }
+});
+
+test('删除后的导航快照只从侧栏选择指定测试清单，等待可写状态，不直接调用读写协议',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="page" data-live="false"></div><button class="list-button" data-list-id="target"><span class="list-name">随行验证 · 原清单</span></button>',{runScripts:'outside-only'});
+  t.after(()=>dom.window.close());dom.window.setTimeout=callback=>setTimeout(callback,0);let clicks=0;const doc=dom.window.document;
+  doc.querySelector('button').addEventListener('click',()=>{clicks++;doc.querySelector('.list-content').dataset.listId='target';doc.querySelector('.list-content').dataset.live='true';});
+  assert.equal(await dom.window.eval('('+selectTestListClient.toString()+')('+JSON.stringify({pageId:'page',listId:'target',title:'随行验证 · 原清单'})+')'),true);assert.equal(clicks,1);
 });
 
 test('真实旗标通道只允许唯一未完成、无日期的既有专用新增事项',async()=>{
