@@ -1,13 +1,24 @@
 /* 提醒事项网页共用适配器。仅访问页面 DOM，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.1.2') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.2.8') return;
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   var listHandles = new WeakMap();
   var nextHandle = 0;
   var inFlight = false;
   var lastSnapshot = null;
+  var creationRequests = new Set();
+  var creationStage = 'preflight';
+  var creationDiagnosticSequence = 0;
+
+  /** 开发诊断只传递固定阶段名；页面退出前也能留下进度，不含任何业务参数或记录标识。 */
+  function setCreationStage(stage) {
+    creationStage = stage;
+    if (root.__suixingDiagnosticPhases === true && Number.isSafeInteger(creationDiagnosticSequence) && creationDiagnosticSequence > 0) {
+      try { root.console.info('suixing-create-stage:' + creationDiagnosticSequence + ':' + stage); } catch (_) { /* 日志不可用不改变写入行为。 */ }
+    }
+  }
 
   function result(ok, code, message, extra) {
     return Object.assign({ ok: ok, code: code, message: message }, extra || {});
@@ -67,10 +78,12 @@
     var title = row.querySelector('.title [role="textbox"]');
     if (!button || !title || !text(title)) return null;
     var completed = button.getAttribute('data-completed') === 'true';
+    var fullNotes = editableText(row.querySelector('.notes [role="textbox"]'));
     var item = {
       id: row.id,
       title: text(title),
-      notes: text(row.querySelector('.notes [role="textbox"]')).slice(0, 2000),
+      notes: fullNotes.slice(0, 2000),
+      notesTruncated: fullNotes.length > 2000,
       metadata: text(row.querySelector('.metadata')).slice(0, 2000),
       completed: completed,
       listId: activeListId,
@@ -80,6 +93,22 @@
     // 记录 ID 与内容指纹同时匹配，避免同名事项、切换列表或旧缓存导致误操作。
     item.fingerprint = JSON.stringify([item.id, item.title, item.notes, item.metadata, item.completed, activeListId]);
     return item;
+  }
+
+  function editableText(node) {
+    if (!node) return '';
+    var output = '';
+    function visit(current) {
+      if (current.nodeType === 3) { output += current.nodeValue; return; }
+      if (current.nodeType !== 1 || current.matches('[hidden], [aria-hidden="true"], script, style')) return;
+      if (current.tagName === 'BR') { output += '\n'; return; }
+      var block = current !== node && ['DIV', 'P'].includes(current.tagName);
+      if (block && output && !output.endsWith('\n')) output += '\n';
+      Array.from(current.childNodes).forEach(visit);
+      if (block && !output.endsWith('\n')) output += '\n';
+    }
+    visit(node);
+    return output.replace(/\u200b/g, '').replace(/\r\n?/g, '\n').trim();
   }
 
   function read() {
@@ -180,6 +209,56 @@
     return read();
   }
 
+  /** 只请求官方菜单展开完成项，不切换事项状态；清单变化时不继续点击。 */
+  async function showCompleted(command) {
+    var doc = application();
+    function currentList() {
+      var active = doc && listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
+      return active && handle(active) === command.listId && command.pageId === pageId;
+    }
+    if (!doc || !lastSnapshot || lastSnapshot.activeListId !== command.listId || !currentList()) return result(false, 'STALE_VIEW', '当前清单已变化，请先刷新。');
+    if (isLoading(doc)) return result(false, 'LIST_LOADING', 'iCloud 正在加载列表，请稍后重新读取。');
+    function actions() {
+      return Array.from(doc.querySelectorAll('[role="menuitem"]')).filter(function (node) {
+        return !node.closest('[hidden], [aria-hidden="true"]') && doc.defaultView.getComputedStyle(node).display !== 'none';
+      }).map(function (node) { return { node: node, label: node.getAttribute('aria-label') || text(node) }; });
+    }
+    function completionActions() {
+      return actions().filter(function (item) { return /^(?:show\b.*\bcompleted|hide\b.*\bcompleted|显示.*已完成|隐藏.*已完成)/i.test(item.label); });
+    }
+    var openedHere = false;
+    var menuButton = null;
+    if (!completionActions().length) {
+      var buttons = Array.from(doc.querySelectorAll('.list-detail-button[role="button"]')).filter(function (node) {
+        return !node.closest('[hidden], [aria-hidden="true"]');
+      });
+      if (buttons.length !== 1 || buttons[0].disabled || buttons[0].getAttribute('aria-disabled') === 'true') return result(false, 'VIEW_UNAVAILABLE', '请在官方页面显示已完成事项，返回后刷新。');
+      menuButton = buttons[0];
+      openedHere = true;
+      activate(buttons[0]);
+    }
+    var candidates = await until(function () { var found = completionActions(); return found.length ? found : null; }, 1400);
+    if (!currentList()) { lastSnapshot = null; return result(false, 'STALE_VIEW', '打开菜单时清单发生变化，请先刷新。'); }
+    if (!candidates || candidates.length !== 1 || candidates[0].node.disabled || candidates[0].node.getAttribute('aria-disabled') === 'true') return result(false, 'VIEW_UNAVAILABLE', '请在官方页面显示已完成事项，返回后刷新。');
+    // 已显示时不点击“隐藏”，确保重复请求不会反转界面设置。
+    if (/^(?:hide\b|隐藏)/i.test(candidates[0].label)) { if (openedHere) activate(menuButton); return read(); }
+    activate(candidates[0].node);
+    var stable = 0;
+    var previous = null;
+    await until(function () {
+      if (!currentList()) return true;
+      if (isLoading(doc)) { stable = 0; return false; }
+      var ids = rowNodes(doc).map(function (row) { return row.id; }).join('|');
+      stable = previous === ids ? stable + 1 : 0;
+      previous = ids;
+      return stable >= 4;
+    }, 6500);
+    if (!currentList()) { lastSnapshot = null; return result(false, 'STALE_VIEW', '展开期间清单发生变化，请先刷新。'); }
+    var refreshed = read();
+    if (!refreshed.ok) return refreshed;
+    return result(true, 'VIEW_REQUESTED', '已请求显示已完成事项；仍只读取网页当前已加载内容。', { snapshot: refreshed.snapshot });
+  }
+
   async function setCompleted(command) {
     if (typeof command.completed !== 'boolean' || typeof command.expectedCompleted !== 'boolean') {
       return result(false, 'INVALID_COMMAND', '完成状态必须是明确的布尔值。');
@@ -216,20 +295,191 @@
     });
   }
 
+  function textInstruction(value) {
+    var multiline = /[\r\n]/.test(value);
+    return { command: multiline ? 'insertHTML' : 'insertText', value: multiline ? value.replace(/\r\n?/g, '\n').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/\n/g, '<br>') : value };
+  }
+
+  function canReplaceText(doc, value) {
+    return typeof doc.execCommand === 'function' && typeof doc.defaultView.InputEvent === 'function' &&
+      (!doc.queryCommandSupported || doc.queryCommandSupported(textInstruction(value).command));
+  }
+
+  /** 已有字段单次编辑后离开；新事项保留官方自动保存流程。取消或异常绝不改用另一种写法。 */
+  async function replaceEditorText(doc, editor, value, settleInitialInput, reportStage) {
+    editor.focus();
+    var selection = doc.defaultView.getSelection();
+    var range = doc.createRange();
+    range.selectNodeContents(editor);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    var blurSeen = false;
+    var focusOutSeen = false;
+    var onBlur = function () { blurSeen = true; };
+    var onFocusOut = function () { focusOutSeen = true; };
+    editor.addEventListener('blur', onBlur, true);
+    editor.addEventListener('focusout', onFocusOut, true);
+    try {
+      // Chromium 的 execCommand 不产生 beforeinput；网页富文本需要先准备当前选区。
+      if (!editor.dispatchEvent(new doc.defaultView.InputEvent('beforeinput', {
+        bubbles: true, cancelable: true, composed: true,
+        inputType: value ? 'insertText' : 'deleteContentBackward', data: value || null
+      }))) { if (reportStage) reportStage('input-cancelled'); return false; }
+      var instruction = textInstruction(value);
+      // 多行 insertText 会拆成多次 input；仅包含转义文字和换行的片段可一次替换完整范围。
+      if (reportStage) reportStage('input-command');
+      var inserted = doc.execCommand(instruction.command, false, instruction.value);
+      if (inserted) {
+        if (reportStage) reportStage('input-accepted');
+        // 新记录的文字保存由官方 input 回调排队；让该任务执行，随后继续交给官方自动保存。
+        if (settleInitialInput) await new Promise(function (resolve) { root.setTimeout(resolve, 0); });
+        if (reportStage) reportStage('input-settled');
+        if (!editor.isConnected) { if (reportStage) reportStage('editor-detached'); return false; }
+        if (settleInitialInput) { if (reportStage) reportStage('awaiting-autosave'); return true; }
+        if (reportStage) reportStage('leaving-editor');
+        editor.blur();
+        if (!blurSeen && !focusOutSeen) {
+          editor.dispatchEvent(new doc.defaultView.FocusEvent('blur', { bubbles: false, view: doc.defaultView, relatedTarget: doc.body }));
+          editor.dispatchEvent(new doc.defaultView.FocusEvent('focusout', { bubbles: true, view: doc.defaultView, relatedTarget: doc.body }));
+        }
+        if (reportStage) reportStage('editor-left');
+      } else {
+        if (reportStage) reportStage('input-rejected');
+      }
+      return inserted;
+    } finally {
+      editor.removeEventListener('blur', onBlur, true);
+      editor.removeEventListener('focusout', onFocusOut, true);
+    }
+  }
+
+  /** 一次只更改一个文字字段；原生编辑命令只执行一次，不以直接改 DOM 的方式回退重试。 */
+  async function setText(command) {
+    if (!['title', 'notes'].includes(command.field) || typeof command.value !== 'string' ||
+        command.value.length > (command.field === 'title' ? 1000 : 2000) ||
+        (command.field === 'title' && (!command.value.trim() || /[\r\n]/.test(command.value)))) {
+      return result(false, 'INVALID_COMMAND', '标题不能为空，文字长度须在支持范围内。');
+    }
+    var doc = application();
+    if (!doc || !lastSnapshot || command.pageId !== pageId || lastSnapshot.activeListId !== command.listId) {
+      return result(false, 'STALE_VIEW', '页面已变化，请先刷新后再编辑。');
+    }
+    var active = listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
+    var rows = rowNodes(doc).filter(function (row) { return row.id === command.id; });
+    if (!active || handle(active) !== command.listId || rows.length !== 1) return result(false, 'STALE_VIEW', '当前清单或事项已变化，请先刷新。');
+    var current = readItem(rows[0], command.listId);
+    if (!current || current.fingerprint !== command.fingerprint || current.completed !== command.expectedCompleted) {
+      return result(false, 'STALE_VIEW', '事项内容已经变化，请先刷新后再编辑。');
+    }
+    var editor = rows[0].querySelector('.' + command.field + ' [role="textbox"]');
+    if (command.field === 'notes' && current.notesTruncated) {
+      return result(false, 'READ_ONLY', '备注较长，请在官方页面查看和编辑完整内容。');
+    }
+    if (current.disabled || !editor || editor.getAttribute('contenteditable') !== 'true' || editor.getAttribute('aria-readonly') === 'true') {
+      return result(false, 'READ_ONLY', '官方页面暂不允许编辑此字段。');
+    }
+    var expected = command.value.replace(/\r\n?/g, '\n').trim();
+    if (current[command.field] === expected) return result(true, 'UNCHANGED', '文字未变化，未再次提交。', { snapshot: lastSnapshot });
+    if (!canReplaceText(doc, command.value)) {
+      return result(false, 'EDIT_UNAVAILABLE', '当前网页容器不支持文字编辑，请在官方页面修改。');
+    }
+    // 与官方界面的点选习惯一致，先进入当前事项和字段的编辑状态，再核对一次内容。
+    activate(rows[0]);
+    activate(editor.closest('.' + command.field) || editor);
+    await new Promise(function (resolve) { root.setTimeout(resolve, 0); });
+    var activeRow = doc.getElementById(command.id);
+    var afterActivation = activeRow && readItem(activeRow, command.listId);
+    if (!afterActivation || afterActivation.fingerprint !== command.fingerprint) return result(false, 'STALE_VIEW', '进入编辑时内容发生变化，请刷新后核对。');
+    editor = activeRow.querySelector('.' + command.field + ' [role="textbox"]');
+    if (afterActivation.disabled || !editor || editor.getAttribute('contenteditable') !== 'true' || editor.getAttribute('aria-readonly') === 'true') return result(false, 'READ_ONLY', '当前字段暂不可编辑。');
+    var inserted = await replaceEditorText(doc, editor, command.value);
+    var observed = inserted && await until(function () {
+      var row = doc.getElementById(command.id);
+      var item = row && readItem(row, command.listId);
+      return item && item[command.field] === expected;
+    }, 6500);
+    if (!observed) {
+      lastSnapshot = null;
+      return result(false, 'UNCERTAIN_WRITE', '编辑已提交，结果尚未确认。请先在官方页面核对，不要重复保存。', { dispatched: true, cloudConfirmed: false });
+    }
+    var refreshed = read();
+    return result(true, 'WEB_STATE_OBSERVED', '网页文字已更新；云端保存仍需核对。', { dispatched: true, cloudConfirmed: false, snapshot: refreshed.snapshot || null });
+  }
+
+  /** 新增按钮只激活一次；只向本次新增且唯一的空事项输入标题，不按同名事项判断创建成功。 */
+  async function createItem(command) {
+    if (typeof command.title !== 'string' || !command.title.trim() || command.title.length > 1000 || /[\r\n]/.test(command.title) ||
+        typeof command.requestId !== 'string' || !/^[a-z0-9-]{1,100}$/.test(command.requestId)) return result(false, 'INVALID_COMMAND', '请填写有效的事项标题。');
+    if (creationRequests.has(command.requestId)) return result(false, 'ALREADY_SUBMITTED', '本次新增已经提交过，请先读取核对，不要重复创建。');
+    var doc = application();
+    var active = doc && listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
+    if (!doc || !lastSnapshot || command.pageId !== pageId || lastSnapshot.activeListId !== command.listId || !active || handle(active) !== command.listId || isLoading(doc)) {
+      return result(false, 'STALE_VIEW', '请先读取当前清单，再新增事项。');
+    }
+    var beforeRows = rowNodes(doc);
+    if (beforeRows.some(function (row) { return !text(row.querySelector('.title [role="textbox"]')); })) return result(false, 'DRAFT_OPEN', '官方页面还有空白事项，请先完成或取消它。');
+    var buttons = Array.from(doc.querySelectorAll('.rm-new-reminder[role="button"], button.rm-new-reminder'));
+    if (buttons.length !== 1 || buttons[0].disabled || buttons[0].getAttribute('aria-disabled') === 'true') return result(false, 'READ_ONLY', '当前清单暂不支持新增，请在官方页面核对。');
+    // 官方 ui-button 内的原生 button 承担唯一新增回调；直接激活它，避免外围手势再处理同一动作。
+    var submitButton = buttons[0].tagName === 'BUTTON' ? buttons[0] : buttons[0].querySelector(':scope > button[type="button"]');
+    if (!submitButton || submitButton.disabled) return result(false, 'READ_ONLY', '未取得唯一的新增按钮，请在官方页面核对。');
+    if (!canReplaceText(doc, command.title)) return result(false, 'EDIT_UNAVAILABLE', '当前网页容器不支持文字编辑。');
+    if (creationRequests.size >= 512) return result(false, 'CREATION_LIMIT', '本次页面的新增操作较多，请重载后再读取。');
+    var beforeIds = new Set(beforeRows.map(function (row) { return row.id; }));
+    creationRequests.add(command.requestId);
+    setCreationStage('waiting-draft');
+    submitButton.click();
+    var draft = await until(function () {
+      var selected = listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
+      if (!selected || handle(selected) !== command.listId) return false;
+      var candidates = rowNodes(doc).filter(function (row) { return !beforeIds.has(row.id); });
+      if (candidates.length !== 1) return false;
+      // 新节点可能早于本地创建事务结束插入；等待官方 selectForEditing 对它的选择，不能抢先输入并提交。
+      if (candidates[0].getAttribute('aria-selected') !== 'true') return false;
+      var editor = candidates[0].querySelector('.title [role="textbox"][contenteditable="true"]');
+      return editor && !text(editor) && editor.getAttribute('aria-readonly') !== 'true' ? { row: candidates[0], editor: editor } : false;
+    }, 6500);
+    if (!draft) {
+      lastSnapshot = null;
+      return result(false, 'UNCERTAIN_WRITE', '新增已发送，尚未取得唯一的新事项，请先在官方页面核对。', { dispatched: true, cloudConfirmed: false, stage: creationStage });
+    }
+    var id = draft.row.id;
+    setCreationStage('writing-title');
+    var inserted = await replaceEditorText(doc, draft.editor, command.title, true, setCreationStage);
+    if (!inserted) {
+      lastSnapshot = null;
+      return result(false, 'UNCERTAIN_WRITE', '网页未确认文字输入，请先读取核对，不要重复创建。', { dispatched: true, cloudConfirmed: false, stage: creationStage });
+    }
+    setCreationStage('observing-title');
+    var observed = inserted && await until(function () {
+      var row = doc.getElementById(id);
+      return row && text(row.querySelector('.title [role="textbox"]')) === command.title.trim();
+    }, 6500);
+    lastSnapshot = null;
+    if (!observed) return result(false, 'UNCERTAIN_WRITE', '新增结果尚未确认，请先读取核对，不要重复创建。', { dispatched: true, cloudConfirmed: false, stage: creationStage });
+    setCreationStage('observed');
+    var refreshed = read();
+    return result(true, 'WEB_STATE_OBSERVED', '新事项已在网页中出现；云端保存仍需核对。', { dispatched: true, cloudConfirmed: false, stage: creationStage, snapshot: refreshed.snapshot || null });
+  }
+
   root.__suixingAdapter = {
-    version: '0.1.2',
+    version: '0.2.8',
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');
-      if (!command || !['read', 'selectList', 'setCompleted'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
+      if (!command || !['read', 'selectList', 'showCompleted', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
       inFlight = true;
+      if (command.type === 'createItem') { creationDiagnosticSequence = root.__suixingDiagnosticWriteSequence; setCreationStage('preflight'); }
       try {
         if (command.type === 'read') return read();
         if (command.type === 'selectList') return await selectList(command);
+        if (command.type === 'showCompleted') return await showCompleted(command);
+        if (command.type === 'setText') return await setText(command);
+        if (command.type === 'createItem') return await createItem(command);
         return await setCompleted(command);
       } catch (_) {
         lastSnapshot = null;
-        return result(false, command.type === 'setCompleted' ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false });
+        return result(false, ['setCompleted', 'setText', 'createItem'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
       } finally { inFlight = false; }
     }
   };

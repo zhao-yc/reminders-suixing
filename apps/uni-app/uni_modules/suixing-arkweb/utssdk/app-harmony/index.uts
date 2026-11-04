@@ -1,0 +1,6 @@
+import './icloud-view.ets';
+import { InitializeICloudView } from '../interface.uts';
+
+export const initializeICloudView: InitializeICloudView = function (): boolean {
+  return true;
+};

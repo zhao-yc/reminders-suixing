@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { clickTestCompletion } = require('../apps/desktop/verification-ui.cjs');
+const { clickTestCompletion, showTestCompleted } = require('../apps/desktop/verification-ui.cjs');
 const { testOperation, summarize } = require('../apps/desktop/live-check.cjs');
 
 for (const tag of ['button', 'uni-button']) {
@@ -73,4 +73,36 @@ test('界面执行中断返回不确定状态，不宣称没有点击', async ()
   assert.equal(result.cloudConfirmed, false);
   assert.equal(result.dispatched, undefined);
   assert.equal(invocations, 1);
+});
+
+test('新增自动验证拒绝普通清单，已有测试新增事项时只读返回', async () => {
+  const refused = await testOperation(scopedController(false,'普通合成清单'),'create-test-item',{ui:null});
+  assert.equal(refused.code,'TEST_LIST_NOT_UNIQUE');
+  const base = scopedController(false);
+  const controller = { async execute(command) { const result=await base.execute(command); result.snapshot.items.push({title:'随行验证 · Windows 新增验证',completed:false}); return result; } };
+  const result=await testOperation(controller,'create-test-item',{sendSnapshot:()=>assert.fail('不得派发新增'),ui:null});
+  assert.equal(result.code,'UNCHANGED');
+  assert.equal(summarize(result).testCreatedCount,1);
+});
+
+test('本地已完成页签验收只激活一次并等待正式异步动作结束',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="synthetic-page" data-list-id="synthetic-list"><div class="tabs"><button data-status="completed"></button></div></div>',{runScripts:'outside-only'});
+  t.after(()=>dom.window.close());
+  const tab=dom.window.document.querySelector('button');
+  let clicks=0;
+  tab.addEventListener('click',()=>{
+    clicks++;tab.classList.add('active');tab.disabled=true;
+    setTimeout(()=>{tab.disabled=false;},160);
+  });
+  const shown=await dom.window.eval('('+showTestCompleted.toString()+')({pageId:"synthetic-page",listId:"synthetic-list"})');
+  assert.equal(shown,true);assert.equal(clicks,1);assert.equal(tab.disabled,false);
+});
+
+test('已完成页签验收遇到旧页面或正式界面错误时不宣称成功',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="synthetic-page" data-list-id="synthetic-list"><div class="tabs"><button data-status="completed"></button></div></div><div class="notice error"></div>',{runScripts:'outside-only'});
+  t.after(()=>dom.window.close());
+  const tab=dom.window.document.querySelector('button');let clicks=0;
+  tab.addEventListener('click',()=>{clicks++;tab.classList.add('active');});
+  for(const pageId of ['synthetic-old-page','synthetic-page']) assert.equal(await dom.window.eval('('+showTestCompleted.toString()+')('+JSON.stringify({pageId,listId:'synthetic-list'})+')'),false);
+  assert.equal(clicks,1);
 });

@@ -2,7 +2,7 @@
 
 让你的 iCloud 提醒事项随身而行。
 
-基于 **uni-app Vue3** 的开源客户端。Android 使用 App 容器，Windows 使用 Electron 承载同一套 Web 产物，鸿蒙采用独立的平台适配接口。项目使用 MIT 许可证，与 Apple 无隶属关系。
+基于 **uni-app Vue3** 的开源客户端。Android 使用 App 容器，Windows 使用 Electron 承载同一套 Web 产物，鸿蒙通过 UTS 注册独立 ArkWeb 容器。项目使用 MIT 许可证，与 Apple 无隶属关系。
 
 当前是 **0.1.0 最小验证工程**，不是完整替代苹果提醒事项的正式版。登录、双重认证及云端保存继续由 iCloud 官方网页处理。
 
@@ -10,8 +10,12 @@
 
 - 自己的清单界面：桌面分栏、手机抽屉导航、搜索当前清单、深浅分明的完成状态。
 - 中国大陆 `icloud.com.cn` 与其他地区 `icloud.com` 入口分开管理。
+- 记住上次选择的服务区域，重新打开界面后恢复；设置只保存区域代码。
 - 读取网页当前列表中已经加载的清单、标题、备注、日期及重复规则文字。
 - 通过真实记录 ID、页面句柄和内容指纹定位事项，发送完成或取消完成操作。
+- Windows 支持编辑标题、编辑或清空多行备注；长备注只显示摘要时禁止覆盖，完整内容在官方页面编辑。
+- Windows“已完成”页签会请求官方页面显示隐藏的完成项；重复进入不会反转为隐藏，仍只覆盖网页当前已加载内容。
+- 顶栏“＋”和 Ctrl+N 在当前清单新增事项；Ctrl+F 搜索当前已加载内容。新事项保留官方自动保存，不在输入后强制失焦。
 - 写操作只发送一次；状态不确定时停下核对，不自动重试。
 - 明确标识的界面示例，不连接账号，不冒充真实 iCloud 数据。
 
@@ -19,9 +23,9 @@
 
 | 目标 | 当前范围 |
 | --- | --- |
-| Windows | 真实账户登录、读取和专用事项完成标记已验证；取消完成的最后一次点击待核对，重启免登录未通过 |
-| Android | uni-app 构建和 5+ WebView 桥接实现；独立 APK 与真机另行验收 |
-| HarmonyOS NEXT | 共用 Vue3 页面和独立桥接边界已预留；当前桥接未接入，不会假装已经支持 |
+| Windows | 真实新增经官方重载和用户独立苹果客户端核对；独立便携包的登录、完成状态、标题和备注编辑及恢复通过，正常重启免登录；完整日常功能与长期会话待验 |
+| Android | uni-app 资源构建、5+ WebView 桥接及生命周期合成回归通过；独立 APK 与真机另行验收 |
+| HarmonyOS NEXT | ArkWeb 桥接已接入共用页面，9 项逻辑层回归及 HBuilderX 资源导出通过；原生 ETS/HAP 编译、官方登录与真机仍待验 |
 | 普通网页 | 仅界面预览；不使用跨域 iframe 绕过 iCloud 限制 |
 
 详细证据、实际命令与未完成项见 [最小验证记录](docs/最小验证记录.md)。
@@ -50,6 +54,7 @@ npm run desktop:start
 # HBuilderX 界面管理的预览和安卓资源构建。
 powershell -ExecutionPolicy Bypass -File scripts/hbx.ps1 -Action web
 powershell -ExecutionPolicy Bypass -File scripts/hbx.ps1 -Action android-resource
+powershell -ExecutionPolicy Bypass -File scripts/hbx.ps1 -Action harmony-resource
 
 # 需要已连接安卓设备。
 powershell -ExecutionPolicy Bypass -File scripts/hbx.ps1 -Action android
@@ -57,6 +62,8 @@ powershell -ExecutionPolicy Bypass -File scripts/hbx.ps1 -Action android
 # 合成验证与本机 Windows 便携包。
 npm run desktop:smoke
 npm run desktop:pack
+# 已有旧包运行时，使用新的目录名生成，不覆盖旧目录。
+npm run desktop:pack -- --name windows-portable-20261104
 ```
 
 Web 预览地址默认 `http://localhost:5317/`。预览日志和停止按钮在 HBuilderX 的对应运行面板。桌面开发日志在启动终端中，关闭主窗口或在启动终端按 `Ctrl+C` 停止。便携包生成于 `outputs/windows-portable`；为避免覆盖正在运行的程序，打包目标目录必须不存在。
@@ -66,7 +73,11 @@ Web 预览地址默认 `http://localhost:5317/`。预览日志和停止按钮在
 ```text
 apps/uni-app/                  固定 HBuilderX Vue3 工程
   lib/bridge.js                平台适配入口，隔离 Android 专有能力
-  static/icloud/adapter.js     两端使用的唯一网页适配源文件
+  lib/android-bridge.js        APP-PLUS 内的窗口、单次请求与中断恢复
+  lib/harmony-bridge.js        APP-HARMONY 内的实例、请求与中断恢复
+  lib/native-protocol.js       Android/鸿蒙共用的固定命令与回执协议
+  uni_modules/suixing-arkweb/   标准 uni-app 使用的 UTS/ETS 原生容器
+  static/icloud/adapter.js     各端使用的唯一网页适配源文件
 apps/desktop/                  Electron 容器和本地界面的受限桥接
 tests/                         合成页面与行为测试
 scripts/                       构建、验证和打包入口
@@ -77,7 +88,7 @@ docs/                          设计与验证证据
 
 - 不自建保存 Apple 密码或个人提醒事项的服务器，不导入浏览器登录 Cookie。
 - Windows 开发会话放在已忽略的 `.local/desktop-profile`，安装后的应用使用独立系统数据目录；Android 会话由应用自己的 WebView 管理。
-- 本次 Windows 重启后仍需要重新登录，内置存储刷新没有解决免登录问题；不要把持久化分区等同于登录会话已经保持。
+- 原电脑曾未能保持登录；虚拟机本次真实登录后，复用同一内置会话目录，正常退出再启动可直接读取，无需再次认证。此结果不代表设备重启或长期会话已通过；是否过期仍由官方决定。
 - 远程页面不注入 Node 或 5+ 原生权限，不关闭网页安全检查，不忽略证书错误。
 - 当前只读取**网页已加载的当前列表**。隐藏的已完成项、折叠的子任务、按需加载内容可能不在结果中；可在官方页面展开后重新读取。
 - 网页状态变化不等于服务器确认。界面明确区分“网页已更新”与云端持久化，真实保存须刷新官方页面核对。

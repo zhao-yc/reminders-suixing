@@ -1,13 +1,17 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { protectConsoleStreams } = require('./console-streams.cjs');
+protectConsoleStreams();
 const { createController } = require('./controller.cjs');
 const { serveFrontend } = require('./frontend.cjs');
 const { browserUserAgent } = require('./policy.cjs');
+const { installDesktopIPC } = require('./ipc.cjs');
 
 const ROOT = path.resolve(__dirname, '../..');
 const smoke = process.argv.includes('--smoke-test');
-const liveCheck = !app.isPackaged && process.argv.includes('--verify-live');
+// 便携包也可显式启用同一受限验收通道；仍使用它自己的系统会话目录，不导入开发会话。
+const liveCheck = process.argv.includes('--verify-live');
 // 开发会话和验证数据留在已忽略目录；安装后的独立程序使用自身系统数据目录。
 if (!app.isPackaged) app.setPath('userData', path.join(ROOT, '.local', smoke ? 'smoke-profile' : 'desktop-profile'));
 app.setName('提醒事项·随行');
@@ -18,7 +22,12 @@ let controller;
 let stopLiveCheck;
 const primary = smoke || app.requestSingleInstanceLock();
 if (!primary) app.quit();
-app.on('second-instance', () => { mainWindow?.show(); controller?.openSite('cn'); });
+app.on('second-instance', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
 
 /** 查找 HBuilderX 发布产物，不接受任意远程地址作为具有桌面权限的主界面。 */
 function frontendPath() {
@@ -27,21 +36,6 @@ function frontendPath() {
     if (fs.existsSync(file)) return file;
   }
   throw new Error('请先使用 HBuilderX CLI 执行 publish web，生成桌面界面。');
-}
-
-function installIPC() {
-  for (const [channel, handler] of [
-    ['suixing:execute', args => controller.execute(args.command, args.region)],
-    ['suixing:open-site', args => controller.openSite(args.region)],
-    ['suixing:reload-site', args => controller.reloadSite(args.region)]
-  ]) {
-    ipcMain.handle(channel, (event, args) => {
-      if (event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame || !args || !['cn', 'global'].includes(args.region)) {
-        return { ok: false, code: 'INVALID_REQUEST', message: '请求来源或区域无效。' };
-      }
-      return handler(args);
-    });
-  }
 }
 
 app.whenReady().then(async () => {
@@ -59,7 +53,7 @@ app.whenReady().then(async () => {
     title: '提醒事项·随行', autoHideMenuBar: true, backgroundColor: '#f6f7f9',
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: !liveCheck }
   });
-  installIPC();
+  installDesktopIPC({ipcMain,controller,getMainWindow:()=>mainWindow});
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', event => event.preventDefault());
   await mainWindow.loadURL(frontendURL);
@@ -67,7 +61,9 @@ app.whenReady().then(async () => {
   console.log('已打开“提醒事项·随行”Windows 验证客户端。');
   if (liveCheck) {
     const { installLiveCheck } = require('./live-check.cjs');
-    stopLiveCheck = installLiveCheck({ controller, ui: mainWindow, directory: path.join(ROOT, '.local'), sendSnapshot: result => mainWindow.webContents.send('suixing:snapshot', { region: 'cn', result }), quit: () => app.quit() });
+    stopLiveCheck = installLiveCheck({ controller, ui: mainWindow, directory: path.join(ROOT, '.local'),
+      environment:{packaged:app.isPackaged,profileKind:app.isPackaged?'system-default':'project-local'},
+      sendSnapshot: result => mainWindow.webContents.send('suixing:snapshot', { region: 'cn', result }), quit: () => app.quit() });
     console.log('开发验证通道已就绪，命令信箱位于已忽略的 .local 目录。');
   }
   if (process.argv.includes('--open-icloud')) controller.openSite('cn');

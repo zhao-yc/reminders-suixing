@@ -21,3 +21,18 @@ test('桌面桥接拒绝任意脚本和不明确的写入状态', () => {
   assert.equal(policy.validCommand({ type: 'setCompleted', completed: 'true' }), false);
   assert.equal(policy.validCommand({ type: 'read' }), true);
 });
+
+test('桌面编辑只允许有前置指纹的标题和备注文字', () => {
+  const command = { type: 'setText', pageId: 'synthetic-page', listId: 'synthetic-list', id: 'synthetic-id', fingerprint: 'synthetic-fingerprint', expectedCompleted: false, field: 'title', value: '随行验证 · 合成标题' };
+  assert.equal(policy.validCommand(command), true);
+  assert.equal(policy.validCommand({ ...command, field: 'notes', value: '' }), true);
+  for (const change of [{ field: 'innerHTML' }, { value: '' }, { value: 'a\nb' }, { id: '' }, { value: 'a'.repeat(1001) }, { expectedCompleted: undefined }]) {
+    assert.equal(policy.validCommand({ ...command, ...change }), false);
+  }
+});
+
+test('桌面新增必须绑定清单、页面与有界的单次请求标识', () => {
+  const command = {type:'createItem',pageId:'synthetic-page',listId:'synthetic-list',requestId:'synthetic-create-1',title:'随行验证 · 新增'};
+  assert.equal(policy.validCommand(command),true);
+  for(const change of [{pageId:undefined},{listId:undefined},{requestId:undefined},{requestId:'../x'},{title:''},{title:'a\nb'},{title:'x'.repeat(1001)}]) assert.equal(policy.validCommand({...command,...change}),false);
+});
