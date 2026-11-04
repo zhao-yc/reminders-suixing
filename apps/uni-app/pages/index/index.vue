@@ -23,7 +23,7 @@
         <button class="mobile-menu" aria-label="显示清单" @click="sidebarOpen = true">☰</button>
         <text class="toolbar-label">{{ isDemo ? '界面示例 · 不连接 iCloud' : '你的清单，随时在身边' }}</text>
         <view class="toolbar-actions">
-          <picker :range="regionLabels" :value="region === 'cn' ? 0 : 1" @change="changeRegion"><view class="region-picker">{{ region === 'cn' ? '中国大陆' : '其他地区' }}⌄</view></picker>
+          <picker :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy" @change="changeRegion"><view class="region-picker">{{ region === 'cn' ? '中国大陆' : '其他地区' }}⌄</view></picker>
           <button class="quiet-button" :disabled="busy" @click="connect">{{ live && !isDemo ? '官方页面' : '登录 iCloud' }}</button>
           <button class="primary-button" :disabled="busy" @click="refresh">{{ busy ? '读取中…' : '刷新' }}</button>
         </view>
@@ -34,8 +34,8 @@
         <text class="welcome-kicker">熟悉的提醒，新的随行方式</text>
         <view class="welcome-title" role="heading" aria-level="1"><view>每一件小事，</view><view>都值得被记住。</view></view>
         <view class="welcome-description"><view>连接 iCloud，在这里查看清单、整理思绪，</view><view>轻轻一点，完成今天的一件事。</view></view>
-        <button class="primary-button welcome-connect" @click="connect">连接我的提醒事项</button>
-        <button class="demo-link" @click="showDemo">先看看界面示例 →</button>
+        <button class="primary-button welcome-connect" :disabled="busy" @click="connect">连接我的提醒事项</button>
+        <button class="demo-link" :disabled="busy" @click="showDemo">先看看界面示例 →</button>
         <text class="welcome-footnote">登录在 iCloud 官方页面完成</text>
       </view>
       <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId">
@@ -136,6 +136,7 @@ async function toggle(item) {
 }
 
 function showDemo() {
+  if (busy.value) return;
   snapshot.value = demoSnapshot();
   isDemo.value = true;
   live.value = false;
@@ -146,6 +147,7 @@ function showDemo() {
 }
 
 function changeRegion(event) {
+  if (busy.value) return;
   region.value = Number(event.detail.value) === 0 ? 'cn' : 'global';
   snapshot.value = null;
   isDemo.value = false;
