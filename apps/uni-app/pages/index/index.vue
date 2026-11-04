@@ -34,10 +34,10 @@
           <picker :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || !!editing" @change="changeRegion"><view class="region-picker">{{ region === 'cn' ? '中国大陆' : '其他地区' }}⌄</view></picker>
           <button class="quiet-button" :disabled="busy || (!!editing && !editing.blocked)" @click="connect">{{ snapshot && !isDemo ? '官方页面' : '登录 iCloud' }}</button>
           <button v-if="snapshot && !isDemo && bridge.capabilities?.reconnect" class="quiet-button reconnect-button" role="button" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing" title="重新打开官方页面并读取清单，复用现有会话" @click="reconnectClient">重新连接</button>
-          <button class="primary-button" :disabled="busy || (!!editing && !editing.blocked)" @click="refresh">{{ busy ? '处理中…' : '刷新' }}</button>
+          <button class="primary-button refresh-button" :disabled="busy || (!!editing && !editing.blocked)" @click="refresh">{{ busy ? '处理中…' : '刷新' }}</button>
         </view>
       </view>
-      <view v-if="notice" class="notice" :class="{ error: noticeError }" role="status"><text>{{ notice }}</text></view>
+      <view v-if="notice" class="notice" :data-code="noticeCode" :data-reconnect-stage="noticeStage" :class="{ error: noticeError }" role="status"><text>{{ notice }}</text></view>
       <view v-if="editing?.blocked" class="edit-recovery"><text>请先核对修改结果。</text><button @click="endEdit">结束本次编辑</button></view>
       <view v-if="!snapshot" class="welcome">
         <view class="welcome-art"><view class="welcome-line"><text>✓</text><view></view></view><view class="welcome-line"><text>○</text><view></view></view><view class="welcome-line"><text>○</text><view></view></view></view>
@@ -161,6 +161,8 @@ const canCreateFirstList = computed(() => canManageLists.value && snapshot.value
 const canCreate = computed(() => isDemo.value || bridge.capabilities?.openNewItem === true);
 const notice = ref('');
 const noticeError = ref(false);
+const noticeCode = ref('');
+const noticeStage = ref('');
 const accountConnected = computed(() => !isDemo.value && !noticeError.value && !!snapshot.value && (live.value || !snapshot.value.activeListId));
 const sidebarOpen = ref(false);
 const tab = ref('pending');
@@ -177,6 +179,8 @@ const formattedTime = computed(() => snapshot.value ? '读取于 ' + new Date(sn
 
 /** 只在成功取得新快照时允许写入；失败后保留展示，但将旧内容设为只读。 */
 function accept(result) {
+  noticeCode.value = result.code || '';
+  noticeStage.value = ['home','reminders','opening','waiting-navigation','selecting-list','waiting-selected'].includes(result.reconnectStage)?result.reconnectStage:'';
   if (result.ok && result.snapshot) {
     snapshot.value = result.snapshot;
     if(result.needsListSelection) listSelectionRequired.value=true;
@@ -193,7 +197,7 @@ async function run(command) {
   if (busy.value) return;
   busy.value = true;
   try { const result = await bridge.execute(command, region.value); accept(result); return result; }
-  catch (_) { live.value = false; notice.value = '连接暂时不可用，请重新打开官方页面核对。'; noticeError.value = true; return { ok: false, code: 'CONNECTION_FAILED' }; }
+  catch (_) { live.value = false; notice.value = '连接暂时不可用，请重新打开官方页面核对。'; noticeCode.value='CONNECTION_FAILED'; noticeError.value = true; return { ok: false, code: 'CONNECTION_FAILED' }; }
   finally { busy.value = false; }
 }
 
@@ -212,14 +216,14 @@ async function connect() {
 
 async function refresh() {
   if (isDemo.value) { showDemo(); return; }
-  const result = await run({ type: 'read' });
+  const result = await run({ type: listSelectionRequired.value ? 'readLists' : 'read' });
   if (result?.ok && !listSelectionRequired.value && tab.value === 'completed') await selectTab('completed');
 }
 
 async function reconnectClient() {
   if(busy.value || editing.value || isDemo.value || !bridge.capabilities?.reconnect) return;
   const previous={title:snapshot.value?.activeListTitle,pageId:snapshot.value?.pageId};
-  live.value=false;busy.value=true;notice.value='正在重新连接 iCloud…';noticeError.value=false;
+  live.value=false;busy.value=true;notice.value='正在重新连接 iCloud…';noticeCode.value='RECONNECTING';noticeError.value=false;
   let result;
   try {result=await reconnectLoadedList(bridge,region.value,previous);accept(result);}
   finally {busy.value=false;}

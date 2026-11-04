@@ -7,7 +7,7 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
 const { installDesktopIPC } = require('./ipc.cjs');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, clickTestFlag, deleteTestItem, editTestList, deleteTestList, editTestListAppearance, editTestSubtask } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, clickTestFlag, deleteTestItem, editTestList, deleteTestList, editTestListAppearance, editTestSubtask,reconnectTestClient } = require('./verification-ui.cjs');
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
 async function runSmoke({ frontendURL, root }) {
@@ -460,10 +460,19 @@ async function runSmoke({ frontendURL, root }) {
     assert.deepEqual(content(afterReconnect.snapshot.items),content(beforeReconnect.items));
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'false','同名清单不能自动猜测身份并开放写入');
     assert.ok((await normalUI.webContents.executeJavaScript('document.querySelector(".notice").textContent')).includes('重新选择清单'));
-    await normalUI.webContents.executeJavaScript('document.querySelector(".list-button.selected").click()');
+    await normalUI.webContents.executeJavaScript('document.querySelector(".list-button").click()');
     await new Promise(resolve=>setTimeout(resolve,150));
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'true','用户明确选定新清单后才恢复写入');
     console.log('普通模式重新连接经键盘与正式 IPC 完成，同名清单只读保护及新句柄选择通过，事项内容未变。');
+    const beforeUnloadCheck=await normalController.execute({type:'read'},'cn');normalUI.webContents.send('suixing:snapshot',{region:'cn',result:beforeUnloadCheck});await new Promise(resolve=>setTimeout(resolve,100));
+    await normalController.window().webContents.executeJavaScript('window.fixtureBeforeUnload=event=>{event.preventDefault();event.returnValue="";};addEventListener("beforeunload",window.fixtureBeforeUnload);',true);
+    const unloadResult=await normalUI.webContents.executeJavaScript('('+reconnectTestClient.toString()+')('+JSON.stringify({pageId:beforeUnloadCheck.snapshot.pageId,listId:beforeUnloadCheck.snapshot.activeListId,title:beforeUnloadCheck.snapshot.activeListTitle,details:true})+')',true);
+    assert.equal(unloadResult.reason,'UI_ERROR');assert.equal(unloadResult.kind,'OFFICIAL_PAGE_BUSY');assert.equal(unloadResult.stage,'home');
+    assert.equal(normalController.window().isDestroyed(),false);assert.equal((await normalController.execute({type:'read'},'cn')).snapshot.pageId,beforeUnloadCheck.snapshot.pageId);
+    await normalController.window().webContents.executeJavaScript('removeEventListener("beforeunload",window.fixtureBeforeUnload);delete window.fixtureBeforeUnload;');
+    await normalUI.webContents.executeJavaScript('document.querySelector(".refresh-button").click()');await new Promise(resolve=>setTimeout(resolve,150));
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'true');
+    console.log('官方 beforeunload 阻止离开时保留原窗口、固定阶段及只读状态，不强制忽略或继续导航，结束阻止后刷新恢复通过。');
     const hierarchyBefore=await normalController.execute({type:'read'},'cn'),hierarchyTarget=hierarchyBefore.snapshot.items.find(item=>item.title===normalTitle);
     normalUI.webContents.send('suixing:snapshot',{region:'cn',result:hierarchyBefore});await new Promise(resolve=>setTimeout(resolve,100));
     let hierarchyExpected={pageId:hierarchyBefore.snapshot.pageId,listId:hierarchyTarget.listId,id:hierarchyTarget.id,title:normalTitle};
@@ -614,6 +623,11 @@ async function runSmoke({ frontendURL, root }) {
     await new Promise(resolve=>setTimeout(resolve,100));
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'false');
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelectorAll(".reminder-row").length'),0,'删除后不自动展示其他清单事项');
+    await normalController.window().webContents.executeJavaScript('(()=>{const w=document.querySelector("iframe").contentWindow;w.fixtureFallbackFieldReads=0;w.document.querySelectorAll(".reminder-item").forEach(row=>{row.fixtureOriginalQuery=row.querySelector;row.querySelector=function(selector){if(selector.includes(".title"))w.fixtureFallbackFieldReads++;return this.fixtureOriginalQuery(selector)}})})()');
+    await normalUI.webContents.executeJavaScript('document.querySelector(".refresh-button").click()');await new Promise(resolve=>setTimeout(resolve,150));
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelectorAll(".reminder-row").length'),0,'需要选择清单时刷新只更新导航');
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureFallbackFieldReads'),0,'刷新不能读取官网自动改选清单的事项字段');
+    await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelectorAll(".reminder-item").forEach(row=>{row.querySelector=row.fixtureOriginalQuery;delete row.fixtureOriginalQuery;})');
     const nextList=navigation.snapshot.lists[0];
     await normalUI.webContents.executeJavaScript('document.querySelector('+JSON.stringify('.list-button[data-list-id="'+nextList.id+'"]')+').click()');
     await new Promise(resolve=>setTimeout(resolve,150));

@@ -187,11 +187,18 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
     sendSnapshot(result);await new Promise(resolve=>setTimeout(resolve,120));
     let connected;
     try {connected=await ui.webContents.executeJavaScript('('+reconnectTestClient.toString()+')('+JSON.stringify({pageId:result.snapshot.pageId,listId:lists[0].id,title:lists[0].title,details:true})+')',true);}
-    catch {return {ok:false,code:'TEST_RECONNECT_UNCONFIRMED'};}
-    if(connected!==true) return {ok:false,code:'TEST_RECONNECT_UNCONFIRMED',reason:['UI_NOT_READY','UI_ERROR','VIEW_NOT_RESTORED','OBSERVATION_TIMEOUT'].includes(connected?.reason)?connected.reason:'OTHER',kind:['RECONNECT_FAILED','PAGE_NOT_READY','BUSY','STALE_VIEW','NAVIGATION_FAILED','NAVIGATION_TIMEOUT','OTHER'].includes(connected?.kind)?connected.kind:undefined};
-    const after=await controller.execute({type:'read'},'cn');
-    if(!after.ok || after.snapshot.pageId===result.snapshot.pageId || after.snapshot.activeListTitle!==lists[0].title) return {ok:false,code:'TEST_RECONNECT_UNCONFIRMED'};
-    return {...after,code:'CLIENT_RECONNECTED',via:'Windows 本地重新连接按钮 IPC'};
+    catch {return {ok:false,code:'TEST_RECONNECT_UNCONFIRMED',reason:'UI_EXECUTION_FAILED'};}
+    if(connected!==true) return {ok:false,code:'TEST_RECONNECT_UNCONFIRMED',reason:['UI_NOT_READY','UI_ERROR','VIEW_NOT_RESTORED','OBSERVATION_TIMEOUT'].includes(connected?.reason)?connected.reason:'OTHER',stage:['home','reminders','opening','waiting-navigation','selecting-list','waiting-selected'].includes(connected?.stage)?connected.stage:undefined,kind:['OFFICIAL_PAGE_BUSY','RECONNECT_FAILED','PAGE_NOT_READY','BUSY','STALE_VIEW','RECONNECT_TIMEOUT','NAVIGATION_FAILED','NAVIGATION_TIMEOUT','BRIDGE_TIMEOUT','OTHER'].includes(connected?.kind)?connected.kind:undefined};
+    const known=code=>['PAGE_NOT_READY','LIST_LOADING','BUSY','STALE_VIEW','BRIDGE_TIMEOUT'].includes(code)?code:'OTHER';
+    const navigation=await controller.execute({type:'readLists'},'cn');
+    if(!navigation.ok)return {ok:false,code:'TEST_RECONNECT_UNCONFIRMED',reason:'AFTER_NAVIGATION_READ_FAILED',kind:known(navigation.code)};
+    if(navigation.snapshot.pageId===result.snapshot.pageId)return {ok:false,code:'TEST_RECONNECT_UNCONFIRMED',reason:'AFTER_PAGE_UNCHANGED'};
+    const targets=navigation.snapshot.lists.filter(list=>list.title===TEST_LIST);
+    if(targets.length!==1)return {ok:false,code:'TEST_RECONNECT_UNCONFIRMED',reason:'AFTER_TARGET_NOT_UNIQUE'};
+    const after=await controller.execute({type:'readList',pageId:navigation.snapshot.pageId,listId:targets[0].id},'cn');
+    if(!after.ok)return {ok:false,code:'TEST_RECONNECT_UNCONFIRMED',reason:'AFTER_SCOPED_READ_FAILED',kind:known(after.code)};
+    const beforeSync=result.snapshot.items.filter(item=>item.title===TEST_SYNC_ITEM);
+    return {...after,code:'CLIENT_RECONNECTED',reconnectBeforeSyncFlagged:beforeSync.length===1 && typeof beforeSync[0].flagged==='boolean'?beforeSync[0].flagged:undefined,via:'Windows 本地重新连接按钮 IPC'};
   }
   if (['show-test-site','hide-test-site','reopen-test-site'].includes(command)) {
     if(!result.snapshot.items.length || result.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX))) return {ok:false,code:'TEST_ITEMS_REQUIRED'};
@@ -335,7 +342,9 @@ function summarize(result) {
   const sync = testList ? snapshot.items.filter(item => item.title === TEST_SYNC_ITEM) : [];
   const deletion = testList ? snapshot.items.filter(item => item.title === TEST_DELETE_ITEM) : [];
   const managed=snapshot?.lists.filter(list=>[TEST_MANAGEMENT_LIST,TEST_MANAGEMENT_RENAMED].includes(list.title)) || [];
-  return { ok: result.ok, code: result.code, lists: snapshot?.lists.length, loadedItems: snapshot?.items.length,
+  const reconnectReason=result.code==='TEST_RECONNECT_UNCONFIRMED' && ['UI_NOT_READY','UI_ERROR','VIEW_NOT_RESTORED','OBSERVATION_TIMEOUT','UI_EXECUTION_FAILED','AFTER_NAVIGATION_READ_FAILED','AFTER_PAGE_UNCHANGED','AFTER_TARGET_NOT_UNIQUE','AFTER_SCOPED_READ_FAILED'].includes(result.reason)?result.reason:undefined;
+  const reconnectKind=reconnectReason && ['OFFICIAL_PAGE_BUSY','RECONNECT_FAILED','PAGE_NOT_READY','LIST_LOADING','BUSY','STALE_VIEW','RECONNECT_TIMEOUT','NAVIGATION_FAILED','NAVIGATION_TIMEOUT','BRIDGE_TIMEOUT','OTHER'].includes(result.kind)?result.kind:undefined;
+  return { ok: result.ok, code: result.code, reason:reconnectReason,kind:reconnectKind,stage:reconnectReason && ['home','reminders','opening','waiting-navigation','selecting-list','waiting-selected'].includes(result.stage)?result.stage:undefined,lists: snapshot?.lists.length, loadedItems: snapshot?.items.length,
     testList, testItemCount: testList ? items.length : undefined, testCompleted: items.length === 1 ? items[0].completed : undefined,
     testOriginalTitle: items.length === 1 ? items[0].title === TEST_ITEM : undefined,
     testEditedTitle: items.length === 1 ? items[0].title === TEST_EDITED_ITEM : undefined,
@@ -347,6 +356,7 @@ function summarize(result) {
     testSyncCount:testList?sync.length:undefined,
     testSyncPending:sync.length===1?!sync[0].completed:undefined,
     testSyncFlagged:sync.length===1?sync[0].flagged:undefined,
+    reconnectBeforeSyncFlagged:typeof result.reconnectBeforeSyncFlagged==='boolean'?result.reconnectBeforeSyncFlagged:undefined,
     testSyncPriority:sync.length===1?['none','low','medium','high'].includes(sync[0].priority)?sync[0].priority:null:undefined,
     deleteReady:result.deleteReady===true?true:undefined,
     testDeleteCount:testList?deletion.length:undefined,
@@ -387,7 +397,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
     try {
       let result;
       if (command === 'environment') {
-        result={ok:true,packaged:environment?.packaged===true,profileKind:['system-default','project-local'].includes(environment?.profileKind)?environment.profileKind:'unknown'};
+        result={ok:true,packaged:environment?.packaged===true,profileKind:['system-default','project-local'].includes(environment?.profileKind)?environment.profileKind:'unknown',adapterVersion:controller.adapterVersion?.(),verificationVersion:'reconnect-stages-3'};
       } else if (command === 'open-sign-in') {
         result = await controller.openSignIn();
       } else if (command === 'reload') {

@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.10') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.11') return;
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   var listHandles = new WeakMap();
@@ -130,6 +130,17 @@
     if(!doc || isLoading(doc)) {lastSnapshot=null;return result(false,'PAGE_NOT_READY','官方清单尚未就绪，请稍后读取。');}
     var lists=listNodes(doc).map(readList);
     return result(true,'SELECT_A_LIST','请选择清单后继续。',{snapshot:navigationSnapshot(doc,lists),needsListSelection:true});
+  }
+
+  /** 等待指定清单时先核对页面和官方选区，不能读取自动改选的其他事项。 */
+  function readSelectedList(command) {
+    if(typeof command.pageId!=='string' || !command.pageId || typeof command.listId!=='string' || !command.listId)return result(false,'INVALID_COMMAND','请指定要读取的清单。');
+    if(command.pageId!==pageId){lastSnapshot=null;return result(false,'STALE_VIEW','页面已变化，请重新选择清单。');}
+    var doc=application();
+    if(!doc || isLoading(doc)){lastSnapshot=null;return result(false,'LIST_LOADING','指定清单正在加载，请稍后读取。');}
+    var selected=listNodes(doc).filter(function(node){return node.getAttribute('aria-selected')==='true';});
+    if(selected.length!==1 || handle(selected[0])!==command.listId){lastSnapshot=null;return result(false,'STALE_VIEW','官方选中的清单已变化，请重新选择。');}
+    return read();
   }
 
   function rowNodes(doc) {
@@ -1240,16 +1251,17 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.10',
+    version: '0.3.11',
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');
-      if (!command || !['read','readLists', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance','getSubtaskInfo','setSubtask', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
+      if (!command || !['read','readLists','readList', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance','getSubtaskInfo','setSubtask', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
       inFlight = true;
       if (command.type === 'createItem') { creationDiagnosticSequence = root.__suixingDiagnosticWriteSequence; setCreationStage('preflight'); }
       try {
         if (command.type === 'read') return read();
         if (command.type === 'readLists') return readLists();
+        if (command.type === 'readList') return readSelectedList(command);
         if (command.type === 'selectList') return await selectList(command);
         if (command.type === 'showCompleted') return await showCompleted(command);
         if (command.type === 'getSchedule') return await getSchedule(command);

@@ -194,7 +194,7 @@ async function clickTestFlag(expected) {
 
 /** 从本地正式入口重新连接一次，等待新页面与原清单恢复；不触发任何事项写入。 */
 async function reconnectTestClient(expected) {
-  const failed=(reason,kind)=>expected.details===true?{ok:false,reason,kind}:false;
+  const failed=(reason,kind,stage)=>expected.details===true?{ok:false,reason,kind,stage}:false;
   let list,button;const readyDeadline=Date.now()+5000;
   for(let attempt=0;attempt<35;attempt++) {
     list=document.querySelector('.list-content');button=document.querySelector('.reconnect-button');
@@ -210,6 +210,9 @@ async function reconnectTestClient(expected) {
     if(control && !control.hasAttribute('disabled')) {
       const error=document.querySelector('.notice.error');
       if(error) {
+        const code=error.dataset?.code;
+        const phase=error.dataset?.reconnectStage,stage=['home','reminders','opening','waiting-navigation','selecting-list','waiting-selected'].includes(phase)?phase:undefined;
+        if(['OFFICIAL_PAGE_BUSY','RECONNECT_FAILED','PAGE_NOT_READY','BUSY','STALE_VIEW','RECONNECT_TIMEOUT','NAVIGATION_FAILED','NAVIGATION_TIMEOUT','BRIDGE_TIMEOUT'].includes(code))return failed('UI_ERROR',code,stage);
         const message=error.textContent.trim(),known={'重新连接暂不可用，请在官方页面核对。':'RECONNECT_FAILED','官方页面尚未就绪，请完成登录或稍后读取。':'PAGE_NOT_READY','请等待当前操作结束后再重新连接。':'BUSY','清单位置已变化，请重新读取并选择清单。':'STALE_VIEW','重新连接未完成，请打开官方页面核对。':'NAVIGATION_FAILED','重新连接超时，请稍后读取或打开官方页面核对。':'NAVIGATION_TIMEOUT'};
         return failed('UI_ERROR',Object.hasOwn(known,message)?known[message]:'OTHER');
       }

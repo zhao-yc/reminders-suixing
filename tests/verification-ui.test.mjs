@@ -40,6 +40,37 @@ test('层级预检的父项若不是另一条专用事项，通道不会激活�
   const result=await testOperation(controller,'indent-subtask-test-item',{sendSnapshot(){assert.fail('错误父项不进入本地确认');},ui:null});assert.equal(result.code,'TEST_SUBTASK_PLAN_UNSUPPORTED');
 });
 
+test('重连验收区分导航、页面、目标和指定读取失败，未匹配时不读事项',async()=>{
+  const snapshot={pageId:'old-page',activeListId:'list',activeListTitle:'随行验证（2026-11-04）',lists:[{id:'list',title:'随行验证（2026-11-04）'}],items:[{title:'随行验证 · 最小读写验证'}]};
+  for(const [navigation,scoped,reason] of [
+    [{ok:false,code:'BUSY'},null,'AFTER_NAVIGATION_READ_FAILED'],
+    [{ok:true,snapshot:{...snapshot,items:[]}},null,'AFTER_PAGE_UNCHANGED'],
+    [{ok:true,snapshot:{...snapshot,pageId:'new-page',lists:[],items:[]}},null,'AFTER_TARGET_NOT_UNIQUE'],
+    [{ok:true,snapshot:{...snapshot,pageId:'new-page',items:[]}},{ok:false,code:'STALE_VIEW'},'AFTER_SCOPED_READ_FAILED']
+  ]){
+    let reads=0;const controller={execute:async command=>{if(command.type==='read')return {ok:true,snapshot};if(command.type==='readLists')return navigation;assert.equal(command.type,'readList');reads++;assert.equal(command.pageId,'new-page');assert.equal(command.listId,'list');return scoped;}};
+    const result=await testOperation(controller,'reconnect-test-client',{sendSnapshot(){},ui:{webContents:{async executeJavaScript(){return true;}}}});
+    assert.equal(result.reason,reason);assert.equal(reads,scoped?1:0);
+  }
+});
+
+test('重连本地脚本异常仅返回固定阶段，不泄漏异常正文',async()=>{
+  const controller=scopedController(false),result=await testOperation(controller,'reconnect-test-client',{sendSnapshot(){},ui:{webContents:{async executeJavaScript(){throw Error('synthetic-private-reconnect-error');}}}});
+  assert.equal(result.reason,'UI_EXECUTION_FAILED');assert.doesNotMatch(JSON.stringify(result),/synthetic-private/);
+});
+
+test('信箱汇总保留固定重连失败阶段与分类，不丢弃诊断证据',()=>{
+  for(const reason of ['UI_NOT_READY','UI_ERROR','VIEW_NOT_RESTORED','OBSERVATION_TIMEOUT','UI_EXECUTION_FAILED','AFTER_NAVIGATION_READ_FAILED','AFTER_PAGE_UNCHANGED','AFTER_TARGET_NOT_UNIQUE','AFTER_SCOPED_READ_FAILED']){
+    const result=summarize({ok:false,code:'TEST_RECONNECT_UNCONFIRMED',reason,kind:'BUSY',stage:'home'});assert.equal(result.reason,reason);assert.equal(result.kind,'BUSY');assert.equal(result.stage,'home');
+  }
+});
+
+test('汇总不输出未知阶段、异常正文或其他命令夹带的原因',()=>{
+  for(const data of [{code:'TEST_RECONNECT_UNCONFIRMED',reason:'synthetic-private-reason',kind:'synthetic-private-kind'},{code:'READY',reason:'UI_ERROR',kind:'BUSY'}]){
+    const result=summarize({ok:false,...data,message:'synthetic-private-message'});assert.equal(result.reason,undefined);assert.equal(result.kind,undefined);assert.doesNotMatch(JSON.stringify(result),/synthetic-private/);
+  }
+});
+
 test('外观验收只选择本地匹配的选项，取消不触发保存',async t=>{
   for(const cancel of [false,true]){
     const dom=new JSDOM('<div class="list-content" data-page-id="page" data-list-id="list"><div class="list-title">随行验证 · 合成外观</div><button class="list-appearance-button"></button></div>',{runScripts:'outside-only'});t.after(()=>dom.window.close());const doc=dom.window.document;let selected=0,saved=0;

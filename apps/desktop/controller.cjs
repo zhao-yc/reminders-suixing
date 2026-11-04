@@ -21,6 +21,8 @@ function createController(options = {}) {
   let closing = false;
   let writeSequence = 0;
   let lastWriteOutcome = null;
+  let lastReconnectOutcome = null;
+  let reconnectSequence = 0;
   const trace = [];
   const fixtureURL = options.fixtureURL;
   const canNavigate = value => fixtureURL ? new URL(value).origin === new URL(fixtureURL).origin : allowedURL(value);
@@ -150,13 +152,14 @@ function createController(options = {}) {
   async function reconnectSite(region='cn') {
     if(!['cn','global'].includes(region)) return {ok:false,code:'INVALID_REQUEST',message:'服务区域无效。'};
     if(busy) return {ok:false,code:'BUSY',message:'请等待当前操作结束后再重新连接。'};
-    const window=ensure(region);busy=true;
-    try {return await reopenOfficial(window.webContents,fixtureURL || ENTRY[region]);}
+    const window=ensure(region);busy=true;const sequence=++reconnectSequence;lastReconnectOutcome={sequence,ok:false,code:'IN_FLIGHT',attempts:[]};
+    try {const result=await reopenOfficial(window.webContents,fixtureURL || ENTRY[region]);lastReconnectOutcome={sequence,ok:result.ok,code:result.code,attempts:result.attempts || []};return result;}
     finally {busy=false;}
   }
 
   return {
     execute,
+    adapterVersion() {return SOURCE.match(/version:\s*'(\d+\.\d+\.\d+)'/)?.[1] || 'unknown';},
     reconnectSite,
     lastWriteOutcome() { return lastWriteOutcome ? {...lastWriteOutcome} : null; },
     async inspectTestEditor() {
@@ -229,7 +232,7 @@ function createController(options = {}) {
     },
     /** 只检查公开页面结构及固定错误文案，诊断结果不包含账户或提醒事项内容。 */
     async diagnostics() {
-      if (!site || site.isDestroyed()) return { opened: false, trace, lastWriteOutcome };
+      if (!site || site.isDestroyed()) return { opened: false, trace, lastWriteOutcome,lastReconnectOutcome };
       const frames = [];
       const available = site.webContents.mainFrame.framesInSubtree;
       for (const frame of available.slice(0, 12)) {
@@ -237,7 +240,7 @@ function createController(options = {}) {
         entry.state = await inspectFrame(frame);
         frames.push(entry);
       }
-      return { opened: true, frames, framesTruncated: available.length > frames.length, trace, lastWriteOutcome };
+      return { opened: true, frames, framesTruncated: available.length > frames.length, trace, lastWriteOutcome,lastReconnectOutcome };
     },
     dispose() { closing = true; if (site && !site.isDestroyed()) site.destroy(); }
   };
