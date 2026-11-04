@@ -53,7 +53,7 @@ function renderFixture(list) {
   document.querySelector('[role="treegrid"]').innerHTML = records.map(({title,id}, index) =>
     '<div class="reminder-item" id="' + id + '" role="row" aria-level="1" aria-setsize="' + records.length + '">' +
     '<button class="mark-completed" data-completed="' + (index === 0 && complete) + '" aria-label="切换完成状态"></button>' +
-    '<div class="title"><div role="textbox" contenteditable="true">' + title + '</div></div>' +
+    '<div role="gridcell">' + (index===1?'<span class="priority" data-priority-level="1"><span aria-hidden="true">!!!</span></span>':'') + '</div><div class="title" role="gridcell"><div role="textbox" contenteditable="true">' + title + '</div></div>' +
     '<div class="notes"><div role="textbox" contenteditable="true"></div></div><div class="flag-container" role="gridcell"></div><div class="metadata">2026/11/04<span aria-hidden="true">重复无障碍文字</span></div><button class="info" data-edit-open="false" aria-haspopup="dialog">详情</button></div>'
   ).join('');
   if (window.fixtureHideCompleted) document.querySelectorAll('.mark-completed[data-completed="true"]').forEach(button => button.closest('.reminder-item').remove());

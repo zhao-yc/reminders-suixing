@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.4') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.5') return;
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   var listHandles = new WeakMap();
@@ -91,12 +91,13 @@
       scheduleFingerprint: loadedDate ? loadedDate.fingerprint : null,
       completed: completed,
       flagged: readFlag(row),
+      priority: readPriority(row),
       listId: activeListId,
       level: Number(row.getAttribute('aria-level') || 1),
       disabled: button.disabled || button.getAttribute('aria-disabled') === 'true'
     };
     // 记录 ID 与内容指纹同时匹配，避免同名事项、切换列表或旧缓存导致误操作。
-    item.fingerprint = JSON.stringify([item.id, item.title, item.notes, item.metadata, item.completed, activeListId,item.scheduleFingerprint,item.flagged]);
+    item.fingerprint = JSON.stringify([item.id, item.title, item.notes, item.metadata, item.completed, activeListId,item.scheduleFingerprint,item.flagged,item.priority]);
     return item;
   }
 
@@ -107,6 +108,18 @@
     var children = Array.from(cells[0].children);
     if (children.length > 1 || children.some(function (node) { return !node.matches('.flag'); })) return null;
     return children.length === 1;
+  }
+
+  /** 优先级仅取标题前的专用格；空格明确为无，未知结构不猜测。新版网页没有优先级编辑入口。 */
+  function readPriority(row) {
+    var titles = row.querySelectorAll('.title[role="gridcell"]');
+    var cell = titles.length === 1 && titles[0].previousElementSibling;
+    if (!cell || cell.getAttribute('role') !== 'gridcell' || cell.closest('.reminder-item[role="row"]') !== row) return null;
+    if (Array.from(cell.childNodes).some(function (node) { return node.nodeType === 3 && node.textContent.trim(); })) return null;
+    var children = Array.from(cell.children);
+    if (!children.length) return 'none';
+    if (children.length !== 1 || !children[0].matches('span.priority[data-priority-level]')) return null;
+    return {'1':'high','5':'medium','9':'low'}[children[0].getAttribute('data-priority-level')] || null;
   }
 
   function editableText(node) {
@@ -755,7 +768,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.4',
+    version: '0.3.5',
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');

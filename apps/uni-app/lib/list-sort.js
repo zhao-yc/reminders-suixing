@@ -1,4 +1,5 @@
 import { validSchedule } from './schedule.js';
+import { priorityInfo } from './priority.js';
 
 export const SORT_PREFERENCE_KEY = 'suixing.settings.listSort';
 export const SORT_OPTIONS = [
@@ -6,7 +7,9 @@ export const SORT_OPTIONS = [
   { value:'date-ascending', label:'日期：从早到晚' },
   { value:'date-descending', label:'日期：从晚到早' },
   { value:'title-ascending', label:'标题：升序' },
-  { value:'title-descending', label:'标题：降序' }
+  { value:'title-descending', label:'标题：降序' },
+  { value:'priority-descending', label:'优先级：从高到低' },
+  { value:'priority-ascending', label:'优先级：从低到高' }
 ];
 const validMode = mode => SORT_OPTIONS.some(option => option.value === mode);
 const titles = new Intl.Collator('zh-CN', { numeric:true, sensitivity:'base' });
@@ -45,6 +48,12 @@ export function sortLoadedItems(items, mode) {
   groups.sort((left,right) => {
     let order;
     if (mode.startsWith('title-')) order = titles.compare(left.root.title,right.root.title) * direction;
+    else if(mode.startsWith('priority-')) {
+      const a=priorityInfo(left.root.priority).rank,b=priorityInfo(right.root.priority).rank;
+      const rank=value=>value===null?2:value===0?1:0;
+      if(rank(a)!==rank(b)) return rank(a)-rank(b);
+      order=a===null || a===0?0:(a-b)*direction;
+    }
     else {
       const leftRank = dateRank(left.root), rightRank = dateRank(right.root);
       // 无日期及不可读日期始终在后，倒序也不将其误当成最晚日期。

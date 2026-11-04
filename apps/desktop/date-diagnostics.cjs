@@ -1,11 +1,13 @@
 /** 只检查专用测试事项的官方日期编辑结构；不输出正文、输入值、账户或记录标识。 */
 async function inspectTestDetailsDocument(action = 'inspect', doc = document) {
-  if (!['open','inspect','preview-date','binding','cancel'].includes(action)) return {ok:false,code:'INVALID_DIAGNOSTIC_ACTION'};
+  if (!['open','inspect','preview-date','binding','cancel','open-sync-priority','inspect-sync-priority','cancel-sync-priority'].includes(action)) return {ok:false,code:'INVALID_DIAGNOSTIC_ACTION'};
+  const priority=action.endsWith('-sync-priority');
+  if(priority) action=action.split('-')[0];
   const active=[...doc.querySelectorAll('[role="tree"] [role="treeitem"][aria-selected="true"]')];
   if (active.length !== 1 || !active[0].querySelector('.inline-editable-label')?.textContent.trim().startsWith('随行验证')) return {ok:false,code:'TEST_LIST_NOT_SELECTED'};
   const rows=[...doc.querySelectorAll('[role="treegrid"] .reminder-item[role="row"][id]')].filter(node=>!node.closest('[hidden], [aria-hidden="true"]'));
   if (!rows.length || rows.some(row=>!row.querySelector('.title [role="textbox"]')?.textContent.trim().startsWith('随行验证'))) return {ok:false,code:'TEST_ITEMS_REQUIRED'};
-  const targets=rows.filter(row=>row.querySelector('.title [role="textbox"]')?.textContent.trim() === '随行验证 · 最小读写验证');
+  const targets=rows.filter(row=>row.querySelector('.title [role="textbox"]')?.textContent.trim() === (priority?'随行验证 · Windows 同步验证':'随行验证 · 最小读写验证'));
   if (targets.length !== 1) return {ok:false,code:'TEST_ITEM_NOT_UNIQUE'};
   const buttons=targets[0].querySelectorAll('button[data-edit-open][aria-haspopup="dialog"]');
   if (buttons.length !== 1) return {ok:false,code:'TEST_DETAILS_UNAVAILABLE'};
@@ -71,6 +73,18 @@ async function inspectTestDetailsDocument(action = 'inspect', doc = document) {
     for (let attempt=0;attempt<25 && doc.querySelector('.reminder-item-details');attempt++) await pause();
     return {ok:!doc.querySelector('.reminder-item-details'),code:doc.querySelector('.reminder-item-details')?'TEST_CANCEL_UNCERTAIN':'TEST_DETAILS_CANCELLED'};
   }
+  if(priority) {
+    const groups=[...panel.querySelectorAll('.priority-info')];
+    const known={'无':'none','低优先级':'low','中优先级':'medium','高优先级':'high','None':'none','Low':'low','Medium':'medium','High':'high'};
+    const group=groups.length===1?groups[0]:null;
+    const controls=group?group.querySelectorAll('input,select,button,[role="button"],[role="combobox"],[contenteditable="true"],[tabindex]'):[];
+    const title=targets[0].querySelector('.title'),cell=title?.previousElementSibling;
+    const icons=cell?[...cell.querySelectorAll('.priority[data-priority-level]')]:[];
+    return {ok:true,code:'TEST_PRIORITY_SHAPE',groups:groups.length,controls:controls.length,
+      value:known[group?.querySelector('.ellipsis')?.textContent.trim()] || null,
+      rowCell:cell?.getAttribute('role')==='gridcell',rowChildren:cell?.children.length ?? null,
+      iconLevels:icons.map(node=>[1,5,9].includes(Number(node.getAttribute('data-priority-level')))?Number(node.getAttribute('data-priority-level')):null)};
+  }
   const safeClasses=new Set(['reminder-item-details','reminder-edit-date','date-switch-container','date-time-container','date-picker','date-field','time-picker','time-field','calendar-container','time-switch-container','primary','secondary','block']);
   const numeric=node=>{
     const read=name=>{const value=node.getAttribute(name);return /^-?\d{1,4}$/.test(value || '')?Number(value):null;};
@@ -97,7 +111,7 @@ async function inspectTestDetailsDocument(action = 'inspect', doc = document) {
 }
 
 async function inspectTestDetails(frame, action, timeoutMs = 3000) {
-  if (!['open','inspect','preview-date','binding','cancel'].includes(action)) return {ok:false,code:'INVALID_DIAGNOSTIC_ACTION'};
+  if (!['open','inspect','preview-date','binding','cancel','open-sync-priority','inspect-sync-priority','cancel-sync-priority'].includes(action)) return {ok:false,code:'INVALID_DIAGNOSTIC_ACTION'};
   let timer;
   try {
     return await Promise.race([

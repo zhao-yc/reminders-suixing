@@ -44,6 +44,23 @@ test('打开详情期间混入非测试事项时停止，不读取弹窗控件',
   assert.equal((await inspectTestDetailsDocument('open',doc)).code,'TEST_SCOPE_CHANGED');
 });
 
+test('优先级结构诊断仅定位同步专用事项，返回固定枚举，不读取其他字段或存储',async t=>{
+  const {doc,counts}=setup(t);
+  assert.equal((await inspectTestDetailsDocument('open-sync-priority',doc)).code,'TEST_ITEM_NOT_UNIQUE');
+  doc.querySelector('.title [role="textbox"]').textContent='随行验证 · Windows 同步验证';
+  const result=await inspectTestDetailsDocument('open-sync-priority',doc);
+  assert.equal(result.code,'TEST_PRIORITY_SHAPE');
+  const panel=doc.querySelector('.reminder-item-details');
+  panel.insertAdjacentHTML('beforeend','<div class="priority-info"><h3>synthetic-private-label</h3><div class="ellipsis">高优先级</div></div>');
+  const known=await inspectTestDetailsDocument('inspect-sync-priority',doc);
+  assert.equal(known.value,'high');assert.equal(known.controls,0);
+  assert.doesNotMatch(JSON.stringify(known),/synthetic-private|同步验证/);
+  panel.querySelector('.ellipsis').textContent='synthetic-private-unknown';
+  assert.equal((await inspectTestDetailsDocument('inspect-sync-priority',doc)).value,null);
+  assert.equal((await inspectTestDetailsDocument('cancel-sync-priority',doc)).ok,true);
+  assert.deepEqual(counts(),{opened:1,cancelled:1,saved:0});
+});
+
 test('日期预览只展开未保存草稿，重复预览不反转，结束使用取消而不存储',async t=>{
   const {doc,counts}=setup(t);
   await inspectTestDetailsDocument('open',doc);

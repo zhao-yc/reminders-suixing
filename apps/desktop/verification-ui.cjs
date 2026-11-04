@@ -142,11 +142,16 @@ async function editTestSchedule(expected) {
 /** 只在专用清单操作本地排序菜单，结束恢复原设置；没有任何事项编辑入口。 */
 async function verifyTestSorting(expected) {
   const pause=()=>new Promise(resolve=>setTimeout(resolve,80));
-  const labels=['清单顺序','日期：从早到晚','日期：从晚到早','标题：升序','标题：降序'];
+  const labels=['清单顺序','日期：从早到晚','日期：从晚到早','标题：升序','标题：降序','优先级：从高到低','优先级：从低到高'];
   function scope() {
     const list=document.querySelector('.list-content'),rows=[...document.querySelectorAll('.reminder-row[data-record-id]')];
     return list?.dataset.pageId===expected.pageId && list.dataset.listId===expected.listId && !document.querySelector('.inline-editor') &&
-      rows.length>0 && rows.length===expected.ids.length && rows.every(row=>expected.ids.includes(row.dataset.recordId) && row.querySelector('.reminder-title')?.textContent.trim().startsWith('随行验证'));
+      rows.length>0 && rows.length===expected.ids.length && rows.every(row=>expected.ids.includes(row.dataset.recordId) && row.querySelector('.reminder-title')?.textContent.trim().startsWith('随行验证')) &&
+      (!expected.priorities || expected.priorities.every(item=>{
+        const row=rows.find(row=>row.dataset.recordId===item.id),marks={high:'!!!',medium:'!!',low:'!',none:''};
+        return row && (row.querySelector('.priority-mark')?.textContent || '')===(marks[item.priority] || '') &&
+          (item.priority===null?row.textContent.includes('优先级不可读'):row.dataset.priority===item.priority);
+      }));
   }
   const selected=()=>document.querySelector('.sort-picker-label')?.textContent.replace(/\s*⌄\s*$/,'').trim();
   const original=selected();
@@ -165,7 +170,7 @@ async function verifyTestSorting(expected) {
     return false;
   }
   let verified=false;
-  try {verified=await choose('日期：从早到晚') && await choose('标题：升序');}
+  try {verified=await choose('日期：从早到晚') && await choose('标题：升序') && await choose('优先级：从高到低') && await choose('优先级：从低到高');}
   finally {if (selected()!==original && !await choose(original)) verified=false;}
   return verified && scope() && selected()===original;
 }

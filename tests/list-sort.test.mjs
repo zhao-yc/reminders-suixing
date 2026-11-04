@@ -45,6 +45,19 @@ test('同一排序值保留原顺序，中文标题与数字使用自然顺序',
   assert.deepEqual(ids(sortLoadedItems(items,'date-descending')),ids(items));
 });
 
+test('优先级升降序使用高、中、低等级，无优先级与不可读始终在后，同级保持原序',()=>{
+  const items=[['未知',null],['无','none'],['低','low'],['高一','high'],['中','medium'],['高二','high'],['非法','urgent']].map(([id,priority])=>Object.freeze({...item(id),priority}));
+  Object.freeze(items);
+  assert.deepEqual(ids(sortLoadedItems(items,'priority-descending')),['高一','高二','中','低','无','未知','非法']);
+  assert.deepEqual(ids(sortLoadedItems(items,'priority-ascending')),['低','中','高一','高二','无','未知','非法']);
+  assert.deepEqual(ids(sortLoadedItems(items,'manual')),['未知','无','低','高一','中','高二','非法']);
+});
+
+test('优先级排序按主事项移动连续子事项，不用高优先级子事项改变主项位置',()=>{
+  const items=[{...item('无优先级主项'),priority:'none'},{...item('高子项',null,null,2),priority:'high'},{...item('低主项'),priority:'low'},{...item('未知子项',null,null,2),priority:null}];
+  assert.deepEqual(ids(sortLoadedItems(items,'priority-descending')),['低主项','未知子项','无优先级主项','高子项']);
+});
+
 test('排序设置只保存固定模式，不保存清单或记录数据，重启恢复失败时使用清单顺序',()=>{
   const values=new Map();const storage={getStorageSync:key=>values.get(key),setStorageSync:(key,value)=>values.set(key,value)};
   assert.equal(readSortPreference(storage),'manual');

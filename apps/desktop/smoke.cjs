@@ -101,6 +101,8 @@ async function runSmoke({ frontendURL, root }) {
         w.sessionStorage.setItem('fixture-schedule-'+id,JSON.stringify({date,time:null,timeZone:null}));
       }
       w.renderFixture('one');
+      const row=w.document.getElementById('reminder-item-fixture-one-0');
+      row.querySelector('.title').previousElementSibling.innerHTML='<span class="priority" data-priority-level="9">!</span>';
     })()`);
     const sorting=await controller.execute({type:'read'},'cn');
     const originalIds=sorting.snapshot.items.map(item=>item.id);
@@ -117,6 +119,14 @@ async function runSmoke({ frontendURL, root }) {
       await selectSort(label);
       assert.deepEqual(await displayedIds(),originalIds.slice().reverse());
     }
+    assert.deepEqual(sorting.snapshot.items.map(item=>item.priority),['low','high']);
+    assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".priority-mark")].map(node=>node.textContent)'),['!!!','!']);
+    await selectSort('优先级：从高到低');
+    assert.deepEqual(await displayedIds(),originalIds.slice().reverse());
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".list-content").textContent.includes("优先级仅查看，请在苹果设备上修改")'),true);
+    await selectSort('优先级：从低到高');
+    assert.deepEqual(await displayedIds(),originalIds);
+    await selectSort('标题：升序');
     assert.equal(await ui.webContents.executeJavaScript('localStorage.getItem("suixing.settings.listSort")'),'title-ascending');
     await ui.loadURL(frontendURL);
     await ui.webContents.executeJavaScript('new Promise(resolve=>{const timer=setInterval(()=>{if(document.querySelector(".demo-link")){clearInterval(timer);resolve(true)}},30)})');
@@ -440,7 +450,7 @@ async function runSmoke({ frontendURL, root }) {
     await normalUI.webContents.executeJavaScript('new Promise((resolve,reject)=>{const deadline=Date.now()+7000;const timer=setInterval(()=>{const list=document.querySelector(".list-content"),button=document.querySelector(".reconnect-button");if(list?.dataset.pageId!=='+JSON.stringify(beforeReconnect.pageId)+' && button && !button.hasAttribute("disabled")){clearInterval(timer);resolve(true)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("重新连接未完成"))}},50)})');
     const afterReconnect=await normalController.execute({type:'read'},'cn');
     assert.notEqual(afterReconnect.snapshot.pageId,beforeReconnect.pageId);
-    const content=items=>items.map(({id,title,notes,completed,flagged,schedule})=>({id,title,notes,completed,flagged,schedule}));
+    const content=items=>items.map(({id,title,notes,completed,flagged,schedule,priority})=>({id,title,notes,completed,flagged,schedule,priority}));
     assert.deepEqual(content(afterReconnect.snapshot.items),content(beforeReconnect.items));
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'false','同名清单不能自动猜测身份并开放写入');
     assert.ok((await normalUI.webContents.executeJavaScript('document.querySelector(".notice").textContent')).includes('重新选择清单'));

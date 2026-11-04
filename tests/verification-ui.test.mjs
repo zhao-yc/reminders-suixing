@@ -136,7 +136,7 @@ test('排序验收只操作专用清单的本地菜单，结束恢复原设置�
   doc.querySelector('.completion-button').addEventListener('click',()=>assert.fail('排序不得完成事项'));
   label.addEventListener('click',()=>{
     const menu=doc.createElement('div');menu.className='uni-picker-select';
-    for(const text of ['清单顺序','日期：从早到晚','标题：升序']) {
+    for(const text of ['清单顺序','日期：从早到晚','标题：升序','优先级：从高到低','优先级：从低到高']) {
       const option=doc.createElement('button');option.className='uni-picker-item';option.textContent=text;
       option.addEventListener('click',()=>{selected.push(text);label.textContent=text+' ⌄';menu.remove();});menu.append(option);
     }
@@ -144,10 +144,10 @@ test('排序验收只操作专用清单的本地菜单，结束恢复原设置�
   });
   const expected={pageId:'synthetic-page',listId:'synthetic-list',ids:['synthetic-record']};
   assert.equal(await dom.window.eval('('+verifyTestSorting.toString()+')('+JSON.stringify(expected)+')'),true);
-  assert.deepEqual(selected,['日期：从早到晚','标题：升序','清单顺序']);
+  assert.deepEqual(selected,['日期：从早到晚','标题：升序','优先级：从高到低','优先级：从低到高','清单顺序']);
   doc.querySelector('.reminder-title').textContent='合成普通事项';
   assert.equal(await dom.window.eval('('+verifyTestSorting.toString()+')('+JSON.stringify(expected)+')'),false);
-  assert.equal(selected.length,3);
+  assert.equal(selected.length,5);
 });
 
 test('排序通道只读取核对，不发送事项写入，读回冲突时不宣称通过',async()=>{
@@ -167,7 +167,7 @@ test('排序验收识别受控菜单的选项标签，不把勾选标记读进�
   const doc=dom.window.document,field=doc.querySelector('.sort-picker-label'),changes=[];
   field.addEventListener('click',()=>{
     const menu=doc.createElement('div');menu.className='sort-menu';
-    for(const label of ['清单顺序','日期：从早到晚','标题：升序']) {
+    for(const label of ['清单顺序','日期：从早到晚','标题：升序','优先级：从高到低','优先级：从低到高']) {
       const option=doc.createElement('div');option.className='sort-option';
       option.innerHTML='<span class="sort-option-label">'+label+'</span><span aria-hidden="true">✓</span>';
       option.addEventListener('click',()=>{changes.push(label);field.textContent=label+' ⌄';menu.remove();});menu.append(option);
@@ -176,7 +176,7 @@ test('排序验收识别受控菜单的选项标签，不把勾选标记读进�
   });
   const expected={pageId:'synthetic-page',listId:'synthetic-list',ids:['synthetic-record']};
   assert.equal(await dom.window.eval('('+verifyTestSorting.toString()+')('+JSON.stringify(expected)+')'),true);
-  assert.deepEqual(changes,['日期：从早到晚','标题：升序','清单顺序']);
+  assert.deepEqual(changes,['日期：从早到晚','标题：升序','优先级：从高到低','优先级：从低到高','清单顺序']);
   assert.equal(field.textContent,'清单顺序 ⌄');
 });
 
@@ -188,6 +188,14 @@ test('旗标验证只点击匹配页面、清单、记录和原状态的本地�
   assert.equal(await dom.window.eval('('+clickTestFlag.toString()+')('+JSON.stringify({...expected,flagged:true})+')'),false);
   assert.equal(clicks,0);
   assert.equal(await dom.window.eval('('+clickTestFlag.toString()+')('+JSON.stringify(expected)+')'),true);assert.equal(clicks,1);
+});
+
+test('本地优先级显示与只读快照不一致时，排序验收不打开菜单或点击事项',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="synthetic-page" data-list-id="synthetic-list"><div class="sort-picker"><button class="sort-picker-label">清单顺序 ⌄</button></div><div class="reminder-row" data-record-id="synthetic-record" data-priority="high"><span class="reminder-title">随行验证 · 合成优先级</span><span class="priority-mark">!</span></div></div>',{runScripts:'outside-only'});
+  t.after(()=>dom.window.close());let clicks=0;dom.window.document.body.addEventListener('click',()=>clicks++);
+  const expected={pageId:'synthetic-page',listId:'synthetic-list',ids:['synthetic-record'],priorities:[{id:'synthetic-record',priority:'high'}]};
+  assert.equal(await dom.window.eval('('+verifyTestSorting.toString()+')('+JSON.stringify(expected)+')'),false);
+  assert.equal(clicks,0);
 });
 
 test('真实旗标通道只允许唯一未完成、无日期的既有专用新增事项',async()=>{

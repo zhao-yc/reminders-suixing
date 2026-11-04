@@ -60,7 +60,7 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
     sendSnapshot(result);
     await new Promise(resolve=>setTimeout(resolve,120));
     let observed=false;
-    try {observed=await ui.webContents.executeJavaScript('('+verifyTestSorting.toString()+')('+JSON.stringify({pageId:result.snapshot.pageId,listId:lists[0].id,ids:result.snapshot.items.map(item=>item.id)})+')',true);}
+    try {observed=await ui.webContents.executeJavaScript('('+verifyTestSorting.toString()+')('+JSON.stringify({pageId:result.snapshot.pageId,listId:lists[0].id,ids:result.snapshot.items.map(item=>item.id),priorities:result.snapshot.items.map(item=>({id:item.id,priority:item.priority}))})+')',true);}
     catch {return {ok:false,code:'TEST_SORTING_UNCONFIRMED'};}
     const after=await controller.execute({type:'read'},'cn');
     const unchanged=after.ok && JSON.stringify(after.snapshot.items.map(item=>item.fingerprint))===JSON.stringify(result.snapshot.items.map(item=>item.fingerprint));
@@ -181,6 +181,7 @@ function summarize(result) {
     testSyncCount:testList?sync.length:undefined,
     testSyncPending:sync.length===1?!sync[0].completed:undefined,
     testSyncFlagged:sync.length===1?sync[0].flagged:undefined,
+    testSyncPriority:sync.length===1?['none','low','medium','high'].includes(sync[0].priority)?sync[0].priority:null:undefined,
     testScheduleEmpty: result.schedule ? result.schedule.date === null && result.schedule.time === null : undefined,
     testScheduleDate: result.schedule ? result.schedule.date === '2030-01-15' && result.schedule.time === null : undefined,
     testScheduleTimed: result.schedule ? result.schedule.date === '2030-01-15' && result.schedule.time === '14:35' : undefined,
@@ -198,7 +199,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (!['reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date', 'cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
+    if (!['open-sync-priority','inspect-sync-priority','cancel-sync-priority','reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date', 'cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
     if (command === 'quit') { quit(); return; }
     if (busy) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));
@@ -219,8 +220,8 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
         result = await controller.inspectTestEditor();
       } else if (command === 'verify-test-sorting') {
         result = await testOperation(controller,command,{sendSnapshot,ui});
-      } else if (['open-test-details','inspect-test-details','inspect-test-date-binding','preview-test-date','cancel-test-details'].includes(command)) {
-        result = await controller.inspectTestDetails({'open-test-details':'open','inspect-test-details':'inspect','inspect-test-date-binding':'binding','preview-test-date':'preview-date','cancel-test-details':'cancel'}[command]);
+      } else if (['open-sync-priority','inspect-sync-priority','cancel-sync-priority','open-test-details','inspect-test-details','inspect-test-date-binding','preview-test-date','cancel-test-details'].includes(command)) {
+        result = await controller.inspectTestDetails(command.endsWith('-sync-priority')?command:{'open-test-details':'open','inspect-test-details':'inspect','inspect-test-date-binding':'binding','preview-test-date':'preview-date','cancel-test-details':'cancel'}[command]);
       } else {
         const snapshot = command === 'read' ? await controller.execute({ type: 'read' }, 'cn') : await testOperation(controller, command, { sendSnapshot, ui });
         sendSnapshot(snapshot);
