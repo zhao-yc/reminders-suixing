@@ -1,0 +1,2 @@
+/** 只注册本地组件，不返回网页控制器或任何账户存储。 */
+export type InitializeICloudView = () => boolean;

@@ -1,23 +1,8 @@
 // #ifdef APP-PLUS
 import { REGIONS, isApplePage } from './origins.js';
+import { REPLY_PREFIX, MAX_PAYLOAD, normalizeCommand, parseNativeReply, nativeCommandScript } from './native-protocol.js';
 
-const REPLY_PREFIX = 'suixingbridge://reply?payload=';
-const MAX_PAYLOAD = 110000;
 const failure = (code, message) => ({ ok: false, code, message });
-
-/** 原生边界只接受固定数据命令，丢弃调用方额外字段。 */
-function normalizeCommand(command) {
-  if (!command || typeof command !== 'object') return null;
-  if (command.type === 'read') return { type: 'read' };
-  const bounded = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
-  if (!bounded(command.pageId, 150) || !bounded(command.listId, 150)) return null;
-  const result = { type: command.type, pageId: command.pageId, listId: command.listId };
-  if (command.type === 'selectList') return result;
-  if (command.type !== 'setCompleted' || !bounded(command.id, 1024) || !bounded(command.fingerprint, 16000) ||
-      typeof command.expectedCompleted !== 'boolean' || typeof command.completed !== 'boolean') return null;
-  return { ...result, id: command.id, fingerprint: command.fingerprint,
-    expectedCompleted: command.expectedCompleted, completed: command.completed };
-}
 
 /** Android 专用容器：远程网页无 5+ 权限，每个回执绑定到创建它的窗口与单次请求。 */
 export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 }) {
@@ -61,14 +46,8 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
       const payload = event.url.slice(REPLY_PREFIX.length);
       if (payload.length > MAX_PAYLOAD) { interrupt('INVALID_REPLY', '页面回执过大，请重新读取。'); return; }
       try {
-        const envelope = JSON.parse(decodeURIComponent(payload));
-        if (envelope.requestId !== current.id) return;
-        const result = envelope.result;
-        if (!result || typeof result.ok !== 'boolean' || typeof result.code !== 'string' ||
-            (result.ok && (!result.snapshot || typeof result.snapshot.pageId !== 'string' ||
-              !Array.isArray(result.snapshot.lists) || !Array.isArray(result.snapshot.items)))) {
-          interrupt('INVALID_REPLY', '页面回执不完整，请重新读取。'); return;
-        }
+        const result = parseNativeReply(payload, current.id);
+        if (!result) return;
         settle(current, current.write ? { ...result, cloudConfirmed: false } : result);
       } catch { interrupt('INVALID_REPLY', '页面回执不可读取，请重新读取。'); }
     });
@@ -135,14 +114,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
         if (pending === current) interrupt('BRIDGE_TIMEOUT', '页面响应超时，请在官方页面核对后重新读取。');
       }, timeoutMs);
       // 限制实际 URL 编码后的长度，避免中文正文使传输范围被低估。不拆分或重发命令。
-      const source = adapterSource + '\n' +
-        '(function(){var id=' + JSON.stringify(id) + ';function reply(result){' +
-        'var payload=encodeURIComponent(JSON.stringify({requestId:id,result:result}));' +
-        'if(payload.length>' + MAX_PAYLOAD + ')payload=encodeURIComponent(JSON.stringify({requestId:id,result:{ok:false,code:"PAYLOAD_TOO_LARGE",message:"当前列表超出传输范围，请选择较小清单。"}}));' +
-        'location.href=' + JSON.stringify(REPLY_PREFIX) + '+payload;}' +
-        'Promise.resolve().then(function(){return window.__suixingAdapter.execute(' + JSON.stringify(command) + ');})' +
-        '.then(reply,function(){reply({ok:false,code:' + JSON.stringify(current.write ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED') +
-        ',cloudConfirmed:false,message:"页面响应异常，请核对后重新读取。"});});})();';
+      const source = nativeCommandScript(adapterSource, command, id);
       try { view.evalJS(source); }
       catch { interrupt('BRIDGE_ERROR', '页面命令未取得回执，请核对后重新读取。'); }
     });

@@ -2,7 +2,7 @@
 
 让你的 iCloud 提醒事项随身而行。
 
-基于 **uni-app Vue3** 的开源客户端。Android 使用 App 容器，Windows 使用 Electron 承载同一套 Web 产物，鸿蒙采用独立的平台适配接口。项目使用 MIT 许可证，与 Apple 无隶属关系。
+基于 **uni-app Vue3** 的开源客户端。Android 使用 App 容器，Windows 使用 Electron 承载同一套 Web 产物，鸿蒙通过 UTS 注册独立 ArkWeb 容器。项目使用 MIT 许可证，与 Apple 无隶属关系。
 
 当前是 **0.1.0 最小验证工程**，不是完整替代苹果提醒事项的正式版。登录、双重认证及云端保存继续由 iCloud 官方网页处理。
 
@@ -21,7 +21,7 @@
 | --- | --- |
 | Windows | 虚拟机真实登录、专用事项完成/取消完成及官方重载核对通过；正常退出后一次重启免登录通过，设备重启和长期会话待验 |
 | Android | uni-app 资源构建、5+ WebView 桥接及生命周期合成回归通过；独立 APK 与真机另行验收 |
-| HarmonyOS NEXT | 共用 Vue3 页面和独立桥接边界已预留；当前桥接未接入，不会假装已经支持 |
+| HarmonyOS NEXT | ArkWeb 桥接已接入共用页面，9 项逻辑层回归及 HBuilderX 资源导出通过；原生 ETS/HAP 编译、官方登录与真机仍待验 |
 | 普通网页 | 仅界面预览；不使用跨域 iframe 绕过 iCloud 限制 |
 
 详细证据、实际命令与未完成项见 [最小验证记录](docs/最小验证记录.md)。
@@ -50,6 +50,7 @@ npm run desktop:start
 # HBuilderX 界面管理的预览和安卓资源构建。
 powershell -ExecutionPolicy Bypass -File scripts/hbx.ps1 -Action web
 powershell -ExecutionPolicy Bypass -File scripts/hbx.ps1 -Action android-resource
+powershell -ExecutionPolicy Bypass -File scripts/hbx.ps1 -Action harmony-resource
 
 # 需要已连接安卓设备。
 powershell -ExecutionPolicy Bypass -File scripts/hbx.ps1 -Action android
@@ -67,7 +68,10 @@ Web 预览地址默认 `http://localhost:5317/`。预览日志和停止按钮在
 apps/uni-app/                  固定 HBuilderX Vue3 工程
   lib/bridge.js                平台适配入口，隔离 Android 专有能力
   lib/android-bridge.js        APP-PLUS 内的窗口、单次请求与中断恢复
-  static/icloud/adapter.js     两端使用的唯一网页适配源文件
+  lib/harmony-bridge.js        APP-HARMONY 内的实例、请求与中断恢复
+  lib/native-protocol.js       Android/鸿蒙共用的固定命令与回执协议
+  uni_modules/suixing-arkweb/   标准 uni-app 使用的 UTS/ETS 原生容器
+  static/icloud/adapter.js     各端使用的唯一网页适配源文件
 apps/desktop/                  Electron 容器和本地界面的受限桥接
 tests/                         合成页面与行为测试
 scripts/                       构建、验证和打包入口

@@ -1,5 +1,8 @@
 <template>
   <view class="app-shell">
+    <!-- #ifdef APP-HARMONY -->
+    <HarmonyICloudHost :bridge="bridge" />
+    <!-- #endif -->
     <view v-if="sidebarOpen" class="sidebar-scrim" @click="sidebarOpen = false"></view>
     <view class="sidebar" :class="{ 'is-open': sidebarOpen }">
       <view class="brand">
@@ -60,8 +63,15 @@
 import { computed, ref, onUnmounted } from 'vue';
 import { createBridge } from '../../lib/bridge.js';
 import { demoSnapshot } from '../../lib/demo.js';
+// #ifdef APP-HARMONY
+import HarmonyICloudHost from '../../components/HarmonyICloudHost.vue';
+import { onBackPress } from '@dcloudio/uni-app';
+// #endif
 
 const bridge = createBridge();
+// #ifdef APP-HARMONY
+onBackPress(() => bridge.hideSite());
+// #endif
 const regionLabels = ['中国大陆', '其他地区'];
 const region = ref('cn');
 const snapshot = ref(null);

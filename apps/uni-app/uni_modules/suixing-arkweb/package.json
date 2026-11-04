@@ -1,0 +1,10 @@
+{
+  "id": "suixing-arkweb",
+  "displayName": "随行鸿蒙网页容器",
+  "version": "0.1.0",
+  "description": "仅在鸿蒙注册隔离的官方网页容器，不向远程页面注入原生接口",
+  "license": "MIT",
+  "engines": { "HBuilderX": "^5.34.0" },
+  "dcloudext": { "type": "uts" },
+  "uni_modules": { "dependencies": [], "platforms": { "client": { "uni-app": { "vue": { "vue2": "n", "vue3": "y" }, "app": { "harmony": "y", "android": "n", "ios": "n" } } } } }
+}
