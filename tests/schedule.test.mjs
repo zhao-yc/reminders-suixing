@@ -215,6 +215,45 @@ test('清除后字段与官方日期显示不一致时返回未知，后续只�
   assert.equal(window.fixtureScheduleSaveClicks,1);
 });
 
+test('打开官方详情后日期与已读取字段不一致时取消草稿，不输入或存储',async t=>{
+  const {window,execute,snapshot,zone}=await setup(t);const id=snapshot.items[0].id;
+  // 列表快照仍为空，但官方详情已取得另外一个日期，模拟两个来源的冲突。
+  window.sessionStorage.setItem('fixture-schedule-'+id,JSON.stringify({...date,time:'14:35',timeZone:zone}));
+  const result=await execute(command(snapshot,'setSchedule',0,{expectedSchedule:empty,value:date}));
+  assert.equal(result.code,'SCHEDULE_UNAVAILABLE');
+  assert.equal(result.dispatched,false);assert.equal(result.cloudConfirmed,false);
+  assert.equal(window.fixtureScheduleInputs.length,0);assert.equal(window.fixtureScheduleSaveClicks,0);
+  assert.equal(window.fixtureScheduleCancels,1);assert.equal(window.document.querySelector('.details-popover'),null);
+  assert.equal((await execute(command(snapshot,'setSchedule',0,{expectedSchedule:empty,value:date}))).code,'STALE_VIEW');
+});
+
+test('官方详情只存在已确认的全天 UTC 显示差异时，仍可单次改为指定时间',async t=>{
+  const {window,execute,snapshot,zone}=await setup(t);const row=window.document.getElementById(snapshot.items[0].id);
+  const record=row.__reactProps$fixture.children.props.item;
+  record.DueDate=Date.UTC(2030,0,14,16);record.AllDay=true;record.TimeZone='Asia/Shanghai';
+  row.querySelector('.metadata').innerHTML='<span class="due-date">2030/1/14</span>';
+  window.sessionStorage.setItem('fixture-schedule-'+row.id,JSON.stringify({...date,date:'2030-01-14'}));
+  const before=await execute({type:'read'});
+  const timed={...date,time:'14:35',timeZone:zone};
+  const result=await execute(command(before.snapshot,'setSchedule',0,{expectedSchedule:date,value:timed}));
+  assert.equal(result.code,'WEB_STATE_OBSERVED');assert.equal(window.fixtureScheduleSaveClicks,1);
+  const after=await execute(command(result.snapshot));
+  assert.deepEqual(JSON.parse(JSON.stringify(after.schedule)),timed);
+});
+
+test('全天详情出现其他日期时不能把任意差异当作时区修正',async t=>{
+  const {window,execute,snapshot}=await setup(t);const row=window.document.getElementById(snapshot.items[0].id);
+  const record=row.__reactProps$fixture.children.props.item;
+  record.DueDate=Date.UTC(2030,0,14,16);record.AllDay=true;record.TimeZone='Asia/Shanghai';
+  row.querySelector('.metadata').innerHTML='<span class="due-date">2030/1/14</span>';
+  window.sessionStorage.setItem('fixture-schedule-'+row.id,JSON.stringify({...date,date:'2030-01-16'}));
+  const before=await execute({type:'read'});
+  const result=await execute(command(before.snapshot,'setSchedule',0,{expectedSchedule:date,value:empty}));
+  assert.equal(result.code,'SCHEDULE_UNAVAILABLE');
+  assert.equal(window.fixtureScheduleInputs.length,0);assert.equal(window.fixtureScheduleSaveClicks,0);
+  assert.equal(window.fixtureScheduleCancels,1);
+});
+
 test('兼容官方旧版主机属性绑定，仍不读取内部实例或容器',async t=>{
   const {window,execute}=await setup(t);const row=window.document.querySelector('.reminder-item');
   Object.defineProperty(row,'__reactEventHandlers$fixture',{value:row.__reactProps$fixture,configurable:true});delete row.__reactProps$fixture;

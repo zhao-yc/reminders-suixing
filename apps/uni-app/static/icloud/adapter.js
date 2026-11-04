@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.2') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.3') return;
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   var listHandles = new WeakMap();
@@ -612,6 +612,15 @@
 
   function sameSchedule(first, second) { return first && second && first.date === second.date && first.time === second.time && first.timeZone === second.timeZone; }
 
+  /** 官方全天编辑器可能显示时间戳的 UTC 日历日；仅接受这个已确认的显示差异。 */
+  function detailsMatchLoadedSchedule(current, loaded) {
+    if (sameSchedule(current,loaded.schedule)) return true;
+    if (!current || !loaded.allDay || current.time !== null || current.timeZone !== null) return false;
+    var date = new root.Date(loaded.due);
+    var utcDate = padded(date.getUTCFullYear(),4)+'-'+padded(date.getUTCMonth()+1)+'-'+padded(date.getUTCDate());
+    return current.date === utcDate;
+  }
+
   async function getSchedule(command) {
     var context = scheduleContext(command);
     if (!context) return result(false,'STALE_VIEW','事项已变化，请先刷新。');
@@ -679,6 +688,10 @@
       await cancelScheduleDetails(details); lastSnapshot = null;
       return result(false,'SCHEDULE_UNAVAILABLE','当前事项需要在官方页面编辑日期。');
     }
+    if (!detailsMatchLoadedSchedule(current,loaded)) {
+      await cancelScheduleDetails(details); lastSnapshot = null;
+      return result(false,'SCHEDULE_UNAVAILABLE','官方日期与当前读取不一致，请在官方页面核对。',{dispatched:false,cloudConfirmed:false});
+    }
     if (!await fillScheduleDraft(details,command.value) || !scheduleContext(command)) {
       await cancelScheduleDetails(details); lastSnapshot = null;
       return result(false,'UNCERTAIN_WRITE','日期草稿未通过核对，请先刷新；不要重复保存。',{dispatched:true,cloudConfirmed:false});
@@ -697,7 +710,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.2',
+    version: '0.3.3',
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');
