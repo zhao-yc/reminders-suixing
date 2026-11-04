@@ -1,7 +1,7 @@
 const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting } = require('./verification-ui.cjs');
 
 const TEST_PREFIX = '随行验证';
 const TEST_ITEM = '随行验证 · 最小读写验证';
@@ -19,6 +19,17 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
     return controller.execute({ type: 'selectList', pageId: result.snapshot.pageId, listId: lists[0].id }, 'cn');
   }
   if (result.snapshot.activeListId !== lists[0].id) return { ok: false, code: 'TEST_LIST_NOT_SELECTED' };
+  if (command === 'verify-test-sorting') {
+    if (!result.snapshot.items.length || result.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX))) return {ok:false,code:'TEST_ITEMS_REQUIRED'};
+    sendSnapshot(result);
+    await new Promise(resolve=>setTimeout(resolve,120));
+    let observed=false;
+    try {observed=await ui.webContents.executeJavaScript('('+verifyTestSorting.toString()+')('+JSON.stringify({pageId:result.snapshot.pageId,listId:lists[0].id,ids:result.snapshot.items.map(item=>item.id)})+')',true);}
+    catch {return {ok:false,code:'TEST_SORTING_UNCONFIRMED'};}
+    const after=await controller.execute({type:'read'},'cn');
+    const unchanged=after.ok && JSON.stringify(after.snapshot.items.map(item=>item.fingerprint))===JSON.stringify(result.snapshot.items.map(item=>item.fingerprint));
+    return {ok:observed && unchanged,code:observed && unchanged?'TEST_SORTING_OBSERVED':'TEST_SORTING_UNCONFIRMED',restored:observed,webItemsUnchanged:unchanged};
+  }
   if (command === 'create-test-item') {
     const existing = result.snapshot.items.filter(item => item.title === TEST_CREATED_ITEM);
     if (existing.length > 1) return { ok:false, code:'TEST_CREATED_NOT_UNIQUE' };
@@ -145,7 +156,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (!['environment', 'diagnostics', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date', 'cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
+    if (!['environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date', 'cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
     if (command === 'quit') { quit(); return; }
     if (busy) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));
@@ -164,6 +175,8 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
         result = await controller.diagnostics();
       } else if (command === 'inspect-test-editor') {
         result = await controller.inspectTestEditor();
+      } else if (command === 'verify-test-sorting') {
+        result = await testOperation(controller,command,{sendSnapshot,ui});
       } else if (['open-test-details','inspect-test-details','inspect-test-date-binding','preview-test-date','cancel-test-details'].includes(command)) {
         result = await controller.inspectTestDetails({'open-test-details':'open','inspect-test-details':'inspect','inspect-test-date-binding':'binding','preview-test-date':'preview-date','cancel-test-details':'cancel'}[command]);
       } else {

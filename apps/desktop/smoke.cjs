@@ -90,6 +90,54 @@ async function runSmoke({ frontendURL, root }) {
     const ipcRead = await ui.webContents.executeJavaScript('window.suixingDesktop.execute({type:"read"},"cn").then(r=>({ok:r.ok,count:r.snapshot?.items.length}))');
     assert.equal(ipcRead.ok, true);
     assert.equal(ipcRead.count, 2);
+    // 排序只改本地显示；合成网页中的记录次序和写入次数必须保持不变。
+    await controller.window().webContents.executeJavaScript(`(()=>{
+      const w=document.querySelector('iframe').contentWindow;
+      w.sessionStorage.setItem('fixture-complete','false');
+      for(const [index,title,date] of [[0,'随行验证 · 任务10','2030-01-20'],[1,'随行验证 · 任务2','2030-01-10']]) {
+        const id='reminder-item-fixture-one-'+index;
+        w.sessionStorage.setItem('fixture-text-'+id+'-title',title);
+        w.sessionStorage.setItem('fixture-schedule-'+id,JSON.stringify({date,time:null,timeZone:null}));
+      }
+      w.renderFixture('one');
+    })()`);
+    const sorting=await controller.execute({type:'read'},'cn');
+    const originalIds=sorting.snapshot.items.map(item=>item.id);
+    ui.webContents.send('suixing:snapshot',{region:'cn',result:sorting});
+    const selectSort=async label=>{
+      await ui.webContents.executeJavaScript('document.querySelector(".sort-picker-label").click()');
+      await ui.webContents.executeJavaScript('new Promise((resolve,reject)=>{const deadline=Date.now()+4000;const timer=setInterval(()=>{const option=[...document.querySelectorAll(".uni-picker-select .uni-picker-item")].find(node=>node.textContent===' + JSON.stringify(label) + ');if(option){clearInterval(timer);option.click();setTimeout(resolve,80)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("排序选项未出现"))}},30)})');
+    };
+    const displayedIds=()=>ui.webContents.executeJavaScript('[...document.querySelectorAll(".reminder-row[data-record-id]")].map(row=>row.dataset.recordId)');
+    await new Promise(resolve=>setTimeout(resolve,100));
+    for(const label of ['日期：从早到晚','标题：升序']) {
+      await selectSort(label);
+      assert.deepEqual(await displayedIds(),originalIds.slice().reverse());
+    }
+    assert.equal(await ui.webContents.executeJavaScript('localStorage.getItem("suixing.settings.listSort")'),'title-ascending');
+    await ui.loadURL(frontendURL);
+    await ui.webContents.executeJavaScript('new Promise(resolve=>{const timer=setInterval(()=>{if(document.querySelector(".demo-link")){clearInterval(timer);resolve(true)}},30)})');
+    ui.webContents.send('suixing:snapshot',{region:'cn',result:sorting});
+    await new Promise(resolve=>setTimeout(resolve,100));
+    assert.ok((await ui.webContents.executeJavaScript('document.querySelector(".sort-picker-label").textContent')).includes('标题：升序'));
+    assert.deepEqual(await displayedIds(),originalIds.slice().reverse());
+    await selectSort('清单顺序');
+    assert.deepEqual(await displayedIds(),originalIds);
+    const unchanged=await controller.execute({type:'read'},'cn');
+    assert.deepEqual(unchanged.snapshot.items.map(item=>item.id),originalIds);
+    const sortingWrites=await controller.window().webContents.executeJavaScript('(()=>{const w=document.querySelector("iframe").contentWindow;return {completion:w.fixtureClicks,date:w.fixtureScheduleSaveClicks,text:w.fixtureTextSaves}})()');
+    assert.deepEqual(sortingWrites,{completion:0,date:0,text:0});
+    await controller.window().webContents.executeJavaScript(`(()=>{
+      const w=document.querySelector('iframe').contentWindow;
+      w.sessionStorage.setItem('fixture-complete','true');
+      for(let index=0;index<2;index++) {
+        const id='reminder-item-fixture-one-'+index;
+        w.sessionStorage.removeItem('fixture-text-'+id+'-title');
+        w.sessionStorage.removeItem('fixture-schedule-'+id);
+      }
+      w.renderFixture('one');
+    })()`);
+    console.log('构建界面日期及标题排序、清单顺序恢复和重建页面后设置恢复通过，未派发事项写入。');
     // 使用真实构建出的 uni-button，验证完成与取消完成均走本地界面、受限 IPC 和共用适配器。
     for (const completed of [true, false]) {
       const current = await controller.execute({ type: 'read' }, 'cn');
@@ -185,6 +233,8 @@ async function runSmoke({ frontendURL, root }) {
     ui.showInactive();await new Promise(resolve=>setTimeout(resolve,250));
     fs.writeFileSync(path.join(root,'.local/date-editor-desktop-preview.png'),(await ui.webContents.capturePage()).toPNG());
     ui.setContentSize(390,844);await new Promise(resolve=>setTimeout(resolve,400));
+    const sortBounds=await ui.webContents.executeJavaScript('(()=>{const root=document.querySelector(".list-controls");const tools=root.querySelector(".list-view-tools");const r=root.getBoundingClientRect(),t=tools.getBoundingClientRect();return {width:innerWidth,left:t.left,right:t.right,scroll:root.scrollWidth,box:r.width}})()');
+    assert.ok(sortBounds.left>=0 && sortBounds.right<=sortBounds.width+1 && sortBounds.scroll<=Math.ceil(sortBounds.box)+1,'窄屏排序入口不得超出清单控件边界');
     const pickerStates=await ui.webContents.executeJavaScript('([...document.querySelectorAll(".schedule-editor uni-picker")].map(root=>{const pane=root.querySelector(".uni-picker-container");return {present:!!pane,hidden:!!pane && getComputedStyle(pane).display==="none",stray:[...root.querySelectorAll(".uni-picker-custom")].some(node=>!node.closest(".uni-picker-container"))}}))');
     assert.equal(pickerStates.length,2);
     assert.ok(pickerStates.every(state=>state.present && state.hidden && !state.stray),'调整窗口后关闭的日期选择器必须保持隐藏和完整容器');
@@ -351,6 +401,7 @@ async function runSmoke({ frontendURL, root }) {
     report.checks.push('日期编辑器单次设置全天、指定时间及清除');
     report.checks.push('普通模式隐藏官方窗口日期读写');
     report.checks.push('日期编辑器窄屏布局、选择器展开与取消');
+    report.checks.push('本地清单排序、原顺序恢复、设置恢复及窄屏入口');
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });
     fs.writeFileSync(path.join(root, '.local/desktop-smoke.json'), JSON.stringify(report, null, 2));
     console.log('桌面合成验证通过：' + report.checks.join('、'));

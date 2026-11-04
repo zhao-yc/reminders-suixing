@@ -139,4 +139,35 @@ async function editTestSchedule(expected) {
   save.click();return true;
 }
 
-module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule };
+/** 只在专用清单操作本地排序菜单，结束恢复原设置；没有任何事项编辑入口。 */
+async function verifyTestSorting(expected) {
+  const pause=()=>new Promise(resolve=>setTimeout(resolve,80));
+  const labels=['清单顺序','日期：从早到晚','日期：从晚到早','标题：升序','标题：降序'];
+  function scope() {
+    const list=document.querySelector('.list-content'),rows=[...document.querySelectorAll('.reminder-row[data-record-id]')];
+    return list?.dataset.pageId===expected.pageId && list.dataset.listId===expected.listId && !document.querySelector('.inline-editor') &&
+      rows.length>0 && rows.length===expected.ids.length && rows.every(row=>expected.ids.includes(row.dataset.recordId) && row.querySelector('.reminder-title')?.textContent.trim().startsWith('随行验证'));
+  }
+  const selected=()=>document.querySelector('.sort-picker-label')?.textContent.replace(/\s*⌄\s*$/,'').trim();
+  const original=selected();
+  if (!scope() || !labels.includes(original)) return false;
+  async function choose(label) {
+    if (!scope()) return false;
+    const picker=document.querySelector('.sort-picker');
+    if (!picker || picker.disabled || ['true',''].includes(picker.getAttribute('disabled'))) return false;
+    picker.querySelector('.sort-picker-label').click();
+    for (let attempt=0;attempt<30;attempt++) {
+      if (!scope()) return false;
+      const options=[...document.querySelectorAll('.uni-picker-select .uni-picker-item')].filter(node=>node.textContent.trim()===label);
+      if (options.length===1) {options[0].click();await pause();return scope() && selected()===label;}
+      await pause();
+    }
+    return false;
+  }
+  let verified=false;
+  try {verified=await choose('日期：从早到晚') && await choose('标题：升序');}
+  finally {if (selected()!==original && !await choose(original)) verified=false;}
+  return verified && scope() && selected()===original;
+}
+
+module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting };

@@ -48,7 +48,8 @@
       </view>
       <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId">
         <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title">{{ snapshot.activeListTitle }}</text><text class="heading-count">{{ incompleteCount }}</text></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
-        <view class="list-controls"><view class="tabs"><button data-status="pending" :disabled="busy || !!editing" :class="{ active: tab === 'pending' }" @click="selectTab('pending')">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :disabled="busy || !!editing" :class="{ active: tab === 'completed' }" @click="selectTab('completed')">已完成 <text>{{ completeCount }}</text></button></view><text class="current-scope">当前清单已加载</text></view>
+        <view class="list-controls"><view class="tabs"><button data-status="pending" :disabled="busy || !!editing" :class="{ active: tab === 'pending' }" @click="selectTab('pending')">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :disabled="busy || !!editing" :class="{ active: tab === 'completed' }" @click="selectTab('completed')">已完成 <text>{{ completeCount }}</text></button></view><view class="list-view-tools"><text class="current-scope">当前清单已加载</text><picker class="sort-picker" :range="sortLabels" :value="sortIndex" :disabled="busy || !!editing" @change="changeSort"><view class="sort-picker-label" role="button" :aria-label="'显示排序：' + sortLabels[sortIndex]">{{ sortLabels[sortIndex] }} ⌄</view></picker></view></view>
+        <text v-if="sortMode !== 'manual'" class="sort-description">仅本地显示排序，子事项跟随主事项{{ sortMode.startsWith('date-') ? '；日期不可读的主事项列在末尾' : '' }}</text>
         <scroll-view class="items-scroll" scroll-y>
           <view v-if="editing?.creating" class="reminder-row new-reminder-row"><view class="draft-circle"></view><view class="inline-editor"><text class="editor-label">新提醒事项 · {{ snapshot.activeListTitle }}</text><input v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" placeholder="提醒我…" aria-label="新事项标题" @confirm="confirmEdit" @keydown="editKeydown" /><view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '添加中…' : '添加' }}</button><button :disabled="busy" @click="endEdit">取消</button></view></view></view>
           <view v-if="!visibleItems.length && !editing?.creating" class="empty-list"><text class="empty-circle">✓</text><text>{{ search ? '没有找到相关事项' : tab === 'completed' ? '这里会显示网页已加载的完成事项' : '这份清单暂时没有待办事项' }}</text><button v-if="canCreate && tab === 'pending' && !search" class="empty-add" :disabled="busy || !!editing || (!live && !isDemo)" @click="startCreate">添加提醒事项</button></view>
@@ -92,6 +93,7 @@ import { createBridge } from '../../lib/bridge.js';
 import { demoSnapshot } from '../../lib/demo.js';
 import { readRegionPreference, saveRegionPreference } from '../../lib/region-preference.js';
 import { validSchedule, localDateString } from '../../lib/schedule.js';
+import { SORT_OPTIONS, readSortPreference, saveSortPreference, sortLoadedItems } from '../../lib/list-sort.js';
 // #ifdef APP-HARMONY
 import HarmonyICloudHost from '../../components/HarmonyICloudHost.vue';
 import { onBackPress } from '@dcloudio/uni-app';
@@ -103,11 +105,14 @@ onBackPress(() => bridge.hideSite());
 // #endif
 const regionLabels = ['中国大陆', '其他地区'];
 // 显式调用 uni API，确保 H5 按需编译包含存储能力；测试替身只在纯逻辑测试中使用。
-const regionStorage = {
+const settingsStorage = {
   getStorageSync: key => uni.getStorageSync(key),
   setStorageSync: (key, value) => uni.setStorageSync(key, value)
 };
-const region = ref(readRegionPreference(regionStorage));
+const region = ref(readRegionPreference(settingsStorage));
+const sortLabels = SORT_OPTIONS.map(option => option.label);
+const sortMode = ref(readSortPreference(settingsStorage));
+const sortIndex = computed(() => SORT_OPTIONS.findIndex(option => option.value === sortMode.value));
 const snapshot = ref(null);
 const busy = ref(false);
 const live = ref(false);
@@ -124,7 +129,7 @@ const search = ref('');
 const searchFocused = ref(false);
 const incompleteCount = computed(() => snapshot.value?.items.filter(item => !item.completed).length || 0);
 const completeCount = computed(() => snapshot.value?.items.filter(item => item.completed).length || 0);
-const visibleItems = computed(() => (snapshot.value?.items || []).filter(item => item.completed === (tab.value === 'completed') && (!search.value || (item.title + item.notes).toLowerCase().includes(search.value.toLowerCase()))));
+const visibleItems = computed(() => sortLoadedItems(snapshot.value?.items || [],sortMode.value).filter(item => item.completed === (tab.value === 'completed') && (!search.value || (item.title + item.notes).toLowerCase().includes(search.value.toLowerCase()))));
 const formattedTime = computed(() => snapshot.value ? '读取于 ' + new Date(snapshot.value.capturedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '');
 
 /** 只在成功取得新快照时允许写入；失败后保留展示，但将旧内容设为只读。 */
@@ -222,9 +227,20 @@ function changeRegion(event) {
   snapshot.value = null;
   isDemo.value = false;
   live.value = false;
-  const saved = saveRegionPreference(regionStorage, next);
+  const saved = saveRegionPreference(settingsStorage, next);
   notice.value = saved ? '服务区域已切换，请重新连接。' : '本次已切换区域，但未能保存设置；下次启动请重新选择。';
   noticeError.value = !saved;
+}
+
+function changeSort(event) {
+  if (busy.value || editing.value) return;
+  const index = Number(event.detail.value);
+  if (!Number.isInteger(index) || !SORT_OPTIONS[index]) return;
+  sortMode.value = SORT_OPTIONS[index].value;
+  if (!saveSortPreference(settingsStorage,sortMode.value)) {
+    notice.value = '本次排序已切换，但未能保存设置；下次启动请重新选择。';
+    noticeError.value = true;
+  }
 }
 
 function startEdit(item, field) {
@@ -383,8 +399,10 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .toolbar-search:focus-within { background:#fff; border-color:#92bcf4; }.toolbar-search .search { flex:1; min-width:0; width:100%; padding:0; background:transparent; font-size:12px; height:34px; }
 .search-mark { width:11px; height:11px; border:1.6px solid #97a3b3; border-radius:50%; position:relative; flex-shrink:0; margin-right:2px; }.search-mark::after { content:''; position:absolute; width:5px; height:1.6px; background:#97a3b3; right:-4px; bottom:-2px; transform:rotate(45deg); }
 .current-scope { font-size:10px; color:#a3adba; }.list-content { padding:24px 34px 0; }.list-heading { margin-bottom:16px; }.eyebrow { margin-bottom:5px; }.list-title { font-size:32px; }.reminder-row { padding:16px 2px; }.reminder-copy { gap:4px; }
+.list-view-tools { display:flex; align-items:center; gap:12px; min-width:0; }.sort-picker { flex-shrink:0; max-width:132px; }.sort-picker-label { padding:10px 0; color:#71829a; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.sort-description { display:block; color:#98a4b4; font-size:10px; line-height:1.6; padding:9px 0 2px; }
 .new-reminder-row { background:#f8fbff; border-radius:9px; padding:16px 10px; margin-top:10px; gap:15px; }.draft-circle { width:22px; height:22px; border:1.5px solid #cbd4df; border-radius:50%; margin-top:29px; flex-shrink:0; }.new-reminder-row .inline-editor { min-width:0; flex:1; }.empty-add { color:#1687ff; font-size:12px; padding:8px 12px; }
 .schedule-editor { max-width:320px; width:100%; display:flex; flex-direction:column; gap:10px; }.schedule-toggle-row { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#62738a; font-size:12px; }.schedule-toggle { margin:0; width:42px; padding:3px 8px; border-radius:14px; background:#e5eaf0; color:#8492a5; font-size:11px; }.schedule-toggle[aria-checked="true"] { background:#e2f0ff; color:#1687ff; }.schedule-value-row { display:flex; align-items:center; gap:8px; min-width:0; }.schedule-value-row input { flex:1; min-width:0; }.schedule-picker-button { width:35px; height:35px; border-radius:7px; display:flex; align-items:center; justify-content:center; color:#1687ff; background:#edf5ff; font-size:20px; }.schedule-presets { display:flex; gap:8px; }.schedule-presets button { margin:0; padding:3px 9px; color:#1687ff; background:#f0f6ff; font-size:11px; border-radius:5px; }.schedule-zone { color:#98a4b4; font-size:10px; overflow-wrap:anywhere; }
 @media (max-width:760px) { .sidebar { position:fixed; top:0; bottom:0; left:0; z-index:30; transform:translateX(-100%); transition:transform .2s ease; padding-top:calc(28px + env(safe-area-inset-top)); }.sidebar.is-open { transform:translateX(0); }.sidebar-scrim { display:block; position:fixed; inset:0; z-index:25; background:#26324735; }.mobile-menu { display:block; color:#74839a; font-size:19px; width:28px; }.toolbar { height:calc(68px + env(safe-area-inset-top)); padding:env(safe-area-inset-top) 20px 0; gap:8px; }.toolbar-label { display:none; }.toolbar-actions { gap:10px; }.region-picker { font-size:10px; }.quiet-button { font-size:12px; }.primary-button { font-size:12px; padding:9px 15px; }.notice { margin:12px 20px 0; font-size:11px; }.list-content { padding:28px 24px 0; }.list-title { font-size:32px; }.heading-count { font-size:26px; }.list-heading { margin-bottom:21px; }.search { width:125px; font-size:10px; }.tabs { gap:18px; }.tabs button { font-size:11px; }.reminder-row { gap:13px; padding:21px 0; }.reminder-title { font-size:14px; }.list-footer { padding-bottom:calc(20px + env(safe-area-inset-bottom)); font-size:9px; }.welcome-title { font-size:33px; }.welcome { padding-bottom:40px; }.source-chip { font-size:9px; padding:6px 8px; } }
 @media (max-width:760px) { .toolbar.with-tools { height:calc(114px + env(safe-area-inset-top)); padding-bottom:10px; flex-wrap:wrap; align-content:center; row-gap:10px; }.toolbar.with-tools .mobile-menu { order:1; }.toolbar-actions { order:2; margin-left:auto; }.quick-tools { order:3; flex-basis:100%; }.toolbar-search { flex:1; width:auto; }.list-content { padding-top:22px; }.new-reminder-row { padding:15px 10px; } }
+@media (max-width:760px) { .list-view-tools .current-scope { display:none; }.list-view-tools { gap:0; }.sort-picker { max-width:116px; }.sort-picker-label { font-size:10px; }.sort-description { font-size:9px; } }
 </style>

@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { clickTestCompletion, showTestCompleted, editTestSchedule } = require('../apps/desktop/verification-ui.cjs');
+const { clickTestCompletion, showTestCompleted, editTestSchedule, verifyTestSorting } = require('../apps/desktop/verification-ui.cjs');
 const { testOperation, summarize } = require('../apps/desktop/live-check.cjs');
 
 for (const tag of ['button', 'uni-button']) {
@@ -127,4 +127,36 @@ test('日期验收只打开目标行，填写可选日期时间并保存一次',
   const expected={pageId:'synthetic-page',listId:'synthetic-list',id:'target',completed:false,value:{date:'2030-01-15',time:'14:35',timeZone:'UTC'}};
   assert.equal(await dom.window.eval('('+editTestSchedule.toString()+')('+JSON.stringify(expected)+')'),true);
   assert.equal(opened,1);assert.equal(saved,1);assert.equal(actual.date,'2030-01-15');assert.equal(actual.time,'14:35');
+});
+
+test('排序验收只操作专用清单的本地菜单，结束恢复原设置且普通事项不打开菜单',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="synthetic-page" data-list-id="synthetic-list"><div class="sort-picker"><button class="sort-picker-label">清单顺序 ⌄</button></div><div class="reminder-row" data-record-id="synthetic-record"><span class="reminder-title">随行验证 · 合成排序</span><button class="completion-button"></button></div></div>',{runScripts:'outside-only'});
+  t.after(()=>dom.window.close());dom.window.setTimeout=callback=>setTimeout(callback,0);
+  const doc=dom.window.document,label=doc.querySelector('.sort-picker-label');const selected=[];
+  doc.querySelector('.completion-button').addEventListener('click',()=>assert.fail('排序不得完成事项'));
+  label.addEventListener('click',()=>{
+    const menu=doc.createElement('div');menu.className='uni-picker-select';
+    for(const text of ['清单顺序','日期：从早到晚','标题：升序']) {
+      const option=doc.createElement('button');option.className='uni-picker-item';option.textContent=text;
+      option.addEventListener('click',()=>{selected.push(text);label.textContent=text+' ⌄';menu.remove();});menu.append(option);
+    }
+    doc.body.append(menu);
+  });
+  const expected={pageId:'synthetic-page',listId:'synthetic-list',ids:['synthetic-record']};
+  assert.equal(await dom.window.eval('('+verifyTestSorting.toString()+')('+JSON.stringify(expected)+')'),true);
+  assert.deepEqual(selected,['日期：从早到晚','标题：升序','清单顺序']);
+  doc.querySelector('.reminder-title').textContent='合成普通事项';
+  assert.equal(await dom.window.eval('('+verifyTestSorting.toString()+')('+JSON.stringify(expected)+')'),false);
+  assert.equal(selected.length,3);
+});
+
+test('排序通道只读取核对，不发送事项写入，读回冲突时不宣称通过',async()=>{
+  const base=scopedController(false);let rendered=0;
+  const result=await testOperation(base,'verify-test-sorting',{sendSnapshot(){},ui:{webContents:{async executeJavaScript(){rendered++;return true;}}}});
+  assert.deepEqual(result,{ok:true,code:'TEST_SORTING_OBSERVED',restored:true,webItemsUnchanged:true});
+  assert.equal(rendered,1);
+  let reads=0;
+  const changed={async execute(command){const result=structuredClone(await base.execute(command));result.snapshot.items[0].fingerprint=String(reads++);return result;}};
+  const conflict=await testOperation(changed,'verify-test-sorting',{sendSnapshot(){},ui:{webContents:{executeJavaScript:async()=>true}}});
+  assert.equal(conflict.code,'TEST_SORTING_UNCONFIRMED');assert.equal(conflict.webItemsUnchanged,false);
 });

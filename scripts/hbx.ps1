@@ -1,4 +1,4 @@
-param(
+﻿param(
   [ValidateSet('web', 'publish-web', 'android-resource', 'android', 'harmony-resource', 'devices')]
   [string]$Action = 'web'
 )
