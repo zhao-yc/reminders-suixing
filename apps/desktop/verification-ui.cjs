@@ -337,4 +337,18 @@ async function editTestListAppearance(expected) {
   return true;
 }
 
-module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList, deleteTestList, selectTestListClient, editTestListAppearance };
+/** 层级验收只在匹配的本地确认中提交，预检不直接发送官方快捷键。 */
+async function editTestSubtask(expected) {
+  const pause=()=>new Promise(resolve=>setTimeout(resolve,100)),disabled=node=>!node || node.disabled || node.hasAttribute('disabled');
+  const list=document.querySelector('.list-content'),row=[...document.querySelectorAll('.reminder-row')].find(row=>row.dataset.recordId===expected.id),button=row?.querySelector('.subtask-item-button');
+  if(!expected.title?.startsWith('随行验证') || list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId || row?.querySelector('.reminder-title')?.textContent.trim()!==expected.title || document.querySelector('.inline-editor') || disabled(button))return false;
+  button.click();let panel;
+  for(let attempt=0;attempt<120;attempt++){await pause();panel=row.querySelector('.subtask-confirmation');if(panel)break;if(document.querySelector('.notice.error'))return false;}
+  if(!panel || !panel.querySelector('.delete-title')?.textContent.includes(expected.title))return false;
+  if(expected.preview)return true;
+  const action=row.querySelector(expected.cancel?'.cancel-subtask':'.confirm-subtask');if(disabled(action))return false;action.click();
+  if(expected.cancel){await pause();return !document.querySelector('.inline-editor');}
+  return true;
+}
+
+module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList, deleteTestList, selectTestListClient, editTestListAppearance, editTestSubtask };

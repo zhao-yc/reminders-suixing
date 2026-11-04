@@ -79,6 +79,7 @@ function renderFixture(list) {
     if (schedule.date) {const element=document.createElement('span');element.className='due-date';element.textContent=record.AllDay?new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'numeric',day:'numeric',timeZone:'UTC'}).format(new Date(due)):schedule.date+' '+schedule.time;row.querySelector('.metadata').append(element);}
     row.querySelector('.info').addEventListener('click',()=>openFixtureSchedule(row));
   });
+  applyFixtureHierarchy();
   document.querySelectorAll('.title [role="textbox"], .notes [role="textbox"]').forEach(editor => {
     const field = editor.closest('.title') ? 'title' : 'notes';
     const key = 'fixture-text-' + editor.closest('.reminder-item').id + '-' + field;
@@ -294,7 +295,22 @@ document.querySelectorAll('[role="treeitem"]').forEach(node => node.addEventList
   document.querySelectorAll('[role="treeitem"]').forEach(other => other.setAttribute('aria-selected', String(other === node)));
   renderFixture(node.dataset.list);
 }));
+function applyFixtureHierarchy() {
+  const parents=JSON.parse(sessionStorage.getItem('fixture-parents') || '{}'),rows=[...document.querySelectorAll('.reminder-item[role="row"]')];
+  const groups=new Map();for(const row of rows){const parent=parents[row.id] || null;groups.has(parent)?groups.get(parent).push(row):groups.set(parent,[row]);}
+  for(const row of rows){const parent=parents[row.id] || null,siblings=groups.get(parent);row.setAttribute('aria-level',parent?'2':'1');row.setAttribute('aria-posinset',String(siblings.indexOf(row)+1));row.setAttribute('aria-setsize',String(siblings.length));if(groups.has(row.id))row.setAttribute('aria-expanded','true');else row.removeAttribute('aria-expanded');}
+}
+
 document.querySelector('[role="treegrid"]').addEventListener('keydown',event=>{
+  if(['[',']'].includes(event.key) && (event.ctrlKey || event.metaKey)) {
+    window.fixtureSubtaskKeys=(window.fixtureSubtaskKeys || 0)+1;event.preventDefault();if(window.fixtureRejectSubtask)return;
+    const rows=[...event.currentTarget.querySelectorAll('.reminder-item')],selected=rows.filter(row=>row.getAttribute('aria-selected')==='true');if(selected.length!==1)return;
+    const target=selected[0],index=rows.indexOf(target),parents=JSON.parse(sessionStorage.getItem('fixture-parents') || '{}');
+    if(event.key===']'){if(parents[target.id])return;let previous;for(let i=index-1;i>=0;i--){if(!parents[rows[i].id]){previous=rows[i];break;}}if(!previous)return;parents[target.id]=previous.id;}
+    else {const old=parents[target.id];if(!old)return;delete parents[target.id];for(let i=index+1;i<rows.length && parents[rows[i].id]===old;i++)parents[rows[i].id]=target.id;}
+    sessionStorage.setItem('fixture-parents',JSON.stringify(parents));applyFixtureHierarchy();if(window.fixtureAfterSubtask)window.fixtureAfterSubtask();return;
+  }
+
   if(event.target.closest('[contenteditable]') || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
   const grid=event.currentTarget,rows=[...grid.querySelectorAll('.reminder-item')];
   if(['Home','ArrowDown'].includes(event.key)) {

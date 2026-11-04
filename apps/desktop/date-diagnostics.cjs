@@ -78,9 +78,10 @@ async function inspectTestDetailsDocument(action = 'inspect', doc = document) {
     const known={'无':'none','低优先级':'low','中优先级':'medium','高优先级':'high','None':'none','Low':'low','Medium':'medium','High':'high'};
     const group=groups.length===1?groups[0]:null;
     const controls=group?group.querySelectorAll('input,select,button,[role="button"],[role="combobox"],[contenteditable="true"],[tabindex]'):[];
+    const listGroups=[...panel.querySelectorAll('.list-info')],listControls=listGroups.flatMap(group=>[...group.querySelectorAll('input,select,button,[role="button"],[role="combobox"],[role="listbox"],[contenteditable="true"],[tabindex]')]);
     const title=targets[0].querySelector('.title'),cell=title?.previousElementSibling;
     const icons=cell?[...cell.querySelectorAll('.priority[data-priority-level]')]:[];
-    return {ok:true,code:'TEST_PRIORITY_SHAPE',groups:groups.length,controls:controls.length,
+    return {ok:true,code:'TEST_PRIORITY_SHAPE',groups:groups.length,controls:controls.length,listGroups:listGroups.length,listControls:listControls.length,rowDraggable:targets[0].draggable===true,
       value:known[group?.querySelector('.ellipsis')?.textContent.trim()] || null,
       rowCell:cell?.getAttribute('role')==='gridcell',rowChildren:cell?.children.length ?? null,
       iconLevels:icons.map(node=>[1,5,9].includes(Number(node.getAttribute('data-priority-level')))?Number(node.getAttribute('data-priority-level')):null)};

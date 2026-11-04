@@ -1,7 +1,7 @@
 const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList, deleteTestList, selectTestListClient, editTestListAppearance } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList, deleteTestList, selectTestListClient, editTestListAppearance, editTestSubtask } = require('./verification-ui.cjs');
 
 const TEST_PREFIX = '随行验证';
 const TEST_LIST = '随行验证（2026-11-04）';
@@ -14,10 +14,12 @@ const TEST_NOTE = '随行验证 · 备注写入验证\n随行验证 · 第二行
 const TEST_CREATED_ITEM = '随行验证 · Windows 新增验证';
 const TEST_SYNC_ITEM = '随行验证 · Windows 同步验证';
 const TEST_DELETE_ITEM = '随行验证 · Windows 删除验证';
+const TEST_SUBTASK_PARENT = '随行验证 · Windows 子事项父项';
+const TEST_SUBTASK_CHILD = '随行验证 · Windows 子事项子项';
 
 /** 固定验收命令的中断分类；新增命令不能把可能已写入的异常降为普通失败。 */
 function isWriteTestCommand(command) {
-  return ['create-appearance-test-list','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list','delete-management-test-list','create-management-test-list','rename-management-test-list','restore-management-test-list','create-delete-test-item','delete-test-item','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','flag-created-test-item','unflag-created-test-item','complete-test-item','uncomplete-test-item','edit-test-title','restore-test-title','edit-test-note','clear-test-note','create-test-item','set-test-date','set-test-time','clear-test-schedule'].includes(command);
+  return ['create-subtask-test-parent','create-subtask-test-child','indent-subtask-test-item','outdent-subtask-test-item','delete-subtask-test-child','delete-subtask-test-parent','create-appearance-test-list','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list','delete-management-test-list','create-management-test-list','rename-management-test-list','restore-management-test-list','create-delete-test-item','delete-test-item','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','flag-created-test-item','unflag-created-test-item','complete-test-item','uncomplete-test-item','edit-test-title','restore-test-title','edit-test-note','clear-test-note','create-test-item','set-test-date','set-test-time','clear-test-schedule'].includes(command);
 }
 
 /** 自动写入只能命中唯一的专用验证清单与验证事项，名称仅用于限定测试范围。实际写入仍使用记录 ID 与指纹。 */
@@ -115,6 +117,41 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
     return controller.execute({ type: 'selectList', pageId: result.snapshot.pageId, listId: lists[0].id }, 'cn');
   }
   if (result.snapshot.activeListId !== lists[0].id) return { ok: false, code: 'TEST_LIST_NOT_SELECTED' };
+  if(['create-subtask-test-parent','create-subtask-test-child','read-subtask-test-state','cancel-subtask-test-indent','indent-subtask-test-item','outdent-subtask-test-item','delete-subtask-test-child','delete-subtask-test-parent'].includes(command)){
+    if(result.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX)))return {ok:false,code:'TEST_ITEMS_REQUIRED'};
+    const parents=result.snapshot.items.filter(item=>item.title===TEST_SUBTASK_PARENT),children=result.snapshot.items.filter(item=>item.title===TEST_SUBTASK_CHILD);
+    if(parents.length>1 || children.length>1)return {ok:false,code:'TEST_SUBTASK_NOT_UNIQUE'};
+    const namedParent=parents[0],namedChild=children[0],ordered=result.snapshot.items.filter(item=>[TEST_SUBTASK_PARENT,TEST_SUBTASK_CHILD].includes(item.title));
+    // 顶栏新增可能插在头部；测试名称只限定归属，按官方实际顺序识别这两条的父/子角色。
+    const parent=ordered.length===2?ordered[0]:namedParent,child=ordered.length===2?ordered[1]:namedChild,clean=item=>item && item.completed===false && item.notes==='' && item.flagged===false && item.schedule?.date===null && item.schedule.time===null;
+    const state=parent && child?child.level===2 && child.parentId===parent.id && parent.level===1?'nested':parent.level===1 && child.level===1?'flat':'other':!parent && !child?'none':'partial';
+    if(command==='read-subtask-test-state')return {...result,code:'SUBTASK_TEST_READ',subtaskState:state,subtaskOrder:ordered.length===2?ordered[0].title===TEST_SUBTASK_PARENT?'parent-first':'child-first':'partial',dispatched:false};
+    const creating=command.startsWith('create-'),deleting=command.startsWith('delete-'),parentTarget=command.endsWith('-parent'),target=creating || deleting?parentTarget?namedParent:namedChild:child;
+    if(creating && target)return {...result,code:'UNCHANGED',dispatched:false};
+    if(creating && parentTarget && namedChild)return {ok:false,code:'TEST_SUBTASK_STATE_UNSUPPORTED'};
+    if(creating && !parentTarget && (!clean(namedParent) || namedParent.level!==1))return {ok:false,code:'TEST_SUBTASK_PARENT_REQUIRED'};
+    if(!creating && (!clean(target) || !deleting && (!clean(parent) || !clean(child)) || deleting && (target.level!==1 || parentTarget && !!namedChild)))return {ok:false,code:'TEST_SUBTASK_STATE_UNSUPPORTED'};
+    if(!creating && !deleting && (command==='outdent-subtask-test-item'?state!=='nested':state!=='flat'))return {ok:false,code:'TEST_SUBTASK_STATE_UNSUPPORTED'};
+    const others=result.snapshot.items.filter(item=>creating || deleting?item.id!==target?.id:![parent.id,child.id].includes(item.id)).map(item=>item.fingerprint);
+    let expected={pageId:result.snapshot.pageId,listId:result.snapshot.activeListId};
+    if(creating)expected={...expected,title:parentTarget?TEST_SUBTASK_PARENT:TEST_SUBTASK_CHILD};
+    else if(deleting)expected={...expected,id:target.id,title:target.title};
+    else {
+      const info=await controller.execute({type:'getSubtaskInfo',...expected,id:child.id,fingerprint:child.fingerprint,expectedCompleted:false,direction:command==='outdent-subtask-test-item'?'outdent':'indent'},'cn');
+      if(!info.ok)return info;if(info.subtask.parentTitle!==parent.title || info.subtask.affectedCount!==1)return {ok:false,code:'TEST_SUBTASK_PLAN_UNSUPPORTED'};
+      result=info;expected={...expected,id:child.id,title:child.title,cancel:command==='cancel-subtask-test-indent'};
+    }
+    sendSnapshot(result);await new Promise(resolve=>setTimeout(resolve,120));let clicked;
+    try{clicked=await ui.webContents.executeJavaScript('('+(creating?createTestItem:deleting?deleteTestItem:editTestSubtask).toString()+')('+JSON.stringify(expected)+')',true);}catch{return {ok:false,code:isWriteTestCommand(command)?'UNCERTAIN_WRITE':'VERIFICATION_FAILED',cloudConfirmed:false};}
+    if(!clicked)return {ok:false,code:'TEST_SUBTASK_UI_UNCONFIRMED'};
+    if(command==='cancel-subtask-test-indent')return {...result,code:'SUBTASK_TEST_CANCELLED',dispatched:false};
+    for(let attempt=0;attempt<90;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,200));const current=await controller.execute({type:'read'},'cn');if(!current.ok || current.snapshot.activeListId!==expected.listId)continue;
+      const p=current.snapshot.items.find(item=>item.id===parent?.id),c=current.snapshot.items.find(item=>item.id===child?.id),observed=creating?current.snapshot.items.filter(item=>item.title===expected.title).length===1:deleting?!current.snapshot.items.some(item=>item.id===target.id):clean(p) && clean(c) && (command==='outdent-subtask-test-item'?c.level===1 && c.parentId===null:c.level===2 && c.parentId===p.id);
+      if(observed && others.every(fingerprint=>current.snapshot.items.some(item=>item.fingerprint===fingerprint)))return {...current,code:'WEB_STATE_OBSERVED',dispatched:true,cloudConfirmed:false,via:'Windows 本地子事项专项 IPC'};
+    }
+    return {ok:false,code:'UNCERTAIN_WRITE',dispatched:true,cloudConfirmed:false};
+  }
   if(['cancel-delete-test-item','delete-test-item'].includes(command)) {
     if(result.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX))) return {ok:false,code:'TEST_ITEMS_REQUIRED'};
     const targets=result.snapshot.items.filter(item=>item.title===TEST_DELETE_ITEM);
@@ -289,6 +326,7 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
 
 /** 只输出数量及专用测试事项的布尔状态，不把个人清单标题、正文或标识写入日志。 */
 function summarize(result) {
+  if(result.subtaskState && result.snapshot)return {...summarize({...result,subtaskState:undefined}),subtaskState:result.subtaskState,subtaskOrder:result.subtaskOrder};
   if(result.appearanceStyle && result.snapshot)return {...summarize({...result,appearanceStyle:undefined}),appearanceStyle:result.appearanceStyle};
   const snapshot = result.snapshot;
   const testList = snapshot?.activeListTitle.startsWith(TEST_PREFIX);
@@ -312,6 +350,8 @@ function summarize(result) {
     testSyncPriority:sync.length===1?['none','low','medium','high'].includes(sync[0].priority)?sync[0].priority:null:undefined,
     deleteReady:result.deleteReady===true?true:undefined,
     testDeleteCount:testList?deletion.length:undefined,
+    testSubtaskParentCount:testList?snapshot.items.filter(item=>item.title===TEST_SUBTASK_PARENT).length:undefined,
+    testSubtaskChildCount:testList?snapshot.items.filter(item=>item.title===TEST_SUBTASK_CHILD).length:undefined,
     testDeletePending:deletion.length===1?!deletion[0].completed:undefined,
     testAppearanceListCount:snapshot?snapshot.lists.filter(list=>list.title===TEST_APPEARANCE_LIST).length:undefined,
     testManagedListCount:snapshot?managed.length:undefined,
@@ -337,7 +377,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (!['select-appearance-test-list','create-appearance-test-list','read-appearance-test-style','cancel-appearance-test-edit','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list','read-test-list-appearance','read-test-lists','select-test-list-in-client','cancel-management-list-delete','delete-management-test-list','inspect-management-list-delete','select-management-test-list','cancel-management-list-create','create-management-test-list','rename-management-test-list','restore-management-test-list','inspect-new-test-list','create-delete-test-item','cancel-delete-test-item','delete-test-item','inspect-sync-delete','open-sync-priority','inspect-sync-priority','cancel-sync-priority','reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date','cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
+    if (!['create-subtask-test-parent','create-subtask-test-child','read-subtask-test-state','cancel-subtask-test-indent','indent-subtask-test-item','outdent-subtask-test-item','delete-subtask-test-child','delete-subtask-test-parent','select-appearance-test-list','create-appearance-test-list','read-appearance-test-style','cancel-appearance-test-edit','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list','read-test-list-appearance','read-test-lists','select-test-list-in-client','cancel-management-list-delete','delete-management-test-list','inspect-management-list-delete','select-management-test-list','cancel-management-list-create','create-management-test-list','rename-management-test-list','restore-management-test-list','inspect-new-test-list','create-delete-test-item','cancel-delete-test-item','delete-test-item','inspect-sync-delete','open-sync-priority','inspect-sync-priority','cancel-sync-priority','reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date','cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
     if (command === 'quit') { quit(); return; }
     if (busy) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));

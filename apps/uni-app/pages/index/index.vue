@@ -76,13 +76,14 @@
         <scroll-view class="items-scroll" scroll-y>
           <view v-if="editing?.creating" class="reminder-row new-reminder-row"><view class="draft-circle"></view><view class="inline-editor"><text class="editor-label">新提醒事项 · {{ snapshot.activeListTitle }}</text><input v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" placeholder="提醒我…" aria-label="新事项标题" @confirm="confirmEdit" @keydown="editKeydown" /><view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '添加中…' : '添加' }}</button><button :disabled="busy" @click="endEdit">取消</button></view></view></view>
           <view v-if="!visibleItems.length && !editing?.creating" class="empty-list"><text class="empty-circle">✓</text><text>{{ !snapshot.activeListId ? snapshot.emptyAccount ? '还没有清单，先新建一份。' : '请选择一份清单继续。' : search ? '没有找到相关事项' : flagOnly ? '当前已加载内容中没有符合筛选的旗标事项' : tab === 'completed' ? '这里会显示网页已加载的完成事项' : '这份清单暂时没有待办事项' }}</text><button v-if="canCreateFirstList" class="empty-add" :disabled="busy || !!editing" @click="startListEdit('create')">新建清单</button><button v-else-if="flagOnly" class="empty-add" @click="flagOnly = false">显示全部事项</button><button v-else-if="snapshot.activeListId && canCreate && tab === 'pending' && !search" class="empty-add" :disabled="busy || !!editing || (!live && !isDemo)" @click="startCreate">添加提醒事项</button></view>
-          <view v-for="item in visibleItems" :key="item.id" class="reminder-row" :data-record-id="item.id" :data-priority="item.priority" :class="{ completed: item.completed }">
+          <view v-for="item in visibleItems" :key="item.id" class="reminder-row" :data-record-id="item.id" :data-priority="item.priority" :class="{ completed: item.completed, 'is-subtask': item.level > 1 }">
             <button class="completion-button" :class="{ checked: item.completed }" :disabled="busy || !!editing || (!live && !isDemo) || item.disabled" :aria-label="(item.completed ? '取消完成：' : '完成：') + item.title" @click="toggle(item)"><text v-if="item.completed">✓</text></button>
             <view class="reminder-copy">
               <view v-if="editing?.id === item.id" class="inline-editor">
-                <text class="editor-label">{{ editing.field === 'delete' ? '删除提醒事项' : editing.field === 'schedule' ? '日期与时间' : editing.field === 'title' ? '编辑标题' : '编辑备注' }}</text>
+                <text class="editor-label">{{ editing.field === 'subtask' ? '调整事项层级' : editing.field === 'delete' ? '删除提醒事项' : editing.field === 'schedule' ? '日期与时间' : editing.field === 'title' ? '编辑标题' : '编辑备注' }}</text>
                 <input v-if="editing.field === 'title'" v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" aria-label="事项标题" @confirm="confirmEdit" @keydown="editKeydown" />
                 <textarea v-else-if="editing.field === 'notes'" v-model="editing.value" class="edit-field edit-notes" :maxlength="2000" :focus="true" :disabled="busy || editing.blocked" auto-height aria-label="事项备注" @keydown="editKeydown" />
+                <view v-else-if="editing.field === 'subtask'" class="delete-confirmation subtask-confirmation" role="alertdialog" aria-label="确认调整事项层级"><text class="delete-title">{{ editing.direction === 'indent' ? '将“'+editing.title+'”设为“'+editing.parentTitle+'”的子事项？' : '将“'+editing.title+'”提升为顶层事项？' }}</text><text>调整会同步到使用此清单的设备。</text><template v-if="editing.affectedCount > 1"><text>后续 {{ editing.affectedCount - 1 }} 个同级子事项也会归入被提升事项：</text><view class="affected-subtasks"><text v-for="(title,index) in editing.affectedTitles.slice(1)" :key="index">{{ title }}</text></view></template></view>
                 <view v-else-if="editing.field === 'delete'" class="delete-confirmation" role="alertdialog" aria-label="确认删除提醒事项"><text class="delete-title">删除“{{ editing.title }}”？</text><text>会从 iCloud 及同步设备中移除这一条事项。</text></view>
                 <view v-else class="schedule-editor">
                   <view class="schedule-toggle-row"><text>日期</text><button class="schedule-date-toggle schedule-toggle" role="switch" :aria-checked="String(editing.useDate)" :disabled="busy || editing.blocked" @click="editing.useDate = !editing.useDate">{{ editing.useDate ? '开' : '关' }}</button></view>
@@ -94,13 +95,13 @@
                     <text v-if="editing.includeTime" class="schedule-zone">时区：{{ editing.timeZone }}</text>
                   </template>
                 </view>
-                <view class="editor-actions"><button class="save-edit" :class="{ 'confirm-delete': editing.field === 'delete' }" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked" @click="saveEdit">{{ editing.field === 'delete' ? busy ? '删除中…' : '确认删除' : busy ? '保存中…' : '保存' }}</button><button :class="{ 'cancel-delete': editing.field === 'delete' }" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view>
+                <view class="editor-actions"><button class="save-edit" :class="{ 'confirm-delete': editing.field === 'delete', 'confirm-subtask': editing.field === 'subtask' }" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked" @click="saveEdit">{{ editing.field === 'subtask' ? busy ? '调整中…' : '确认调整' : editing.field === 'delete' ? busy ? '删除中…' : '确认删除' : busy ? '保存中…' : '保存' }}</button><button :class="{ 'cancel-delete': editing.field === 'delete', 'cancel-subtask': editing.field === 'subtask' }" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view>
               </view>
               <template v-else><view class="reminder-title-line"><text v-if="item.flagged" class="flag-mark" aria-label="已添加旗标">⚑</text><text v-if="priorityInfo(item.priority).mark" class="priority-mark" :aria-label="priorityInfo(item.priority).label" :title="priorityInfo(item.priority).label + '；请在苹果设备上修改'">{{ priorityInfo(item.priority).mark }}</text><text class="reminder-title" @dblclick="startEdit(item, 'title')">{{ item.title }}</text></view><text v-if="item.notes" class="reminder-notes" @dblclick="startEdit(item, 'notes')">{{ item.notes }}</text><text v-if="item.notesTruncated" class="reminder-metadata">备注较长，请在官方页面查看完整内容</text><text v-if="item.priority === null" class="reminder-metadata">优先级不可读</text></template>
               <text v-if="item.metadata" class="reminder-metadata">{{ item.metadata }}</text>
               <text v-if="item.metadataPartial" class="reminder-metadata">部分日期附注请在官方页面查看</text>
             </view>
-            <view v-if="(canEdit || canEditSchedule || canEditFlag || canDelete) && !editing" class="row-actions"><button v-if="canEdit" class="edit-title-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑标题" @click="startEdit(item, 'title')">✎</button><button v-if="canEdit" class="edit-notes-button" :disabled="busy || (!live && !isDemo) || item.disabled || item.notesTruncated" aria-label="编辑备注" @click="startEdit(item, 'notes')">≡</button><button v-if="canEditSchedule" class="edit-schedule-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑日期与时间" @click="startScheduleEdit(item)">▦</button><button v-if="canEditFlag" class="flag-toggle-button" role="button" :tabindex="busy || item.disabled || typeof item.flagged !== 'boolean' ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled || typeof item.flagged !== 'boolean'" :aria-pressed="String(item.flagged === true)" :aria-label="item.flagged ? '移除旗标' : '添加旗标'" :class="{ 'flag-active': item.flagged }" @click="toggleFlag(item)">⚑</button><button v-if="canDelete" class="delete-item-button" role="button" :tabindex="busy || item.disabled ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="删除事项" title="删除这一条事项" @click="startDelete(item)">⌫</button></view>
+            <view v-if="(canEdit || canEditSchedule || canEditFlag || canDelete || canEditHierarchy) && !editing" class="row-actions"><button v-if="canEdit" class="edit-title-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑标题" @click="startEdit(item, 'title')">✎</button><button v-if="canEdit" class="edit-notes-button" :disabled="busy || (!live && !isDemo) || item.disabled || item.notesTruncated" aria-label="编辑备注" @click="startEdit(item, 'notes')">≡</button><button v-if="canEditSchedule" class="edit-schedule-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑日期与时间" @click="startScheduleEdit(item)">▦</button><button v-if="canEditFlag" class="flag-toggle-button" role="button" :tabindex="busy || item.disabled || typeof item.flagged !== 'boolean' ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled || typeof item.flagged !== 'boolean'" :aria-pressed="String(item.flagged === true)" :aria-label="item.flagged ? '移除旗标' : '添加旗标'" :class="{ 'flag-active': item.flagged }" @click="toggleFlag(item)">⚑</button><button v-if="canEditHierarchy" class="subtask-item-button" role="button" :tabindex="busy || item.disabled || !item.hierarchyReadable ? -1 : 0" :disabled="busy || !live || item.disabled || !item.hierarchyReadable" :aria-label="item.level > 1 ? '提升为顶层事项' : '设为上一主事项的子事项'" :title="item.level > 1 ? '提升为顶层事项' : '设为上一主事项的子事项'" @click="startSubtask(item)">{{ item.level > 1 ? '⇤' : '⇥' }}</button><button v-if="canDelete" class="delete-item-button" role="button" :tabindex="busy || item.disabled ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="删除事项" title="删除这一条事项" @click="startDelete(item)">⌫</button></view>
             <text v-if="item.level > 1" class="subtask-tag">子事项</text>
           </view>
           <view class="list-bottom-space"></view>
@@ -152,6 +153,7 @@ const canEdit = computed(() => isDemo.value || bridge.capabilities?.editText ===
 const canEditSchedule = computed(() => isDemo.value || bridge.capabilities?.editSchedule === true);
 const canEditFlag = computed(() => isDemo.value || bridge.capabilities?.editFlag === true);
 const canDelete = computed(() => isDemo.value || bridge.capabilities?.deleteItem === true);
+const canEditHierarchy = computed(() => !isDemo.value && bridge.capabilities?.editHierarchy === true);
 const canManageLists = computed(() => !isDemo.value && bridge.capabilities?.manageLists === true);
 const canDeleteList = computed(() => !isDemo.value && bridge.capabilities?.deleteList === true);
 const canEditListAppearance = computed(() => !isDemo.value && bridge.capabilities?.listAppearance === true);
@@ -295,6 +297,25 @@ async function saveDeletion(current) {
   else current.blocked=true;
 }
 
+async function startSubtask(item) {
+  if(!canEditHierarchy.value || !live.value || busy.value || editing.value || item.disabled || !item.hierarchyReadable)return;
+  const binding={pageId:snapshot.value.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed,direction:item.level===1?'indent':'outdent'};
+  const result=await run({type:'getSubtaskInfo',...binding});
+  if(result?.ok && result.subtask){
+    editing.value={field:'subtask',...binding,...result.subtask,title:item.title,requestId:'subtask-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2),blocked:false};
+    // #ifdef H5
+    nextTick(()=>document.querySelector('.cancel-subtask')?.focus());
+    // #endif
+  }
+}
+
+async function saveSubtask(current) {
+  if(!live.value)return;
+  const result=await run({type:'setSubtask',pageId:current.pageId,listId:current.listId,id:current.id,fingerprint:current.fingerprint,expectedCompleted:current.expectedCompleted,
+    direction:current.direction,expectedHierarchyFingerprint:current.hierarchyFingerprint,confirmed:true,requestId:current.requestId});
+  if(result?.ok)endEdit();else current.blocked=true;
+}
+
 async function startListAppearance() {
   if(!canEditListAppearance.value || !live.value || busy.value || editing.value)return;
   const list=snapshot.value.lists.find(list=>list.id===snapshot.value.activeListId);if(!list?.fingerprint)return;
@@ -401,7 +422,13 @@ function startEdit(item, field) {
     fingerprint: item.fingerprint, expectedCompleted: item.completed, blocked: false };
 }
 
-function endEdit() { if (!busy.value) editing.value = null; }
+function endEdit() {
+  if(busy.value)return;
+  const id=editing.value?.field==='subtask'?editing.value.id:null;editing.value=null;
+  // #ifdef H5
+  if(id)nextTick(()=>[...document.querySelectorAll('.reminder-row')].find(row=>row.dataset.recordId===id)?.querySelector('.subtask-item-button')?.focus());
+  // #endif
+}
 
 async function startScheduleEdit(item) {
   if (!canEditSchedule.value || busy.value || editing.value || item.disabled || (!live.value && !isDemo.value)) return;
@@ -467,7 +494,7 @@ function editKeydown(event) {
 function handleEditKeydown(event) {
   if (event.isComposing || event.keyCode === 229) return;
   if (event.key === 'Escape') { event.preventDefault?.(); endEdit(); }
-  else if(['delete','list-delete'].includes(editing.value?.field)) return;
+  else if(['delete','list-delete','subtask'].includes(editing.value?.field)) return;
   else if (event.key === 'Enter' && (['title','list'].includes(editing.value?.field) || event.ctrlKey || event.metaKey)) { event.preventDefault?.(); saveEdit(); }
 }
 
@@ -486,6 +513,7 @@ async function saveEdit() {
   if (!current || current.blocked || busy.value) return;
   if(current.field==='list-delete'){await saveListDeletion(current);return;}
   if(current.field==='list-appearance'){await saveListAppearance(current);return;}
+  if(current.field==='subtask'){await saveSubtask(current);return;}
   if(current.listOperation) {await saveListEdit(current);return;}
   if(current.field==='delete') {await saveDeletion(current);return;}
   if (current.field === 'schedule') { await saveSchedule(current); return; }
@@ -558,7 +586,7 @@ function workspaceKeydown(event) {
     const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(['ArrowLeft','ArrowUp'].includes(event.key)?-1:1)+buttons.length)%buttons.length;
     buttons[next].click();nextTick(()=>buttons[next].focus());return;
   }
-  const actionButton=event.target?.closest?.('.flag-toggle-button,.flag-filter,.reconnect-button,.delete-item-button,.confirm-delete,.cancel-delete,.add-list-button,.rename-list-button,.save-list-edit,.cancel-list-edit,.delete-list-button,.confirm-list-delete,.cancel-list-delete,.list-appearance-button,.appearance-choice,.save-list-appearance,.cancel-list-appearance');
+  const actionButton=event.target?.closest?.('.flag-toggle-button,.flag-filter,.reconnect-button,.delete-item-button,.confirm-delete,.cancel-delete,.add-list-button,.rename-list-button,.save-list-edit,.cancel-list-edit,.delete-list-button,.confirm-list-delete,.cancel-list-delete,.list-appearance-button,.appearance-choice,.save-list-appearance,.cancel-list-appearance,.subtask-item-button,.confirm-subtask,.cancel-subtask');
   if (actionButton && ['Enter',' '].includes(event.key)) {
     event.preventDefault();
     if (!event.repeat && !actionButton.hasAttribute('disabled')) actionButton.click();
@@ -632,4 +660,6 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .list-delete-confirmation { padding:16px; margin-bottom:16px; border:1px solid #efdada; border-radius:10px; background:#fffafa; display:flex; flex-direction:column; gap:10px; font-size:13px; line-height:1.7; color:#69798b; }.editor-actions .confirm-list-delete { background:#ce5353; color:#fff; }.delete-list-button { margin:0; padding:2px 5px; color:#bd7a7a; font-size:17px; flex-shrink:0; }.delete-list-button:focus-visible,.confirm-list-delete:focus-visible,.cancel-list-delete:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
 .list-glyph { width:26px; height:26px; filter:brightness(0) invert(1); }.list-appearance-button { margin:0; padding:2px 5px; font-size:18px; color:#8198ba; }.appearance-editor { padding:16px; margin-bottom:16px; border:1px solid #dce6f4; border-radius:10px; background:#f8fbff; gap:14px; }.appearance-colors,.appearance-icons { display:flex; flex-wrap:wrap; gap:10px; }.appearance-choice { margin:0; padding:0; flex-shrink:0; }.color-choice { width:30px; height:30px; border-radius:50%; color:#fff; font-size:18px; text-shadow:0 1px 3px #0008; border:2px solid transparent; }.color-choice[aria-checked="true"] { outline:2px solid #718cb2; outline-offset:2px; }.appearance-icons-scroll { max-height:190px; height:190px; }.icon-choice { width:38px; height:38px; border-radius:8px; border:1px solid #d9e2ee; background:#fff; }.icon-choice-selected { border-color:#1687ff; background:#e6f2ff; }.appearance-glyph { width:36px; height:36px; }.appearance-choice:focus-visible,.list-appearance-button:focus-visible,.save-list-appearance:focus-visible,.cancel-list-appearance:focus-visible { outline:2px solid #1687ff; outline-offset:3px; }
 .editor-actions .save-list-appearance { background:#1687ff; color:#fff; padding:6px 12px; border-radius:6px; }.editor-actions .save-list-appearance[disabled] { opacity:.45; }
+.reminder-row.is-subtask { margin-left:18px; padding-left:12px; border-left:2px solid #e3eaf4; }.affected-subtasks { max-height:180px; overflow-y:auto; display:flex; flex-direction:column; gap:5px; overflow-wrap:anywhere; }.subtask-item-button:focus-visible,.confirm-subtask:focus-visible,.cancel-subtask:focus-visible { outline:2px solid #1687ff; outline-offset:2px; border-radius:4px; }
+@media (max-width:760px) { .reminder-row { display:grid; grid-template-columns:22px minmax(0,1fr); column-gap:13px; row-gap:10px; }.reminder-row > .completion-button { grid-column:1; grid-row:1; align-self:start; }.reminder-row > .reminder-copy { grid-column:2; grid-row:1; min-width:0; }.reminder-row > .row-actions { grid-column:2; grid-row:2; justify-content:flex-start; opacity:1; flex-wrap:wrap; }.reminder-row > .subtask-tag { grid-column:2; grid-row:3; justify-self:start; }.row-actions button { padding:4px 6px; } }
 </style>

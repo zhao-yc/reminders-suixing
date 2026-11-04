@@ -7,7 +7,7 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
 const { installDesktopIPC } = require('./ipc.cjs');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, clickTestFlag, deleteTestItem, editTestList, deleteTestList, editTestListAppearance } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, clickTestFlag, deleteTestItem, editTestList, deleteTestList, editTestListAppearance, editTestSubtask } = require('./verification-ui.cjs');
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
 async function runSmoke({ frontendURL, root }) {
@@ -464,6 +464,39 @@ async function runSmoke({ frontendURL, root }) {
     await new Promise(resolve=>setTimeout(resolve,150));
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'true','用户明确选定新清单后才恢复写入');
     console.log('普通模式重新连接经键盘与正式 IPC 完成，同名清单只读保护及新句柄选择通过，事项内容未变。');
+    const hierarchyBefore=await normalController.execute({type:'read'},'cn'),hierarchyTarget=hierarchyBefore.snapshot.items.find(item=>item.title===normalTitle);
+    normalUI.webContents.send('suixing:snapshot',{region:'cn',result:hierarchyBefore});await new Promise(resolve=>setTimeout(resolve,100));
+    let hierarchyExpected={pageId:hierarchyBefore.snapshot.pageId,listId:hierarchyTarget.listId,id:hierarchyTarget.id,title:normalTitle};
+    assert.equal(await normalUI.webContents.executeJavaScript('('+editTestSubtask.toString()+')('+JSON.stringify({...hierarchyExpected,preview:true})+')',true),true);
+    assert.equal(await normalUI.webContents.executeJavaScript('document.activeElement.classList.contains("cancel-subtask")'),true);
+    normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureSubtaskKeys || 0'),0);
+    assert.equal(await normalUI.webContents.executeJavaScript('('+editTestSubtask.toString()+')('+JSON.stringify({...hierarchyExpected,preview:true})+')',true),true);
+    normalUI.setContentSize(390,780);await new Promise(resolve=>setTimeout(resolve,150));
+    const subtaskBounds=await normalUI.webContents.executeJavaScript('(()=>{const r=document.querySelector(".subtask-confirmation").getBoundingClientRect();return {left:r.left,right:r.right,width:innerWidth}})()');
+    assert.ok(subtaskBounds.left>=0 && subtaskBounds.right<=subtaskBounds.width+1);
+    fs.writeFileSync(path.join(root,'.local/subtask-confirmation-mobile-preview.png'),(await normalUI.webContents.capturePage()).toPNG());
+    normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await normalUI.webContents.executeJavaScript('document.activeElement.classList.contains("subtask-item-button")'),true);
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureSubtaskKeys || 0'),0);
+    assert.equal(await normalUI.webContents.executeJavaScript('('+editTestSubtask.toString()+')('+JSON.stringify(hierarchyExpected)+')',true),true);
+    let nested;
+    for(let attempt=0;attempt<50;attempt++){await new Promise(resolve=>setTimeout(resolve,100));nested=await normalController.execute({type:'read'},'cn');if(nested.snapshot?.items.find(item=>item.id===hierarchyTarget.id)?.level===2)break;}
+    assert.equal(nested.snapshot.items.find(item=>item.id===hierarchyTarget.id).level,2);assert.deepEqual(content(nested.snapshot.items),content(hierarchyBefore.snapshot.items));
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureSubtaskKeys'),1);
+    fs.writeFileSync(path.join(root,'.local/subtask-row-mobile-preview.png'),(await normalUI.webContents.capturePage()).toPNG());
+    normalController.reloadSite('cn');
+    for(let attempt=0;attempt<40;attempt++){await new Promise(resolve=>setTimeout(resolve,100));nested=await normalController.execute({type:'read'},'cn');if(nested.ok)break;}
+    assert.equal(nested.snapshot.items.find(item=>item.id===hierarchyTarget.id).level,2);
+    normalUI.webContents.send('suixing:snapshot',{region:'cn',result:nested});await new Promise(resolve=>setTimeout(resolve,100));
+    hierarchyExpected={...hierarchyExpected,pageId:nested.snapshot.pageId,listId:nested.snapshot.activeListId};
+    assert.equal(await normalUI.webContents.executeJavaScript('('+editTestSubtask.toString()+')('+JSON.stringify(hierarchyExpected)+')',true),true);
+    let restoredHierarchy;
+    for(let attempt=0;attempt<50;attempt++){await new Promise(resolve=>setTimeout(resolve,100));restoredHierarchy=await normalController.execute({type:'read'},'cn');if(restoredHierarchy.snapshot?.items.find(item=>item.id===hierarchyTarget.id)?.level===1)break;}
+    assert.equal(restoredHierarchy.snapshot.items.find(item=>item.id===hierarchyTarget.id).parentId,null);assert.deepEqual(content(restoredHierarchy.snapshot.items),content(hierarchyBefore.snapshot.items));
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureSubtaskKeys'),1);
+    normalUI.setContentSize(1160,830);await new Promise(resolve=>setTimeout(resolve,100));
+    console.log('子事项经正式 IPC 缩进/提升各一次，默认回车与 Esc 取消、焦点恢复、字段保持、两级显示及合成重载通过。');
     const deletionBefore=await normalController.execute({type:'read'},'cn');
     const deletionTarget=deletionBefore.snapshot.items.find(item=>item.title===normalTitle);
     assert.ok(deletionTarget);

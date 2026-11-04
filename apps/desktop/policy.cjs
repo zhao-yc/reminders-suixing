@@ -18,7 +18,7 @@ function browserUserAgent(chromiumVersion) {
 }
 
 function validCommand(command) {
-  if (!command || typeof command !== 'object' || !['read','readLists', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return false;
+  if (!command || typeof command !== 'object' || !['read','readLists', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance','getSubtaskInfo','setSubtask', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return false;
   if (['read','readLists'].includes(command.type)) return true;
   if (typeof command.pageId !== 'string' || command.pageId.length > 150 || typeof command.listId !== 'string' || command.listId.length > 150) return false;
   if (['selectList', 'showCompleted'].includes(command.type)) return true;
@@ -32,6 +32,8 @@ function validCommand(command) {
     typeof command.requestId === 'string' && /^[a-z0-9-]{1,100}$/.test(command.requestId);
   const target = typeof command.id === 'string' && command.id.length > 0 && command.id.length <= 1024 && typeof command.fingerprint === 'string' &&
     command.fingerprint.length <= 16000 && typeof command.expectedCompleted === 'boolean';
+  if(command.type==='getSubtaskInfo')return target && ['indent','outdent'].includes(command.direction);
+  if(command.type==='setSubtask')return target && ['indent','outdent'].includes(command.direction) && command.confirmed===true && typeof command.expectedHierarchyFingerprint==='string' && command.expectedHierarchyFingerprint.length>0 && command.expectedHierarchyFingerprint.length<=200000 && typeof command.requestId==='string' && /^[a-z0-9-]{1,100}$/.test(command.requestId);
   if (['getSchedule','getDeleteInfo'].includes(command.type)) return target;
   if (command.type === 'deleteItem') return target && command.confirmed===true && typeof command.requestId==='string' && /^[a-z0-9-]{1,100}$/.test(command.requestId);
   if (command.type === 'setFlagged') return target && typeof command.flagged === 'boolean' && typeof command.expectedFlagged === 'boolean';

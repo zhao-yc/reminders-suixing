@@ -119,7 +119,7 @@ function createController(options = {}) {
     if (!validCommand(command)) return { ok: false, code: 'INVALID_COMMAND', message: '不支持的操作参数。' };
     if (busy) return { ok: false, code: 'BUSY', message: '上一项操作尚未结束。' };
     busy = true;
-    const write = ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList','deleteList','setListAppearance'].includes(command.type);
+    const write = ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList','deleteList','setListAppearance','setSubtask'].includes(command.type);
     const sequence = write && options.diagnostics ? ++writeSequence : 0;
     if (sequence) lastWriteOutcome = summarizeWriteOutcome(command.type, sequence, null, true);
     const finish = result => {

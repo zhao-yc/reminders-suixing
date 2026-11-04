@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.9') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.10') return;
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   var listHandles = new WeakMap();
@@ -11,6 +11,7 @@
   var creationRequests = new Set();
   var deletionRequests = new Set();
   var listRequests = new Set();
+  var hierarchyRequests = new Set();
   var creationStage = 'preflight';
   var creationDiagnosticSequence = 0;
 
@@ -158,11 +159,30 @@
       priority: readPriority(row),
       listId: activeListId,
       level: Number(row.getAttribute('aria-level') || 1),
+      parentId: rowParent(row).id,
+      hierarchyReadable: rowParent(row).readable,
       disabled: button.disabled || button.getAttribute('aria-disabled') === 'true'
     };
     // 记录 ID 与内容指纹同时匹配，避免同名事项、切换列表或旧缓存导致误操作。
-    item.fingerprint = JSON.stringify([item.id, item.title, item.notes, item.metadata, item.completed, activeListId,item.scheduleFingerprint,item.flagged,item.priority,item.level,row.getAttribute('aria-expanded')]);
+    item.fingerprint = JSON.stringify([item.id, item.title, item.notes, item.metadata, item.completed, activeListId,item.scheduleFingerprint,item.flagged,item.priority,item.level,row.getAttribute('aria-expanded'),item.parentId,item.hierarchyReadable]);
     return item;
+  }
+
+  /** 网页只暴露两级事项；从同一行组的前序主事项识别父项，不读取内部父记录字段。 */
+  function rowParent(row) {
+    var level=Number(row.getAttribute('aria-level') || 1);
+    if(level===1)return {id:null,readable:true};
+    if(level!==2)return {id:null,readable:false};
+    var previous=row.previousElementSibling,steps=0;
+    while(previous && steps++<2000){
+      if(previous.matches('.reminder-item[role="row"][id]')){
+        var prior=Number(previous.getAttribute('aria-level'));
+        if(prior===1)return {id:previous.id,readable:true};
+        if(prior!==2)return {id:null,readable:false};
+      }
+      previous=previous.previousElementSibling;
+    }
+    return {id:null,readable:false};
   }
 
   /** 只认当前行的独立旗标格；结构未知不当成“没有旗标”。 */
@@ -1125,12 +1145,106 @@
     return result(true,'WEB_STATE_OBSERVED','网页已移除这一条事项；云端保存仍需核对。',{snapshot:refreshed.snapshot,removed:true,dispatched:true,cloudConfirmed:false});
   }
 
+  function hierarchyContent(item) {
+    return JSON.stringify([item.id,item.title,item.notes,item.notesTruncated,item.metadata,item.completed,item.scheduleFingerprint,item.flagged,item.priority,item.disabled]);
+  }
+
+  function hierarchyScope(context) {
+    var grids=context.doc.querySelectorAll('[role="treegrid"]'),rows=rowNodes(context.doc);
+    if(grids.length!==1 || !rows.length || rows.length>80 || Number(grids[0].getAttribute('aria-rowcount'))!==rows.length || rows.some(function(row){return row.closest('[role="treegrid"]')!==grids[0];}))return null;
+    var entries=rows.map(function(row){return {row:row,item:readItem(row,context.item.listId)};});
+    if(entries.some(function(entry){return !entry.item || !entry.item.hierarchyReadable || !['true','false'].includes(entry.row.getAttribute('aria-selected'));}))return null;
+    var groups=new Map();
+    entries.forEach(function(entry){var parent=entry.item.parentId;groups.has(parent)?groups.get(parent).push(entry):groups.set(parent,[entry]);});
+    if(entries.some(function(entry){
+      var siblings=groups.get(entry.item.parentId),children=groups.get(entry.item.id),expanded=entry.row.getAttribute('aria-expanded');
+      return Number(entry.row.getAttribute('aria-posinset'))!==siblings.indexOf(entry)+1 || Number(entry.row.getAttribute('aria-setsize'))!==siblings.length ||
+        (children?expanded!=='true':expanded!==null);
+    }))return null;
+    var fingerprint=JSON.stringify(entries.map(function(entry){return [entry.item.fingerprint,entry.row.getAttribute('aria-posinset'),entry.row.getAttribute('aria-setsize')];}));
+    return fingerprint.length<=200000?{grid:grids[0],entries:entries,fingerprint:fingerprint}:null;
+  }
+
+  function subtaskPlan(scope,id,direction) {
+    var index=scope.entries.findIndex(function(entry){return entry.item.id===id;}),entry=scope.entries[index];
+    if(!entry || !['indent','outdent'].includes(direction))return null;
+    var parents=scope.entries.map(function(entry){return {id:entry.item.id,parentId:entry.item.parentId};}),affected=[entry.item.title],parent;
+    if(direction==='indent'){
+      if(entry.item.parentId || scope.entries.some(function(other){return other.item.parentId===id;}))return null;
+      for(var cursor=index-1;cursor>=0;cursor--){if(scope.entries[cursor].item.level===1){parent=scope.entries[cursor].item;break;}}
+      if(!parent || parent.completed!==entry.item.completed)return null;
+      parents[index].parentId=parent.id;
+    }else{
+      if(!entry.item.parentId)return null;
+      parent=scope.entries.find(function(other){return other.item.id===entry.item.parentId;}).item;
+      parents[index].parentId=null;
+      // 官方提升快捷键会把后续同级子事项归入被提升事项；确认时完整说明这一影响。
+      for(var tail=index+1;tail<parents.length && parents[tail].parentId===entry.item.parentId;tail++){parents[tail].parentId=id;affected.push(scope.entries[tail].item.title);}
+    }
+    return {direction:direction,parent:parent,parents:parents,affectedTitles:affected};
+  }
+
+  async function prepareSubtask(command) {
+    var context=itemContext(command),scope=context && hierarchyScope(context),focused=context && context.doc.activeElement;
+    if(!context)return {error:result(false,'STALE_VIEW','事项已变化，请先刷新。')};
+    var plan=scope && subtaskPlan(scope,command.id,command.direction);
+    if(!plan || focused && focused.closest('[contenteditable="true"],input,textarea'))return {error:result(false,'SUBTASK_UNAVAILABLE','请在官方页面调整；当前需要可核对的两级清单（最多 80 条），缩进不能带有子项或跨完成状态。')};
+    for(var item of [context.item,plan.parent]){
+      var related=scope.entries.find(function(entry){return entry.item.id===item.id;});
+      var details=await openItemDetails({doc:context.doc,row:related.row,item:item});
+      if(!details)return {error:result(false,'EDIT_UNAVAILABLE','请先结束官方页面的编辑，再读取。')};
+      var recurring=!!details.panel.querySelector('.repeat-info');
+      if(!await cancelItemDetails(details) || recurring){lastSnapshot=null;return {error:result(false,'SUBTASK_UNAVAILABLE','重复事项或其父项请在苹果设备上调整。')};}
+      var current=itemContext(command),latest=current && hierarchyScope(current);
+      if(!latest || latest.fingerprint!==scope.fingerprint)return {error:result(false,'STALE_VIEW','事项层级已变化，请重新核对。')};
+    }
+    function single(row){var selected=scope.entries.filter(function(entry){return entry.row.getAttribute('aria-selected')==='true';});return selected.length===1 && selected[0].row===row && context.doc.activeElement===row;}
+    function key(row,name){row.dispatchEvent(new context.doc.defaultView.KeyboardEvent('keydown',{key:name,bubbles:true,cancelable:true,ctrlKey:false,metaKey:false,shiftKey:false,altKey:false,repeat:false}));}
+    scope.grid.focus();key(scope.grid,'Home');
+    if(!await until(function(){return single(scope.entries[0].row);},900))return {error:result(false,'SUBTASK_UNAVAILABLE','无法核对官方单选，请在官方页面调整。')};
+    var index=scope.entries.findIndex(function(entry){return entry.item.id===command.id;});
+    for(var position=1;position<=index;position++){
+      key(scope.entries[position-1].row,'ArrowDown');
+      if(!await until(function(){return single(scope.entries[position].row);},900))return {error:result(false,'SUBTASK_UNAVAILABLE','选区已变化，请重新读取。')};
+    }
+    var current=itemContext(command),latest=current && hierarchyScope(current);
+    return latest && latest.fingerprint===scope.fingerprint && single(context.row)?{context:context,scope:scope,plan:plan,single:function(){return single(context.row);}}:{error:result(false,'STALE_VIEW','事项或选区已变化，请先刷新。')};
+  }
+
+  async function getSubtaskInfo(command) {
+    if(!['indent','outdent'].includes(command.direction))return result(false,'INVALID_COMMAND','请选择缩进或提升事项。');
+    var prepared=await prepareSubtask(command);if(prepared.error)return prepared.error;
+    var refreshed=read();if(!refreshed.ok)return refreshed;
+    return result(true,'SUBTASK_READY','请确认层级调整的影响。',{snapshot:refreshed.snapshot,subtask:{direction:command.direction,parentTitle:prepared.plan.parent.title,
+      affectedTitles:prepared.plan.affectedTitles,affectedCount:prepared.plan.affectedTitles.length,hierarchyFingerprint:prepared.scope.fingerprint},dispatched:false,cloudConfirmed:false});
+  }
+
+  async function setSubtask(command) {
+    if(command.confirmed!==true || !['indent','outdent'].includes(command.direction) || typeof command.expectedHierarchyFingerprint!=='string' || !command.expectedHierarchyFingerprint || command.expectedHierarchyFingerprint.length>200000 ||
+       typeof command.requestId!=='string' || !/^[a-z0-9-]{1,100}$/.test(command.requestId))return result(false,'INVALID_COMMAND','请先确认事项与所有受影响的子事项。');
+    if(hierarchyRequests.has(command.requestId))return result(false,'ALREADY_SUBMITTED','本次层级调整已提交，请先读取核对。');
+    if(hierarchyRequests.size>=512)return result(false,'HIERARCHY_LIMIT','本页操作较多，请重新加载后核对。');
+    var prepared=await prepareSubtask(command);if(prepared.error)return prepared.error;
+    if(prepared.scope.fingerprint!==command.expectedHierarchyFingerprint || !prepared.single())return result(false,'STALE_VIEW','确认后层级或内容已变化，请重新读取。');
+    hierarchyRequests.add(command.requestId);lastSnapshot=null;
+    var mac=/mac/i.test(root.navigator.platform || '');
+    prepared.context.row.dispatchEvent(new prepared.context.doc.defaultView.KeyboardEvent('keydown',{key:command.direction==='indent'?']':'[',bubbles:true,cancelable:true,ctrlKey:!mac,metaKey:mac,shiftKey:false,altKey:false,repeat:false}));
+    var observed=await until(function(){
+      var refreshed=read();if(!refreshed.ok || refreshed.snapshot.pageId!==command.pageId || refreshed.snapshot.activeListId!==command.listId)return false;
+      var current=itemContext({...command,fingerprint:refreshed.snapshot.items.find(function(item){return item.id===command.id;})?.fingerprint}),scope=current && hierarchyScope(current);
+      if(!scope || scope.entries.length!==prepared.scope.entries.length)return false;
+      return scope.entries.every(function(entry,index){return entry.item.id===prepared.scope.entries[index].item.id && hierarchyContent(entry.item)===hierarchyContent(prepared.scope.entries[index].item) && entry.item.parentId===prepared.plan.parents[index].parentId;})?refreshed:false;
+    },2600);
+    if(!observed){lastSnapshot=null;return result(false,'UNCERTAIN_WRITE','层级结果尚未准确确认，请先读取核对，不要重复提交。',{dispatched:true,cloudConfirmed:false});}
+    return result(true,'WEB_STATE_OBSERVED','网页层级已调整；云端保存仍需核对。',{snapshot:observed.snapshot,dispatched:true,cloudConfirmed:false});
+  }
+
   root.__suixingAdapter = {
-    version: '0.3.9',
+    version: '0.3.10',
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');
-      if (!command || !['read','readLists', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
+      if (!command || !['read','readLists', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance','getSubtaskInfo','setSubtask', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
       inFlight = true;
       if (command.type === 'createItem') { creationDiagnosticSequence = root.__suixingDiagnosticWriteSequence; setCreationStage('preflight'); }
       try {
@@ -1141,6 +1255,8 @@
         if (command.type === 'getSchedule') return await getSchedule(command);
         if (command.type === 'getDeleteInfo') return await getDeleteInfo(command);
         if (command.type === 'deleteItem') return await deleteItem(command);
+        if (command.type === 'getSubtaskInfo')return await getSubtaskInfo(command);
+        if (command.type === 'setSubtask')return await setSubtask(command);
         if (['createList','renameList'].includes(command.type)) return await changeList(command);
         if (command.type === 'deleteList') return await deleteList(command);
         if (['getListAppearance','setListAppearance'].includes(command.type))return await listAppearance(command,command.type==='setListAppearance');
@@ -1151,7 +1267,7 @@
         return await setCompleted(command);
       } catch (_) {
         lastSnapshot = null;
-        return result(false, ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList','deleteList','setListAppearance'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
+        return result(false, ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList','deleteList','setListAppearance','setSubtask'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
       } finally { inFlight = false; }
     }
   };

@@ -7,6 +7,38 @@ const require = createRequire(import.meta.url);
 const { clickTestCompletion, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList, deleteTestList, selectTestListClient } = require('../apps/desktop/verification-ui.cjs');
 const { testOperation, summarize } = require('../apps/desktop/live-check.cjs');
 const {editTestListAppearance}=require('../apps/desktop/verification-ui.cjs');
+const {editTestSubtask}=require('../apps/desktop/verification-ui.cjs');
+
+test('子事项验收只在匹配行确认一次，取消不触发保存',async t=>{
+  for(const cancel of [false,true]){
+    const dom=new JSDOM('<div class="list-content" data-page-id="page" data-list-id="list"><div class="reminder-row" data-record-id="item"><div class="reminder-title">随行验证 · 合成子项</div><button class="subtask-item-button"></button></div></div>',{runScripts:'outside-only'});t.after(()=>dom.window.close());const doc=dom.window.document;let saved=0;
+    doc.querySelector('button').addEventListener('click',()=>{const editor=doc.createElement('div');editor.className='inline-editor';editor.innerHTML='<div class="subtask-confirmation"><div class="delete-title">随行验证 · 合成子项</div></div><button class="confirm-subtask"></button><button class="cancel-subtask"></button>';editor.querySelector('.confirm-subtask').addEventListener('click',()=>saved++);editor.querySelector('.cancel-subtask').addEventListener('click',()=>editor.remove());doc.querySelector('.reminder-row').append(editor);});
+    assert.equal(await dom.window.eval('('+editTestSubtask.toString()+')('+JSON.stringify({pageId:'page',listId:'list',id:'item',title:'随行验证 · 合成子项',cancel})+')'),true);assert.equal(saved,cancel?0:1);
+  }
+});
+
+test('子事项验收拒绝非测试标题、旧页面及错误记录，不激活按钮',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="page" data-list-id="list"><div class="reminder-row" data-record-id="item"><div class="reminder-title">随行验证 · 合成子项</div><button class="subtask-item-button"></button></div></div>',{runScripts:'outside-only'});t.after(()=>dom.window.close());let clicked=0;dom.window.document.querySelector('button').addEventListener('click',()=>clicked++);
+  for(const changes of [{title:'合成普通事项'},{pageId:'old'},{id:'other'}])assert.equal(await dom.window.eval('('+editTestSubtask.toString()+')('+JSON.stringify({pageId:'page',listId:'list',id:'item',title:'随行验证 · 合成子项',...changes})+')'),false);assert.equal(clicked,0);
+});
+
+test('子事项通道只在两条专用事项之间按官网顺序预检，不用名称推测前后位置',async()=>{
+  for(const reverse of [false,true]){
+    const named=[{id:'parent-label',title:'随行验证 · Windows 子事项父项'},{id:'child-label',title:'随行验证 · Windows 子事项子项'}];if(reverse)named.reverse();
+    const items=named.map(item=>({...item,listId:'list',level:1,parentId:null,fingerprint:item.id,completed:false,notes:'',flagged:false,schedule:{date:null,time:null}}));
+    const snapshot={pageId:'page',activeListId:'list',activeListTitle:'随行验证（2026-11-04）',lists:[{id:'list',title:'随行验证（2026-11-04）'}],items};let checked=0;
+    const controller={execute:async command=>{if(command.type==='read')return {ok:true,snapshot};assert.equal(command.type,'getSubtaskInfo');assert.equal(command.id,items[1].id);checked++;return {ok:true,snapshot,subtask:{parentTitle:items[0].title,affectedCount:1}};}};
+    const result=await testOperation(controller,'indent-subtask-test-item',{sendSnapshot(){},ui:{webContents:{async executeJavaScript(){return false;}}}});
+    assert.equal(result.code,'TEST_SUBTASK_UI_UNCONFIRMED');assert.equal(checked,1);
+  }
+});
+
+test('层级预检的父项若不是另一条专用事项，通道不会激活本地确认',async()=>{
+  const items=[{id:'p',title:'随行验证 · Windows 子事项父项'},{id:'c',title:'随行验证 · Windows 子事项子项'}].map(item=>({...item,listId:'list',level:1,parentId:null,fingerprint:item.id,completed:false,notes:'',flagged:false,schedule:{date:null,time:null}}));
+  const snapshot={pageId:'page',activeListId:'list',activeListTitle:'随行验证（2026-11-04）',lists:[{id:'list',title:'随行验证（2026-11-04）'}],items};
+  const controller={execute:async command=>command.type==='read'?{ok:true,snapshot}:{ok:true,snapshot,subtask:{parentTitle:'随行验证 · 其他事项',affectedCount:1}}};
+  const result=await testOperation(controller,'indent-subtask-test-item',{sendSnapshot(){assert.fail('错误父项不进入本地确认');},ui:null});assert.equal(result.code,'TEST_SUBTASK_PLAN_UNSUPPORTED');
+});
 
 test('外观验收只选择本地匹配的选项，取消不触发保存',async t=>{
   for(const cancel of [false,true]){
