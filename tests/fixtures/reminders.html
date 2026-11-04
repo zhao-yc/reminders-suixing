@@ -7,10 +7,12 @@
 <button class="rm-new-reminder" role="button" aria-label="新增提醒事项">新增</button>
 <button class="list-detail-button" role="button" aria-label="编辑提醒事项列表">菜单</button>
 <div class="fixture-list-menu" role="menu" hidden><button role="menuitem"></button></div>
-<div role="treegrid" aria-label="提醒列表"></div>
+<div role="treegrid" aria-label="提醒列表" tabindex="0"></div>
 <script>
 // 该页面只包含合成数据，用来验证重复标题、完成回执和列表切换，绝不访问 Apple。
 window.fixtureClicks = 0;
+window.fixtureDeleteKeys = 0;
+window.fixtureDeletionCount = 0;
 window.fixtureDisableUpdates = false;
 window.fixtureRequiresPointerDown = false;
 window.fixturePointerDown = false;
@@ -49,9 +51,11 @@ if (!document.execCommand) document.execCommand = function (command, _ui, value)
 function renderFixture(list) {
   const complete = sessionStorage.getItem('fixture-complete') === 'true';
   const titles = (list === 'two' ? ['随行验证 · 第二个同名清单'] : ['随行验证 · 同名事项', '随行验证 · 同名事项']).map((title,index)=>({title,id:'reminder-item-fixture-' + list + '-' + index}));
-  const records = titles.concat(JSON.parse(sessionStorage.getItem('fixture-created-' + list) || '[]'));
+  const deleted=JSON.parse(sessionStorage.getItem('fixture-deleted') || '[]');
+  const records = titles.concat(JSON.parse(sessionStorage.getItem('fixture-created-' + list) || '[]')).filter(record=>!deleted.includes(record.id));
+  document.querySelector('[role="treegrid"]').setAttribute('aria-rowcount',String(records.length));
   document.querySelector('[role="treegrid"]').innerHTML = records.map(({title,id}, index) =>
-    '<div class="reminder-item" id="' + id + '" role="row" aria-level="1" aria-setsize="' + records.length + '">' +
+    '<div class="reminder-item" id="' + id + '" role="row" aria-level="1" aria-posinset="'+(index+1)+'" aria-selected="false" tabindex="-1" aria-setsize="' + records.length + '">' +
     '<button class="mark-completed" data-completed="' + (index === 0 && complete) + '" aria-label="切换完成状态"></button>' +
     '<div role="gridcell">' + (index===1?'<span class="priority" data-priority-level="1"><span aria-hidden="true">!!!</span></span>':'') + '</div><div class="title" role="gridcell"><div role="textbox" contenteditable="true">' + title + '</div></div>' +
     '<div class="notes"><div role="textbox" contenteditable="true"></div></div><div class="flag-container" role="gridcell"></div><div class="metadata">2026/11/04<span aria-hidden="true">重复无障碍文字</span></div><button class="info" data-edit-open="false" aria-haspopup="dialog">详情</button></div>'
@@ -209,5 +213,26 @@ document.querySelectorAll('[role="treeitem"]').forEach(node => node.addEventList
   document.querySelectorAll('[role="treeitem"]').forEach(other => other.setAttribute('aria-selected', String(other === node)));
   renderFixture(node.dataset.list);
 }));
+document.querySelector('[role="treegrid"]').addEventListener('keydown',event=>{
+  if(event.target.closest('[contenteditable]') || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  const grid=event.currentTarget,rows=[...grid.querySelectorAll('.reminder-item')];
+  if(['Home','ArrowDown'].includes(event.key)) {
+    if(window.fixtureIgnoreSelection) return;
+    const index=event.key==='Home'?0:Math.min(rows.length-1,rows.findIndex(row=>row===document.activeElement)+1),target=rows[index];
+    if(!target)return;
+    rows.forEach(row=>{if(!window.fixturePreserveMultiSelection || row===target)row.setAttribute('aria-selected',String(row===target));});
+    target.focus();if(window.fixtureFocusEditor)target.querySelector('[role="textbox"]').focus();event.preventDefault();
+  } else if(event.key==='Backspace') {
+    window.fixtureDeleteKeys++;event.preventDefault();
+    if(window.fixtureRejectDeletion)return;
+    const selected=rows.filter(row=>row.getAttribute('aria-selected')==='true');
+    const deleted=JSON.parse(sessionStorage.getItem('fixture-deleted') || '[]');
+    selected.forEach(row=>{deleted.push(row.id);row.remove();window.fixtureDeletionCount++;});
+    sessionStorage.setItem('fixture-deleted',JSON.stringify(deleted));
+    const remaining=[...grid.querySelectorAll('.reminder-item')];grid.setAttribute('aria-rowcount',String(remaining.length));
+    remaining.forEach((row,index)=>{row.setAttribute('aria-posinset',String(index+1));row.setAttribute('aria-setsize',String(remaining.length));});
+    if(window.fixtureAfterDelete)window.fixtureAfterDelete();
+  }
+});
 renderFixture('one');
 </script></body></html>

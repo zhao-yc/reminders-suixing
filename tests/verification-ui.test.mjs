@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { clickTestCompletion, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient } = require('../apps/desktop/verification-ui.cjs');
+const { clickTestCompletion, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem } = require('../apps/desktop/verification-ui.cjs');
 const { testOperation, summarize } = require('../apps/desktop/live-check.cjs');
 
 for (const tag of ['button', 'uni-button']) {
@@ -196,6 +196,24 @@ test('本地优先级显示与只读快照不一致时，排序验收不打开�
   const expected={pageId:'synthetic-page',listId:'synthetic-list',ids:['synthetic-record'],priorities:[{id:'synthetic-record',priority:'high'}]};
   assert.equal(await dom.window.eval('('+verifyTestSorting.toString()+')('+JSON.stringify(expected)+')'),false);
   assert.equal(clicks,0);
+});
+
+test('删除验收必须先匹配测试行，取消不触发确认，确认只激活一次',async t=>{
+  for(const cancel of [true,false]) {
+    const dom=new JSDOM('<div class="list-content" data-page-id="synthetic-page" data-list-id="synthetic-list"><div class="reminder-row" data-record-id="target"><span class="reminder-title">随行验证 · 删除专用</span><button class="delete-item-button"></button></div></div>',{runScripts:'outside-only'});
+    t.after(()=>dom.window.close());dom.window.setTimeout=callback=>setTimeout(callback,0);
+    const row=dom.window.document.querySelector('.reminder-row');let opened=0,confirmed=0,cancelled=0;
+    row.querySelector('button').addEventListener('click',()=>{
+      opened++;row.innerHTML='<div class="inline-editor"><div class="delete-confirmation">随行验证 · 删除专用</div><button class="confirm-delete"></button><button class="cancel-delete"></button></div>';
+      row.querySelector('.confirm-delete').addEventListener('click',()=>confirmed++);
+      row.querySelector('.cancel-delete').addEventListener('click',()=>{cancelled++;row.querySelector('.inline-editor').remove();});
+    });
+    const expected={pageId:'synthetic-page',listId:'synthetic-list',id:'target',title:'随行验证 · 删除专用',cancel};
+    for(const changes of [{id:'other'},{title:'合成普通事项'},{pageId:'old-page'}]) assert.equal(await dom.window.eval('('+deleteTestItem.toString()+')('+JSON.stringify({...expected,...changes})+')'),false);
+    assert.equal(opened,0);
+    assert.equal(await dom.window.eval('('+deleteTestItem.toString()+')('+JSON.stringify(expected)+')'),true);
+    assert.equal(opened,1);assert.equal(confirmed,cancel?0:1);assert.equal(cancelled,cancel?1:0);
+  }
 });
 
 test('真实旗标通道只允许唯一未完成、无日期的既有专用新增事项',async()=>{

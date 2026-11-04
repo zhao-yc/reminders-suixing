@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.5') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.6') return;
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   var listHandles = new WeakMap();
@@ -9,6 +9,7 @@
   var inFlight = false;
   var lastSnapshot = null;
   var creationRequests = new Set();
+  var deletionRequests = new Set();
   var creationStage = 'preflight';
   var creationDiagnosticSequence = 0;
 
@@ -97,7 +98,7 @@
       disabled: button.disabled || button.getAttribute('aria-disabled') === 'true'
     };
     // 记录 ID 与内容指纹同时匹配，避免同名事项、切换列表或旧缓存导致误操作。
-    item.fingerprint = JSON.stringify([item.id, item.title, item.notes, item.metadata, item.completed, activeListId,item.scheduleFingerprint,item.flagged,item.priority]);
+    item.fingerprint = JSON.stringify([item.id, item.title, item.notes, item.metadata, item.completed, activeListId,item.scheduleFingerprint,item.flagged,item.priority,item.level,row.getAttribute('aria-expanded')]);
     return item;
   }
 
@@ -767,12 +768,83 @@
     return result(true,'WEB_STATE_OBSERVED','网页旗标已更新；云端保存仍需核对。',{snapshot:refreshed.snapshot,dispatched:true,cloudConfirmed:false});
   }
 
+  /** 删除先用官方键盘导航形成单选；不点击标题、不使用内部选区模型或删除接口。 */
+  function deletionScope(context) {
+    var grids=context.doc.querySelectorAll('[role="treegrid"]');
+    var rows=rowNodes(context.doc);
+    if(grids.length!==1 || !grids[0].contains(context.row) || rows.length>80 || !rows.length ||
+       Number(grids[0].getAttribute('aria-rowcount'))!==rows.length || context.row.hasAttribute('aria-expanded') ||
+       rows.some(function(row,index){return row.closest('[role="treegrid"]')!==grids[0] || Number(row.getAttribute('aria-posinset'))!==index+1 || !['true','false'].includes(row.getAttribute('aria-selected'));})) return null;
+    var index=rows.indexOf(context.row),level=Number(context.row.getAttribute('aria-level'));
+    if(index<0 || !Number.isInteger(level) || level<1 || rows[index+1] && Number(rows[index+1].getAttribute('aria-level'))>level) return null;
+    return {grid:grids[0],rows:rows,index:index};
+  }
+
+  async function prepareDelete(command) {
+    var context=itemContext(command),scope=context && deletionScope(context);
+    if(!context) return {error:result(false,'STALE_VIEW','事项已变化，请先刷新。')};
+    var focused=context.doc.activeElement;
+    if(!scope || focused && focused.closest('[contenteditable="true"],input,textarea')) return {error:result(false,'DELETE_UNAVAILABLE','请在官方页面核对；当前仅支持已完整加载清单中的普通单项删除。')};
+    var details=await openItemDetails(context);
+    if(!details) return {error:result(false,'EDIT_UNAVAILABLE','请先关闭官方页面已有的编辑窗口，再刷新。')};
+    var recurring=!!details.panel.querySelector('.repeat-info');
+    if(!await cancelItemDetails(details) || recurring) {lastSnapshot=null;return {error:result(false,'DELETE_UNAVAILABLE','重复事项或编辑状态尚未结束，请在官方页面删除。')};}
+    function unchanged() {
+      var current=itemContext(command),latest=current && deletionScope(current);
+      return latest && latest.rows.length===scope.rows.length && latest.rows.every(function(row,index){return row===scope.rows[index];});
+    }
+    if(!unchanged()) return {error:result(false,'STALE_VIEW','事项或清单已变化，请重新核对。')};
+    function single(row) {
+      var selected=scope.rows.filter(function(item){return item.getAttribute('aria-selected')==='true';});
+      return unchanged() && selected.length===1 && selected[0]===row && context.doc.activeElement===row;
+    }
+    function key(node,name) {
+      node.dispatchEvent(new context.doc.defaultView.KeyboardEvent('keydown',{key:name,bubbles:true,cancelable:true,ctrlKey:false,metaKey:false,shiftKey:false,altKey:false,repeat:false}));
+    }
+    scope.grid.focus();key(scope.grid,'Home');
+    if(!await until(function(){return single(scope.rows[0]);},900)) return {error:result(false,'DELETE_UNAVAILABLE','无法确认官方页面单选，请在官方页面核对。')};
+    for(var index=1;index<=scope.index;index++) {
+      key(scope.rows[index-1],'ArrowDown');
+      if(!await until(function(){return single(scope.rows[index]);},900)) return {error:result(false,'DELETE_UNAVAILABLE','选区已变化，请在官方页面核对。')};
+    }
+    return {context:context,scope:scope,single:function(){return single(context.row);}};
+  }
+
+  async function getDeleteInfo(command) {
+    var prepared=await prepareDelete(command);
+    if(prepared.error) return prepared.error;
+    var refreshed=read();
+    if(!refreshed.ok) return refreshed;
+    if(!prepared.single()) return result(false,'STALE_VIEW','目标或选区已变化，请重新核对。');
+    return result(true,'DELETE_READY','仅删除这一条普通事项；删除会同步到其他设备。',{snapshot:refreshed.snapshot,deleteReady:true,dispatched:false,cloudConfirmed:false});
+  }
+
+  async function deleteItem(command) {
+    if(command.confirmed!==true || typeof command.requestId!=='string' || !/^[a-z0-9-]{1,100}$/.test(command.requestId)) return result(false,'INVALID_COMMAND','请先确认删除这一条事项。');
+    if(deletionRequests.has(command.requestId)) return result(false,'ALREADY_SUBMITTED','本次删除已提交，请先读取核对，不要重复删除。');
+    if(deletionRequests.size>=512) return result(false,'DELETION_LIMIT','本次操作较多，请重载官方页面后再核对。');
+    var prepared=await prepareDelete(command);
+    if(prepared.error) return prepared.error;
+    if(!prepared.single()) return result(false,'STALE_VIEW','目标或选区已变化，请重新核对。');
+    var context=prepared.context;
+    var remaining=prepared.scope.rows.filter(function(row){return row!==context.row;}).map(function(row){var item=readItem(row,command.listId);return item && item.fingerprint;});
+    if(remaining.some(function(item){return !item;})) return result(false,'DELETE_UNAVAILABLE','其他行尚未就绪，请在官方页面核对。');
+    deletionRequests.add(command.requestId);lastSnapshot=null;
+    context.row.dispatchEvent(new context.doc.defaultView.KeyboardEvent('keydown',{key:'Backspace',bubbles:true,cancelable:true,ctrlKey:false,metaKey:false,shiftKey:false,altKey:false,repeat:false}));
+    var absent=await until(function(){return !context.doc.getElementById(command.id);},1800);
+    var refreshed=read();
+    var same=refreshed.ok && refreshed.snapshot.pageId===command.pageId && refreshed.snapshot.activeListId===command.listId &&
+      JSON.stringify(refreshed.snapshot.items.map(function(item){return item.fingerprint;}))===JSON.stringify(remaining);
+    if(!absent || !same) {lastSnapshot=null;return result(false,'UNCERTAIN_WRITE','删除结果尚未确认，请先读取核对，不要重复提交。',{dispatched:true,cloudConfirmed:false});}
+    return result(true,'WEB_STATE_OBSERVED','网页已移除这一条事项；云端保存仍需核对。',{snapshot:refreshed.snapshot,removed:true,dispatched:true,cloudConfirmed:false});
+  }
+
   root.__suixingAdapter = {
-    version: '0.3.5',
+    version: '0.3.6',
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');
-      if (!command || !['read', 'selectList', 'showCompleted', 'getSchedule', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
+      if (!command || !['read', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
       inFlight = true;
       if (command.type === 'createItem') { creationDiagnosticSequence = root.__suixingDiagnosticWriteSequence; setCreationStage('preflight'); }
       try {
@@ -780,6 +852,8 @@
         if (command.type === 'selectList') return await selectList(command);
         if (command.type === 'showCompleted') return await showCompleted(command);
         if (command.type === 'getSchedule') return await getSchedule(command);
+        if (command.type === 'getDeleteInfo') return await getDeleteInfo(command);
+        if (command.type === 'deleteItem') return await deleteItem(command);
         if (command.type === 'setSchedule') return await setSchedule(command);
         if (command.type === 'setFlagged') return await setFlagged(command);
         if (command.type === 'setText') return await setText(command);
@@ -787,7 +861,7 @@
         return await setCompleted(command);
       } catch (_) {
         lastSnapshot = null;
-        return result(false, ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
+        return result(false, ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
       } finally { inFlight = false; }
     }
   };

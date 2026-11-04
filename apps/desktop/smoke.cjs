@@ -7,7 +7,7 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
 const { installDesktopIPC } = require('./ipc.cjs');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, clickTestFlag } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, clickTestFlag, deleteTestItem } = require('./verification-ui.cjs');
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
 async function runSmoke({ frontendURL, root }) {
@@ -458,6 +458,36 @@ async function runSmoke({ frontendURL, root }) {
     await new Promise(resolve=>setTimeout(resolve,150));
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'true','用户明确选定新清单后才恢复写入');
     console.log('普通模式重新连接经键盘与正式 IPC 完成，同名清单只读保护及新句柄选择通过，事项内容未变。');
+    const deletionBefore=await normalController.execute({type:'read'},'cn');
+    const deletionTarget=deletionBefore.snapshot.items.find(item=>item.title===normalTitle);
+    assert.ok(deletionTarget);
+    const deletionExpected={pageId:deletionBefore.snapshot.pageId,listId:deletionTarget.listId,id:deletionTarget.id,title:normalTitle};
+    const deletionRemaining=deletionBefore.snapshot.items.filter(item=>item.id!==deletionTarget.id).map(item=>item.fingerprint);
+    normalUI.webContents.send('suixing:snapshot',{region:'cn',result:deletionBefore});await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await normalUI.webContents.executeJavaScript('('+deleteTestItem.toString()+')('+JSON.stringify({...deletionExpected,preview:true})+')',true),true);
+    assert.equal(await normalUI.webContents.executeJavaScript('document.activeElement.classList.contains("cancel-delete")'),true,'删除确认默认聚焦取消');
+    normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await normalUI.webContents.executeJavaScript('!!document.querySelector(".delete-confirmation")'),false);
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureDeleteKeys'),0,'默认回车取消，不删除');
+    assert.equal(await normalUI.webContents.executeJavaScript('('+deleteTestItem.toString()+')('+JSON.stringify({...deletionExpected,preview:true})+')',true),true);
+    normalUI.setContentSize(390,780);await new Promise(resolve=>setTimeout(resolve,150));
+    const deletionBounds=await normalUI.webContents.executeJavaScript('(()=>{const r=document.querySelector(".delete-confirmation").getBoundingClientRect();return {left:r.left,right:r.right,width:innerWidth}})()');
+    assert.ok(deletionBounds.left>=0 && deletionBounds.right<=deletionBounds.width+1);
+    fs.writeFileSync(path.join(root,'.local/delete-confirmation-mobile-preview.png'),(await normalUI.webContents.capturePage()).toPNG());
+    normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureDeleteKeys'),0,'Esc 取消不删除');
+    normalUI.setContentSize(1160,830);await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(await normalUI.webContents.executeJavaScript('('+deleteTestItem.toString()+')('+JSON.stringify(deletionExpected)+')',true),true);
+    let deletionAfter;
+    for(let attempt=0;attempt<50;attempt++) {await new Promise(resolve=>setTimeout(resolve,100));deletionAfter=await normalController.execute({type:'read'},'cn');if(deletionAfter.ok && !deletionAfter.snapshot.items.some(item=>item.id===deletionTarget.id))break;}
+    assert.deepEqual(deletionAfter.snapshot.items.map(item=>item.fingerprint),deletionRemaining);
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureDeleteKeys'),1);
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureDeletionCount'),1);
+    assert.equal(normalController.lastWriteOutcome(),null);
+    normalController.reloadSite('cn');
+    for(let attempt=0;attempt<40;attempt++) {await new Promise(resolve=>setTimeout(resolve,100));deletionAfter=await normalController.execute({type:'read'},'cn');if(deletionAfter.ok)break;}
+    assert.equal(deletionAfter.ok,true);assert.equal(deletionAfter.snapshot.items.some(item=>item.id===deletionTarget.id),false);
+    console.log('普通模式删除经预检及确认一次提交，默认回车和 Esc 均可取消，窄屏布局、其他事项保持及合成重载通过。');
     stopIPC();
     normalUI.destroy();normalUI=null;
     normalController.dispose();normalController=null;

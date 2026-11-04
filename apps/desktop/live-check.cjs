@@ -1,7 +1,7 @@
 const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem } = require('./verification-ui.cjs');
 
 const TEST_PREFIX = '随行验证';
 const TEST_ITEM = '随行验证 · 最小读写验证';
@@ -9,6 +9,7 @@ const TEST_EDITED_ITEM = '随行验证 · 最小读写验证 · 编辑验证';
 const TEST_NOTE = '随行验证 · 备注写入验证\n随行验证 · 第二行';
 const TEST_CREATED_ITEM = '随行验证 · Windows 新增验证';
 const TEST_SYNC_ITEM = '随行验证 · Windows 同步验证';
+const TEST_DELETE_ITEM = '随行验证 · Windows 删除验证';
 
 /** 自动写入只能命中唯一的专用验证清单与验证事项，名称仅用于限定测试范围。实际写入仍使用记录 ID 与指纹。 */
 async function testOperation(controller, command, { sendSnapshot, ui }) {
@@ -20,6 +21,36 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
     return controller.execute({ type: 'selectList', pageId: result.snapshot.pageId, listId: lists[0].id }, 'cn');
   }
   if (result.snapshot.activeListId !== lists[0].id) return { ok: false, code: 'TEST_LIST_NOT_SELECTED' };
+  if(['cancel-delete-test-item','delete-test-item'].includes(command)) {
+    if(result.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX))) return {ok:false,code:'TEST_ITEMS_REQUIRED'};
+    const targets=result.snapshot.items.filter(item=>item.title===TEST_DELETE_ITEM);
+    if(targets.length!==1) return {ok:false,code:'TEST_DELETE_NOT_UNIQUE'};
+    const item=targets[0],others=result.snapshot.items.filter(candidate=>candidate.id!==item.id).map(candidate=>candidate.fingerprint);
+    if(item.completed || item.notes || item.flagged!==false || item.schedule?.date!==null || item.schedule.time!==null) return {ok:false,code:'TEST_DELETE_STATE_UNSUPPORTED'};
+    sendSnapshot(result);await new Promise(resolve=>setTimeout(resolve,120));
+    let clicked;
+    try {clicked=await ui.webContents.executeJavaScript('('+deleteTestItem.toString()+')('+JSON.stringify({pageId:result.snapshot.pageId,listId:item.listId,id:item.id,title:TEST_DELETE_ITEM,cancel:command==='cancel-delete-test-item'})+')',true);}
+    catch {return {ok:false,code:'UNCERTAIN_WRITE',cloudConfirmed:false};}
+    if(!clicked) return {ok:false,code:'TEST_DELETE_UI_UNCONFIRMED'};
+    if(command==='cancel-delete-test-item') {
+      const current=await controller.execute({type:'read'},'cn');
+      const same=current.ok && JSON.stringify(current.snapshot.items.map(candidate=>candidate.fingerprint))===JSON.stringify(result.snapshot.items.map(candidate=>candidate.fingerprint));
+      return same?{...current,code:'TEST_DELETE_CANCELLED',dispatched:false}:{ok:false,code:'TEST_DELETE_UI_UNCONFIRMED'};
+    }
+    for(let attempt=0;attempt<90;attempt++) {
+      await new Promise(resolve=>setTimeout(resolve,200));const current=await controller.execute({type:'read'},'cn');
+      if(current.ok && current.snapshot.pageId===result.snapshot.pageId && current.snapshot.activeListId===item.listId && !current.snapshot.items.some(candidate=>candidate.id===item.id) &&
+         JSON.stringify(current.snapshot.items.map(candidate=>candidate.fingerprint))===JSON.stringify(others)) return {...current,code:'WEB_STATE_OBSERVED',dispatched:true,cloudConfirmed:false,via:'Windows 本地删除预检与确认界面 IPC'};
+    }
+    return {ok:false,code:'UNCERTAIN_WRITE',dispatched:true,cloudConfirmed:false};
+  }
+  if(command==='inspect-sync-delete') {
+    if(result.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX))) return {ok:false,code:'TEST_ITEMS_REQUIRED'};
+    const targets=result.snapshot.items.filter(item=>item.title===TEST_SYNC_ITEM);
+    if(targets.length!==1) return {ok:false,code:'TEST_ITEM_NOT_UNIQUE'};
+    const item=targets[0];
+    return controller.execute({type:'getDeleteInfo',pageId:result.snapshot.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed},'cn');
+  }
   if(command==='reconnect-test-client') {
     if(!result.snapshot.items.length || result.snapshot.items.some(item=>!item.title.startsWith(TEST_PREFIX))) return {ok:false,code:'TEST_ITEMS_REQUIRED'};
     sendSnapshot(result);await new Promise(resolve=>setTimeout(resolve,120));
@@ -66,8 +97,8 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
     const unchanged=after.ok && JSON.stringify(after.snapshot.items.map(item=>item.fingerprint))===JSON.stringify(result.snapshot.items.map(item=>item.fingerprint));
     return {ok:observed && unchanged,code:observed && unchanged?'TEST_SORTING_OBSERVED':'TEST_SORTING_UNCONFIRMED',restored:observed,webItemsUnchanged:unchanged};
   }
-  if (['create-test-item','create-sync-test-item'].includes(command)) {
-    const title=command==='create-sync-test-item'?TEST_SYNC_ITEM:TEST_CREATED_ITEM;
+  if (['create-test-item','create-sync-test-item','create-delete-test-item'].includes(command)) {
+    const title=command==='create-delete-test-item'?TEST_DELETE_ITEM:command==='create-sync-test-item'?TEST_SYNC_ITEM:TEST_CREATED_ITEM;
     const existing = result.snapshot.items.filter(item => item.title === title);
     if (existing.length > 1) return { ok:false, code:'TEST_CREATED_NOT_UNIQUE' };
     if (existing.length === 1) return { ...result, code:'UNCHANGED', dispatched:false };
@@ -169,6 +200,7 @@ function summarize(result) {
   const items = testList ? snapshot.items.filter(item => [TEST_ITEM, TEST_EDITED_ITEM].includes(item.title)) : [];
   const created = testList ? snapshot.items.filter(item => item.title === TEST_CREATED_ITEM) : [];
   const sync = testList ? snapshot.items.filter(item => item.title === TEST_SYNC_ITEM) : [];
+  const deletion = testList ? snapshot.items.filter(item => item.title === TEST_DELETE_ITEM) : [];
   return { ok: result.ok, code: result.code, lists: snapshot?.lists.length, loadedItems: snapshot?.items.length,
     testList, testItemCount: testList ? items.length : undefined, testCompleted: items.length === 1 ? items[0].completed : undefined,
     testOriginalTitle: items.length === 1 ? items[0].title === TEST_ITEM : undefined,
@@ -182,6 +214,9 @@ function summarize(result) {
     testSyncPending:sync.length===1?!sync[0].completed:undefined,
     testSyncFlagged:sync.length===1?sync[0].flagged:undefined,
     testSyncPriority:sync.length===1?['none','low','medium','high'].includes(sync[0].priority)?sync[0].priority:null:undefined,
+    deleteReady:result.deleteReady===true?true:undefined,
+    testDeleteCount:testList?deletion.length:undefined,
+    testDeletePending:deletion.length===1?!deletion[0].completed:undefined,
     testScheduleEmpty: result.schedule ? result.schedule.date === null && result.schedule.time === null : undefined,
     testScheduleDate: result.schedule ? result.schedule.date === '2030-01-15' && result.schedule.time === null : undefined,
     testScheduleTimed: result.schedule ? result.schedule.date === '2030-01-15' && result.schedule.time === '14:35' : undefined,
@@ -199,7 +234,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (!['open-sync-priority','inspect-sync-priority','cancel-sync-priority','reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date', 'cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
+    if (!['create-delete-test-item','cancel-delete-test-item','delete-test-item','inspect-sync-delete','open-sync-priority','inspect-sync-priority','cancel-sync-priority','reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date','cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
     if (command === 'quit') { quit(); return; }
     if (busy) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));

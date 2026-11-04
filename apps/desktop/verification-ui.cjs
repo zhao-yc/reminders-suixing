@@ -208,4 +208,33 @@ async function reconnectTestClient(expected) {
   return false;
 }
 
-module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient };
+/** 删除验收必须经过本地预检及确认界面；只操作匹配的专用测试行。 */
+async function deleteTestItem(expected) {
+  const pause=()=>new Promise(resolve=>setTimeout(resolve,80));
+  const disabled=node=>!node || node.disabled || ['true',''].includes(node.getAttribute('disabled'));
+  const list=document.querySelector('.list-content');
+  if(list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId || !expected.title?.startsWith('随行验证') || document.querySelector('.inline-editor')) return false;
+  const rows=[...document.querySelectorAll('.reminder-row[data-record-id]')].filter(row=>row.dataset.recordId===expected.id);
+  const row=rows.length===1?rows[0]:null,button=row?.querySelector('.delete-item-button');
+  if(!row || row.querySelector('.reminder-title')?.textContent.trim()!==expected.title || disabled(button)) return false;
+  button.click();
+  for(let attempt=0;attempt<130;attempt++) {
+    const current=document.querySelector('.list-content');
+    if(current?.dataset.pageId!==expected.pageId || current.dataset.listId!==expected.listId || !row.isConnected) return false;
+    const confirmation=row.querySelector('.delete-confirmation');
+    if(confirmation) {
+      if(!confirmation.textContent.includes(expected.title)) return false;
+      if(expected.preview===true) return true;
+      const action=row.querySelector(expected.cancel===true?'.cancel-delete':'.confirm-delete');
+      if(disabled(action)) return false;
+      action.click();
+      if(expected.cancel===true) {await pause();return !document.querySelector('.inline-editor') && row.isConnected;}
+      return true;
+    }
+    if(document.querySelector('.notice.error')) return false;
+    await pause();
+  }
+  return false;
+}
+
+module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem };
