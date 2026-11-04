@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { clickTestCompletion, showTestCompleted } = require('../apps/desktop/verification-ui.cjs');
+const { clickTestCompletion, showTestCompleted, editTestSchedule } = require('../apps/desktop/verification-ui.cjs');
 const { testOperation, summarize } = require('../apps/desktop/live-check.cjs');
 
 for (const tag of ['button', 'uni-button']) {
@@ -105,4 +105,26 @@ test('已完成页签验收遇到旧页面或正式界面错误时不宣称成�
   tab.addEventListener('click',()=>{clicks++;tab.classList.add('active');});
   for(const pageId of ['synthetic-old-page','synthetic-page']) assert.equal(await dom.window.eval('('+showTestCompleted.toString()+')('+JSON.stringify({pageId,listId:'synthetic-list'})+')'),false);
   assert.equal(clicks,1);
+});
+
+test('日期验收只打开目标行，填写可选日期时间并保存一次',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="synthetic-page" data-list-id="synthetic-list"><div class="tabs"><button data-status="pending" class="active"></button></div><div class="reminder-row" data-record-id="other"><button class="edit-schedule-button"></button></div><div class="reminder-row" data-record-id="target"><button class="edit-schedule-button"></button></div></div>',{runScripts:'outside-only'});
+  t.after(()=>dom.window.close());dom.window.setTimeout=callback=>setTimeout(callback,0);
+  const doc=dom.window.document,row=doc.querySelector('[data-record-id="target"]');let opened=0,saved=0,actual;
+  doc.querySelector('[data-record-id="other"] button').addEventListener('click',()=>assert.fail('不能打开其他行'));
+  row.querySelector('button').addEventListener('click',()=>{
+    opened++;row.innerHTML='<div class="inline-editor"><div class="schedule-editor"></div><button class="save-edit"></button></div>';
+    const editor=row.querySelector('.schedule-editor'),state={useDate:false,includeTime:false,date:'2026-11-04',time:'09:00'};
+    function render() {
+      editor.innerHTML='<button class="schedule-date-toggle" aria-checked="'+state.useDate+'"></button>'+(state.useDate?'<input class="schedule-date-input"><button class="schedule-time-toggle" aria-checked="'+state.includeTime+'"></button>'+(state.includeTime?'<input class="schedule-time-input">':''):'');
+      editor.querySelector('.schedule-date-toggle').addEventListener('click',()=>{state.useDate=!state.useDate;render();});
+      const dateInput=editor.querySelector('.schedule-date-input');if (dateInput) {dateInput.value=state.date;dateInput.addEventListener('input',()=>state.date=dateInput.value);}
+      editor.querySelector('.schedule-time-toggle')?.addEventListener('click',()=>{state.includeTime=!state.includeTime;render();});
+      const timeInput=editor.querySelector('.schedule-time-input');if (timeInput) {timeInput.value=state.time;timeInput.addEventListener('input',()=>state.time=timeInput.value);}
+    }
+    render();row.querySelector('.save-edit').addEventListener('click',()=>{saved++;actual=state;});
+  });
+  const expected={pageId:'synthetic-page',listId:'synthetic-list',id:'target',completed:false,value:{date:'2030-01-15',time:'14:35',timeZone:'UTC'}};
+  assert.equal(await dom.window.eval('('+editTestSchedule.toString()+')('+JSON.stringify(expected)+')'),true);
+  assert.equal(opened,1);assert.equal(saved,1);assert.equal(actual.date,'2030-01-15');assert.equal(actual.time,'14:35');
 });

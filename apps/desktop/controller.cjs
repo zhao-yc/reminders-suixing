@@ -4,6 +4,7 @@ const { BrowserWindow, session } = require('electron');
 const { allowedURL, allowStorage, browserUserAgent, validCommand } = require('./policy.cjs');
 const { inspectFrame, diagnosticRoute, tracePublicExceptions } = require('./page-diagnostics.cjs');
 const { inspectTestEditor } = require('./editor-diagnostics.cjs');
+const { inspectTestDetails } = require('./date-diagnostics.cjs');
 const { summarizeWriteOutcome, parseCreationStage, applyCreationStage } = require('./operation-diagnostics.cjs');
 
 const ROOT = path.resolve(__dirname, '../..');
@@ -116,7 +117,7 @@ function createController(options = {}) {
     if (!validCommand(command)) return { ok: false, code: 'INVALID_COMMAND', message: '不支持的操作参数。' };
     if (busy) return { ok: false, code: 'BUSY', message: '上一项操作尚未结束。' };
     busy = true;
-    const write = ['setCompleted', 'setText', 'createItem'].includes(command.type);
+    const write = ['setCompleted', 'setText', 'createItem', 'setSchedule'].includes(command.type);
     const sequence = write && options.diagnostics ? ++writeSequence : 0;
     if (sequence) lastWriteOutcome = summarizeWriteOutcome(command.type, sequence, null, true);
     const finish = result => {
@@ -153,6 +154,13 @@ function createController(options = {}) {
       const frame = site.webContents.mainFrame.framesInSubtree.find(frame => /\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url));
       if (!frame) return { ok: false, code: 'PAGE_NOT_READY' };
       return inspectTestEditor(frame);
+    },
+    async inspectTestDetails(action) {
+      if (!options.diagnostics) return {ok:false,code:'DIAGNOSTICS_DISABLED'};
+      if (!site || site.isDestroyed()) return {ok:false,code:'PAGE_NOT_READY'};
+      const frame=site.webContents.mainFrame.framesInSubtree.find(frame=>/\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url));
+      if (!frame) return {ok:false,code:'PAGE_NOT_READY'};
+      return inspectTestDetails(frame,action);
     },
     openSite(region = 'cn') {
       if (busy && region !== activeRegion) return { ok: false, code: 'BUSY', message: '请等待当前操作结束后再切换区域。' };

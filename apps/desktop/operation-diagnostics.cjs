@@ -1,4 +1,4 @@
-const WRITE_TYPES = new Set(['setCompleted', 'setText', 'createItem']);
+const WRITE_TYPES = new Set(['setCompleted', 'setText', 'createItem', 'setSchedule']);
 const CODES = new Set(['IN_FLIGHT', 'WEB_STATE_OBSERVED', 'UNCHANGED', 'INVALID_COMMAND', 'READ_ONLY', 'STALE_VIEW', 'UNCERTAIN_WRITE', 'ALREADY_SUBMITTED', 'DRAFT_OPEN', 'EDIT_UNAVAILABLE', 'CREATION_LIMIT', 'PAGE_NOT_READY', 'BUSY']);
 const STAGES = new Set(['preflight', 'waiting-draft', 'writing-title', 'input-command', 'input-accepted', 'input-settled', 'leaving-editor', 'editor-left', 'awaiting-autosave', 'observing-title', 'observed', 'input-cancelled', 'input-rejected', 'editor-detached']);
 

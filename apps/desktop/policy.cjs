@@ -18,7 +18,7 @@ function browserUserAgent(chromiumVersion) {
 }
 
 function validCommand(command) {
-  if (!command || typeof command !== 'object' || !['read', 'selectList', 'showCompleted', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return false;
+  if (!command || typeof command !== 'object' || !['read', 'selectList', 'showCompleted', 'getSchedule', 'setSchedule', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return false;
   if (command.type === 'read') return true;
   if (typeof command.pageId !== 'string' || command.pageId.length > 150 || typeof command.listId !== 'string' || command.listId.length > 150) return false;
   if (['selectList', 'showCompleted'].includes(command.type)) return true;
@@ -26,6 +26,13 @@ function validCommand(command) {
     typeof command.requestId === 'string' && /^[a-z0-9-]{1,100}$/.test(command.requestId);
   const target = typeof command.id === 'string' && command.id.length > 0 && command.id.length <= 1024 && typeof command.fingerprint === 'string' &&
     command.fingerprint.length <= 16000 && typeof command.expectedCompleted === 'boolean';
+  if (command.type === 'getSchedule') return target;
+  if (command.type === 'setSchedule') {
+    const schedule=value=>value && typeof value==='object' && Object.keys(value).sort().join(',')==='date,time,timeZone' &&
+      (value.date===null ? value.time===null && value.timeZone===null : typeof value.date==='string' && /^\d{4}-\d{2}-\d{2}$/.test(value.date) &&
+       (value.time===null ? value.timeZone===null : typeof value.time==='string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.time) && typeof value.timeZone==='string' && /^[A-Za-z0-9_+/-]{1,80}$/.test(value.timeZone)));
+    return !!(target && schedule(command.value) && schedule(command.expectedSchedule) && typeof command.expectedScheduleFingerprint==='string' && command.expectedScheduleFingerprint.length>0 && command.expectedScheduleFingerprint.length<=200);
+  }
   if (command.type === 'setText') return target && ['title', 'notes'].includes(command.field) && typeof command.value === 'string' &&
     command.value.length <= (command.field === 'title' ? 1000 : 2000) && (command.field !== 'title' || (command.value.trim().length > 0 && !/[\r\n]/.test(command.value)));
   return target && typeof command.completed === 'boolean';

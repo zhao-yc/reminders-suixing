@@ -95,4 +95,48 @@ async function showTestCompleted(expected) {
   return false;
 }
 
-module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted };
+/** 日期验收操作本地编辑入口、开关、输入和保存，禁止直接调用写入 IPC。 */
+async function editTestSchedule(expected) {
+  const pause=()=>new Promise(resolve=>setTimeout(resolve,100));
+  const disabled=node=>!node || node.disabled || ['true',''].includes(node.getAttribute('disabled'));
+  let row;
+  for(let attempt=0;attempt<80;attempt++) {
+    const list=document.querySelector('.list-content');
+    if (list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId) {await pause();continue;}
+    const tab=document.querySelector('.tabs [data-status="'+(expected.completed?'completed':'pending')+'"]');
+    if (!tab) return false;
+    if (!tab.classList.contains('active') && !disabled(tab)) {tab.click();await pause();}
+    const rows=[...document.querySelectorAll('.reminder-row')].filter(node=>node.dataset.recordId===expected.id);
+    row=rows.length===1?rows[0]:null;
+    const button=row?.querySelector('.edit-schedule-button');
+    if (!disabled(button)) {button.click();break;}
+    await pause();
+  }
+  if (!row) return false;
+  for(let attempt=0;attempt<80 && !row.querySelector('.schedule-editor');attempt++) await pause();
+  const editor=row.querySelector('.schedule-editor');
+  if (!editor) return false;
+  const dateSwitch=editor.querySelector('.schedule-date-toggle');
+  const useDate=expected.value.date!==null;
+  if (disabled(dateSwitch)) return false;
+  if (dateSwitch.getAttribute('aria-checked')!==String(useDate)) {dateSwitch.click();await pause();}
+  function input(selector,value) {
+    const node=editor.querySelector(selector);if (disabled(node)) return false;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(node,value);
+    node.dispatchEvent(new Event('input',{bubbles:true}));return true;
+  }
+  if (useDate) {
+    if (!input('.schedule-date-input input, input.schedule-date-input',expected.value.date)) return false;
+    const timeSwitch=editor.querySelector('.schedule-time-toggle');
+    const timed=expected.value.time!==null;
+    if (disabled(timeSwitch)) return false;
+    if (timeSwitch.getAttribute('aria-checked')!==String(timed)) {timeSwitch.click();await pause();}
+    if (timed && !input('.schedule-time-input input, input.schedule-time-input',expected.value.time)) return false;
+  }
+  await pause();
+  if (expected.preview === true) return true;
+  const save=row.querySelector('.save-edit');if (disabled(save)) return false;
+  save.click();return true;
+}
+
+module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule };

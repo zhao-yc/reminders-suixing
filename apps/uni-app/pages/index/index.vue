@@ -56,15 +56,26 @@
             <button class="completion-button" :class="{ checked: item.completed }" :disabled="busy || !!editing || (!live && !isDemo) || item.disabled" :aria-label="(item.completed ? '取消完成：' : '完成：') + item.title" @click="toggle(item)"><text v-if="item.completed">✓</text></button>
             <view class="reminder-copy">
               <view v-if="editing?.id === item.id" class="inline-editor">
-                <text class="editor-label">{{ editing.field === 'title' ? '编辑标题' : '编辑备注' }}</text>
+                <text class="editor-label">{{ editing.field === 'schedule' ? '日期与时间' : editing.field === 'title' ? '编辑标题' : '编辑备注' }}</text>
                 <input v-if="editing.field === 'title'" v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" aria-label="事项标题" @confirm="confirmEdit" @keydown="editKeydown" />
-                <textarea v-else v-model="editing.value" class="edit-field edit-notes" :maxlength="2000" :focus="true" :disabled="busy || editing.blocked" auto-height aria-label="事项备注" @keydown="editKeydown" />
+                <textarea v-else-if="editing.field === 'notes'" v-model="editing.value" class="edit-field edit-notes" :maxlength="2000" :focus="true" :disabled="busy || editing.blocked" auto-height aria-label="事项备注" @keydown="editKeydown" />
+                <view v-else class="schedule-editor">
+                  <view class="schedule-toggle-row"><text>日期</text><button class="schedule-date-toggle schedule-toggle" role="switch" :aria-checked="String(editing.useDate)" :disabled="busy || editing.blocked" @click="editing.useDate = !editing.useDate">{{ editing.useDate ? '开' : '关' }}</button></view>
+                  <template v-if="editing.useDate">
+                    <view class="schedule-value-row"><input v-model="editing.date" class="edit-field schedule-date-input" maxlength="10" aria-label="提醒日期" placeholder="YYYY-MM-DD" :disabled="busy || editing.blocked" /><picker mode="date" fields="day" :value="editing.date" start="0001-01-01" end="9999-12-31" :disabled="busy || editing.blocked" @change="editing.date = $event.detail.value"><view class="schedule-picker-button" role="button" aria-label="选择日期">▦</view></picker></view>
+                    <view class="schedule-presets"><button :disabled="busy || editing.blocked" @click="setScheduleDay(0)">今天</button><button :disabled="busy || editing.blocked" @click="setScheduleDay(1)">明天</button></view>
+                    <view class="schedule-toggle-row"><text>时间</text><button class="schedule-time-toggle schedule-toggle" role="switch" :aria-checked="String(editing.includeTime)" :disabled="busy || editing.blocked" @click="editing.includeTime = !editing.includeTime">{{ editing.includeTime ? '开' : '关' }}</button></view>
+                    <view v-if="editing.includeTime" class="schedule-value-row"><input v-model="editing.time" class="edit-field schedule-time-input" maxlength="5" aria-label="提醒时间" placeholder="HH:mm" :disabled="busy || editing.blocked" /><picker mode="time" :value="editing.time" :disabled="busy || editing.blocked" @change="editing.time = $event.detail.value"><view class="schedule-picker-button" role="button" aria-label="选择时间">◷</view></picker></view>
+                    <text v-if="editing.includeTime" class="schedule-zone">时区：{{ editing.timeZone }}</text>
+                  </template>
+                </view>
                 <view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '保存中…' : '保存' }}</button><button :disabled="busy" @click="endEdit">取消</button></view>
               </view>
               <template v-else><text class="reminder-title" @dblclick="startEdit(item, 'title')">{{ item.title }}</text><text v-if="item.notes" class="reminder-notes" @dblclick="startEdit(item, 'notes')">{{ item.notes }}</text><text v-if="item.notesTruncated" class="reminder-metadata">备注较长，请在官方页面查看完整内容</text></template>
               <text v-if="item.metadata" class="reminder-metadata">{{ item.metadata }}</text>
+              <text v-if="item.metadataPartial" class="reminder-metadata">部分日期附注请在官方页面查看</text>
             </view>
-            <view v-if="canEdit && !editing" class="row-actions"><button class="edit-title-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑标题" @click="startEdit(item, 'title')">✎</button><button class="edit-notes-button" :disabled="busy || (!live && !isDemo) || item.disabled || item.notesTruncated" aria-label="编辑备注" @click="startEdit(item, 'notes')">≡</button></view>
+            <view v-if="(canEdit || canEditSchedule) && !editing" class="row-actions"><button v-if="canEdit" class="edit-title-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑标题" @click="startEdit(item, 'title')">✎</button><button v-if="canEdit" class="edit-notes-button" :disabled="busy || (!live && !isDemo) || item.disabled || item.notesTruncated" aria-label="编辑备注" @click="startEdit(item, 'notes')">≡</button><button v-if="canEditSchedule" class="edit-schedule-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑日期与时间" @click="startScheduleEdit(item)">▦</button></view>
             <text v-if="item.level > 1" class="subtask-tag">子事项</text>
           </view>
           <view class="list-bottom-space"></view>
@@ -80,6 +91,7 @@ import { computed, ref, nextTick, onMounted, onUnmounted } from 'vue';
 import { createBridge } from '../../lib/bridge.js';
 import { demoSnapshot } from '../../lib/demo.js';
 import { readRegionPreference, saveRegionPreference } from '../../lib/region-preference.js';
+import { validSchedule, localDateString } from '../../lib/schedule.js';
 // #ifdef APP-HARMONY
 import HarmonyICloudHost from '../../components/HarmonyICloudHost.vue';
 import { onBackPress } from '@dcloudio/uni-app';
@@ -102,6 +114,7 @@ const live = ref(false);
 const isDemo = ref(false);
 const editing = ref(null);
 const canEdit = computed(() => isDemo.value || bridge.capabilities?.editText === true);
+const canEditSchedule = computed(() => isDemo.value || bridge.capabilities?.editSchedule === true);
 const canCreate = computed(() => isDemo.value || bridge.capabilities?.openNewItem === true);
 const notice = ref('');
 const noticeError = ref(false);
@@ -223,6 +236,45 @@ function startEdit(item, field) {
 
 function endEdit() { if (!busy.value) editing.value = null; }
 
+async function startScheduleEdit(item) {
+  if (!canEditSchedule.value || busy.value || editing.value || item.disabled || (!live.value && !isDemo.value)) return;
+  let value=item.schedule || {date:null,time:null,timeZone:null};
+  let target=item;
+  let zone=Intl.DateTimeFormat().resolvedOptions().timeZone;
+  let dateFingerprint=item.scheduleFingerprint;
+  if (!isDemo.value) {
+    const result=await run({type:'getSchedule',pageId:snapshot.value.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed});
+    if (!result?.ok || !validSchedule(result.schedule)) return;
+    value=result.schedule;zone=result.editorTimeZone;dateFingerprint=result.scheduleFingerprint;
+    target=snapshot.value.items.find(candidate=>candidate.id===item.id);
+    if (!target) return;
+  }
+  editing.value={id:target.id,field:'schedule',pageId:snapshot.value.pageId,listId:target.listId,fingerprint:target.fingerprint,expectedCompleted:target.completed,
+    expectedSchedule:value,expectedScheduleFingerprint:dateFingerprint,useDate:value.date!==null,includeTime:value.time!==null,date:value.date || localDateString(),time:value.time || '09:00',timeZone:zone,blocked:false};
+}
+
+function setScheduleDay(offset) {
+  if (!editing.value || busy.value || editing.value.blocked) return;
+  const date=new Date();date.setDate(date.getDate()+offset);
+  editing.value.date=localDateString(date);editing.value.useDate=true;
+}
+
+async function saveSchedule(current) {
+  const value={date:current.useDate?current.date:null,time:current.useDate && current.includeTime?current.time:null,timeZone:current.useDate && current.includeTime?current.timeZone:null};
+  if (!validSchedule(value)) {notice.value='请输入有效日期（YYYY-MM-DD）和时间（HH:mm）。';noticeError.value=true;return;}
+  if (isDemo.value) {
+    const item=snapshot.value.items.find(item=>item.id===current.id);
+    item.schedule=value;item.metadata=value.date?[value.date,value.time].filter(Boolean).join(' '):'';
+    editing.value=null;return;
+  }
+  if (!live.value) return;
+  // IPC 只传递明确的普通对象，不能把 Vue 包装后的嵌套响应式对象交给结构化克隆。
+  const expectedSchedule={date:current.expectedSchedule.date,time:current.expectedSchedule.time,timeZone:current.expectedSchedule.timeZone};
+  const result=await run({type:'setSchedule',pageId:current.pageId,listId:current.listId,id:current.id,fingerprint:current.fingerprint,expectedCompleted:current.expectedCompleted,expectedSchedule,expectedScheduleFingerprint:current.expectedScheduleFingerprint,value});
+  if (result?.ok) editing.value=null;
+  else current.blocked=true;
+}
+
 async function startCreate() {
   if (!canCreate.value || !snapshot.value || busy.value || editing.value || (!live.value && !isDemo.value)) return;
   if (!isDemo.value && bridge.capabilities?.createItem !== true) {
@@ -263,6 +315,7 @@ function confirmEdit() {
 async function saveEdit() {
   const current = editing.value;
   if (!current || current.blocked || busy.value) return;
+  if (current.field === 'schedule') { await saveSchedule(current); return; }
   if (current.field === 'title' && !current.value.trim()) { notice.value = '请填写事项标题。'; noticeError.value = true; return; }
   if (isDemo.value) {
     if (current.creating) snapshot.value.items.push({ id: current.requestId, listId: current.listId, title: current.value.trim(), notes: '', metadata: '', completed: false, level: 1, disabled: false });
@@ -331,6 +384,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .search-mark { width:11px; height:11px; border:1.6px solid #97a3b3; border-radius:50%; position:relative; flex-shrink:0; margin-right:2px; }.search-mark::after { content:''; position:absolute; width:5px; height:1.6px; background:#97a3b3; right:-4px; bottom:-2px; transform:rotate(45deg); }
 .current-scope { font-size:10px; color:#a3adba; }.list-content { padding:24px 34px 0; }.list-heading { margin-bottom:16px; }.eyebrow { margin-bottom:5px; }.list-title { font-size:32px; }.reminder-row { padding:16px 2px; }.reminder-copy { gap:4px; }
 .new-reminder-row { background:#f8fbff; border-radius:9px; padding:16px 10px; margin-top:10px; gap:15px; }.draft-circle { width:22px; height:22px; border:1.5px solid #cbd4df; border-radius:50%; margin-top:29px; flex-shrink:0; }.new-reminder-row .inline-editor { min-width:0; flex:1; }.empty-add { color:#1687ff; font-size:12px; padding:8px 12px; }
+.schedule-editor { max-width:320px; width:100%; display:flex; flex-direction:column; gap:10px; }.schedule-toggle-row { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#62738a; font-size:12px; }.schedule-toggle { margin:0; width:42px; padding:3px 8px; border-radius:14px; background:#e5eaf0; color:#8492a5; font-size:11px; }.schedule-toggle[aria-checked="true"] { background:#e2f0ff; color:#1687ff; }.schedule-value-row { display:flex; align-items:center; gap:8px; min-width:0; }.schedule-value-row input { flex:1; min-width:0; }.schedule-picker-button { width:35px; height:35px; border-radius:7px; display:flex; align-items:center; justify-content:center; color:#1687ff; background:#edf5ff; font-size:20px; }.schedule-presets { display:flex; gap:8px; }.schedule-presets button { margin:0; padding:3px 9px; color:#1687ff; background:#f0f6ff; font-size:11px; border-radius:5px; }.schedule-zone { color:#98a4b4; font-size:10px; overflow-wrap:anywhere; }
 @media (max-width:760px) { .sidebar { position:fixed; top:0; bottom:0; left:0; z-index:30; transform:translateX(-100%); transition:transform .2s ease; padding-top:calc(28px + env(safe-area-inset-top)); }.sidebar.is-open { transform:translateX(0); }.sidebar-scrim { display:block; position:fixed; inset:0; z-index:25; background:#26324735; }.mobile-menu { display:block; color:#74839a; font-size:19px; width:28px; }.toolbar { height:calc(68px + env(safe-area-inset-top)); padding:env(safe-area-inset-top) 20px 0; gap:8px; }.toolbar-label { display:none; }.toolbar-actions { gap:10px; }.region-picker { font-size:10px; }.quiet-button { font-size:12px; }.primary-button { font-size:12px; padding:9px 15px; }.notice { margin:12px 20px 0; font-size:11px; }.list-content { padding:28px 24px 0; }.list-title { font-size:32px; }.heading-count { font-size:26px; }.list-heading { margin-bottom:21px; }.search { width:125px; font-size:10px; }.tabs { gap:18px; }.tabs button { font-size:11px; }.reminder-row { gap:13px; padding:21px 0; }.reminder-title { font-size:14px; }.list-footer { padding-bottom:calc(20px + env(safe-area-inset-bottom)); font-size:9px; }.welcome-title { font-size:33px; }.welcome { padding-bottom:40px; }.source-chip { font-size:9px; padding:6px 8px; } }
 @media (max-width:760px) { .toolbar.with-tools { height:calc(114px + env(safe-area-inset-top)); padding-bottom:10px; flex-wrap:wrap; align-content:center; row-gap:10px; }.toolbar.with-tools .mobile-menu { order:1; }.toolbar-actions { order:2; margin-left:auto; }.quick-tools { order:3; flex-basis:100%; }.toolbar-search { flex:1; width:auto; }.list-content { padding-top:22px; }.new-reminder-row { padding:15px 10px; } }
 </style>

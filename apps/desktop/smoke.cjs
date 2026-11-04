@@ -7,7 +7,7 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
 const { installDesktopIPC } = require('./ipc.cjs');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule } = require('./verification-ui.cjs');
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
 async function runSmoke({ frontendURL, root }) {
@@ -158,6 +158,50 @@ async function runSmoke({ frontendURL, root }) {
     }
     for (const [field, value] of Object.entries(textValues)) assert.equal(textReloaded.snapshot.items[0][field], value);
     console.log('构建界面标题和备注经原生编辑命令各保存一次，合成页面重载保持。');
+    const zone=await controller.window().webContents.executeJavaScript('Intl.DateTimeFormat().resolvedOptions().timeZone');
+    for(const value of [{date:'2030-01-15',time:null,timeZone:null},{date:'2030-01-15',time:'14:35',timeZone:zone},{date:null,time:null,timeZone:null}]) {
+      const current=await controller.execute({type:'read'},'cn');const target=current.snapshot.items[0];
+      ui.webContents.send('suixing:snapshot',{region:'cn',result:current});
+      assert.equal(await ui.webContents.executeJavaScript('('+editTestSchedule.toString()+')('+JSON.stringify({pageId:current.snapshot.pageId,listId:target.listId,id:target.id,completed:target.completed,value})+')',true),true);
+      let observed;
+      for(let attempt=0;attempt<60;attempt++) {
+        await new Promise(resolve=>setTimeout(resolve,100));
+        const read=await controller.execute({type:'read'},'cn');const item=read.snapshot?.items[0];if (!item) continue;
+        observed=await controller.execute({type:'getSchedule',pageId:read.snapshot.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed},'cn');
+        if (JSON.stringify(observed.schedule)===JSON.stringify(value)) break;
+      }
+      if (JSON.stringify(observed.schedule)!==JSON.stringify(value)) {
+        const state=await ui.webContents.executeJavaScript('({notice:document.querySelector(".notice")?.textContent,editor:!!document.querySelector(".schedule-editor"),dateEnabled:document.querySelector(".schedule-date-toggle")?.getAttribute("aria-checked"),date:document.querySelector(".schedule-date-input input")?.value,timeEnabled:document.querySelector(".schedule-time-toggle")?.getAttribute("aria-checked")})');
+        console.log('合成日期失败诊断：'+JSON.stringify({code:observed.code,outcome:controller.lastWriteOutcome(),state}));
+      }
+      assert.deepEqual(observed.schedule,value);
+    }
+    assert.equal(await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureScheduleSaveClicks'),3);
+    assert.equal(await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureScheduleSaves'),3);
+    console.log('本地日期编辑器经正式 IPC 单次设置全天、指定时间和清除，分段输入由网页接管。');
+    const previewRead=await controller.execute({type:'read'},'cn');const previewItem=previewRead.snapshot.items[0];
+    ui.webContents.send('suixing:snapshot',{region:'cn',result:previewRead});
+    assert.equal(await ui.webContents.executeJavaScript('('+editTestSchedule.toString()+')('+JSON.stringify({pageId:previewRead.snapshot.pageId,listId:previewItem.listId,id:previewItem.id,completed:previewItem.completed,value:{date:'2030-01-15',time:'14:35',timeZone:zone},preview:true})+')',true),true);
+    ui.showInactive();await new Promise(resolve=>setTimeout(resolve,250));
+    fs.writeFileSync(path.join(root,'.local/date-editor-desktop-preview.png'),(await ui.webContents.capturePage()).toPNG());
+    ui.setContentSize(390,844);await new Promise(resolve=>setTimeout(resolve,400));
+    const pickerStates=await ui.webContents.executeJavaScript('([...document.querySelectorAll(".schedule-editor uni-picker")].map(root=>{const pane=root.querySelector(".uni-picker-container");return {present:!!pane,hidden:!!pane && getComputedStyle(pane).display==="none",stray:[...root.querySelectorAll(".uni-picker-custom")].some(node=>!node.closest(".uni-picker-container"))}}))');
+    assert.equal(pickerStates.length,2);
+    assert.ok(pickerStates.every(state=>state.present && state.hidden && !state.stray),'调整窗口后关闭的日期选择器必须保持隐藏和完整容器');
+    const dateBounds=await ui.webContents.executeJavaScript('({width:innerWidth,parts:[...document.querySelectorAll(".schedule-editor,.schedule-value-row,.schedule-toggle-row,.editor-actions")].map(node=>{const r=node.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width,scroll:node.scrollWidth}})})');
+    assert.ok(dateBounds.parts.length>=5);
+    for(const part of dateBounds.parts) {assert.ok(part.left>=-1 && part.right<=dateBounds.width+1);assert.ok(part.scroll<=Math.ceil(part.width)+1);}
+    fs.writeFileSync(path.join(root,'.local/date-editor-mobile-preview.png'),(await ui.webContents.capturePage()).toPNG());
+    await ui.webContents.executeJavaScript('document.querySelector(".schedule-editor uni-picker .schedule-picker-button").click()');
+    await new Promise(resolve=>setTimeout(resolve,450));
+    const pickerOpen=await ui.webContents.executeJavaScript('(()=>{const pane=document.querySelector(".uni-picker-container.uni-date-select");const content=pane?.querySelector(".uni-picker-custom.uni-picker-toggle .uni-picker-content");return {visible:!!pane && getComputedStyle(pane).display!=="none",columns:content?.querySelectorAll("uni-picker-view-column").length,within:content?.getBoundingClientRect().height<=260}})()');
+    assert.equal(pickerOpen.visible,true);assert.equal(pickerOpen.columns,3);assert.equal(pickerOpen.within,true);
+    fs.writeFileSync(path.join(root,'.local/date-picker-mobile-preview.png'),(await ui.webContents.capturePage()).toPNG());
+    await ui.webContents.executeJavaScript('document.querySelector(".uni-picker-container.uni-date-select .uni-picker-action-cancel").click()');
+    await new Promise(resolve=>setTimeout(resolve,350));
+    await ui.webContents.executeJavaScript('document.querySelector(".inline-editor .editor-actions > :last-child").click()');
+    assert.equal(await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureScheduleSaveClicks'),3,'日期外观预览不存储');
+    ui.setContentSize(1160,830);await new Promise(resolve=>setTimeout(resolve,250));
     ui.webContents.send('suixing:snapshot', {region:'cn',result:textReloaded});
     const keyboard = await ui.webContents.executeJavaScript(`(async()=>{
       const pause=()=>new Promise(resolve=>setTimeout(resolve,120));
@@ -232,6 +276,22 @@ async function runSmoke({ frontendURL, root }) {
       if(normalSnapshot.snapshot?.items.some(item=>item.title===normalTitle)&&saves===1)break;
     }
     assert.equal(normalSnapshot.snapshot?.items.filter(item=>item.title===normalTitle).length,1);
+    for(const value of [{date:'2030-01-15',time:'14:35',timeZone:zone},{date:null,time:null,timeZone:null}]) {
+      const target=normalSnapshot.snapshot.items.find(item=>item.title===normalTitle);
+      normalUI.webContents.send('suixing:snapshot',{region:'cn',result:normalSnapshot});
+      assert.equal(await normalUI.webContents.executeJavaScript('('+editTestSchedule.toString()+')('+JSON.stringify({pageId:normalSnapshot.snapshot.pageId,listId:target.listId,id:target.id,completed:target.completed,value})+')',true),true);
+      let actual;
+      for(let attempt=0;attempt<60;attempt++) {
+        await new Promise(resolve=>setTimeout(resolve,100));
+        normalSnapshot=await normalController.execute({type:'read'},'cn');
+        const item=normalSnapshot.snapshot?.items.find(item=>item.title===normalTitle);if (!item) continue;
+        actual=await normalController.execute({type:'getSchedule',pageId:normalSnapshot.snapshot.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed},'cn');
+        if (JSON.stringify(actual.schedule)===JSON.stringify(value)) break;
+      }
+      assert.deepEqual(actual.schedule,value);
+    }
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureScheduleSaveClicks'),2);
+    assert.equal(normalController.lastWriteOutcome(),null,'普通模式日期读写不依赖开发诊断');
     assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureCreationClicks'),1);
     assert.equal(normalController.lastWriteOutcome(),null,'普通窗口不启用开发诊断');
     await normalController.window().webContents.executeJavaScript('location.reload()');
@@ -288,6 +348,9 @@ async function runSmoke({ frontendURL, root }) {
       checks: ['跨站 iframe 浏览器标识', '只读子页面诊断', '同源 iframe 读取', '同名事项按记录 ID 操作', '完成状态重载保持', '旧页面句柄失效', '构建界面加载', '服务区域恢复', '正式 IPC 主框架校验', '构建界面完成及取消完成各派发一次', '已完成页签展开官方隐藏事项且重复不反转', '标题和备注各保存一次及合成重载保持', '顶栏新增与搜索快捷键', '输入法取消不创建', '新增单次输入和官方自动保存', '普通模式隐藏官方容器新增与重载保持', '页面退出后保留固定阶段回执', '固定提醒事项入口恢复', '页面无 Node 权限', '桌面与手机宽度布局'],
       capturedAt: new Date().toISOString()
     };
+    report.checks.push('日期编辑器单次设置全天、指定时间及清除');
+    report.checks.push('普通模式隐藏官方窗口日期读写');
+    report.checks.push('日期编辑器窄屏布局、选择器展开与取消');
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });
     fs.writeFileSync(path.join(root, '.local/desktop-smoke.json'), JSON.stringify(report, null, 2));
     console.log('桌面合成验证通过：' + report.checks.join('、'));

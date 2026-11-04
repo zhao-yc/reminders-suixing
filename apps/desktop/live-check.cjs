@@ -1,7 +1,7 @@
 const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule } = require('./verification-ui.cjs');
 
 const TEST_PREFIX = '随行验证';
 const TEST_ITEM = '随行验证 · 最小读写验证';
@@ -45,6 +45,29 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
   const items = result.snapshot.items.filter(item => [TEST_ITEM, TEST_EDITED_ITEM].includes(item.title));
   if (items.length !== 1) return { ok: false, code: 'TEST_ITEM_NOT_UNIQUE' };
   const item = items[0];
+  if (command === 'read-test-schedule') return controller.execute({type:'getSchedule',pageId:result.snapshot.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed},'cn');
+  if (['set-test-date','set-test-time','clear-test-schedule'].includes(command)) {
+    let current=await controller.execute({type:'getSchedule',pageId:result.snapshot.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed},'cn');
+    if (!current.ok) return current;
+    const schedule=current.schedule;
+    if (!schedule || !(schedule.date===null && schedule.time===null || schedule.date==='2030-01-15' && [null,'14:35'].includes(schedule.time))) return {ok:false,code:'TEST_SCHEDULE_NOT_OWNED'};
+    const value={date:command==='clear-test-schedule'?null:'2030-01-15',time:command==='set-test-time'?'14:35':null,timeZone:command==='set-test-time'?current.editorTimeZone:null};
+    if (schedule.date===value.date && schedule.time===value.time && schedule.timeZone===value.timeZone) return {...current,code:'UNCHANGED',dispatched:false};
+    sendSnapshot(current);
+    let clicked;
+    try {clicked=await ui.webContents.executeJavaScript('('+editTestSchedule.toString()+')('+JSON.stringify({pageId:current.snapshot.pageId,listId:item.listId,id:item.id,completed:item.completed,value})+')',true);}
+    catch {return {ok:false,code:'UNCERTAIN_WRITE',cloudConfirmed:false};}
+    if (!clicked) return {ok:false,code:'TEST_UI_NOT_READY'};
+    for(let attempt=0;attempt<70;attempt++) {
+      await new Promise(resolve=>setTimeout(resolve,200));
+      result=await controller.execute({type:'read'},'cn');
+      const actual=result.snapshot?.items.find(candidate=>candidate.id===item.id);
+      if (!actual) continue;
+      current=await controller.execute({type:'getSchedule',pageId:result.snapshot.pageId,listId:actual.listId,id:actual.id,fingerprint:actual.fingerprint,expectedCompleted:actual.completed},'cn');
+      if (current.schedule?.date===value.date && current.schedule.time===value.time && current.schedule.timeZone===value.timeZone) return {...current,code:'WEB_STATE_OBSERVED',dispatched:true,cloudConfirmed:false,via:'Windows 本地日期编辑界面 IPC'};
+    }
+    return {ok:false,code:'UNCERTAIN_WRITE',dispatched:true,cloudConfirmed:false};
+  }
   if (['edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note'].includes(command)) {
     const field = command.endsWith('title') ? 'title' : 'notes';
     const value = field === 'title' ? (command === 'edit-test-title' ? TEST_EDITED_ITEM : TEST_ITEM) : (command === 'edit-test-note' ? TEST_NOTE : '');
@@ -105,6 +128,9 @@ function summarize(result) {
     testNoteEmpty: items.length === 1 ? items[0].notes === '' : undefined,
     testCreatedCount: testList ? created.length : undefined,
     testCreatedPending: created.length === 1 ? !created[0].completed : undefined,
+    testScheduleEmpty: result.schedule ? result.schedule.date === null && result.schedule.time === null : undefined,
+    testScheduleDate: result.schedule ? result.schedule.date === '2030-01-15' && result.schedule.time === null : undefined,
+    testScheduleTimed: result.schedule ? result.schedule.date === '2030-01-15' && result.schedule.time === '14:35' : undefined,
     dispatched: result.dispatched, cloudConfirmed: result.cloudConfirmed, via: result.via };
 }
 
@@ -119,7 +145,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (!['environment', 'diagnostics', 'inspect-test-editor', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
+    if (!['environment', 'diagnostics', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date', 'cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
     if (command === 'quit') { quit(); return; }
     if (busy) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));
@@ -138,6 +164,8 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
         result = await controller.diagnostics();
       } else if (command === 'inspect-test-editor') {
         result = await controller.inspectTestEditor();
+      } else if (['open-test-details','inspect-test-details','inspect-test-date-binding','preview-test-date','cancel-test-details'].includes(command)) {
+        result = await controller.inspectTestDetails({'open-test-details':'open','inspect-test-details':'inspect','inspect-test-date-binding':'binding','preview-test-date':'preview-date','cancel-test-details':'cancel'}[command]);
       } else {
         const snapshot = command === 'read' ? await controller.execute({ type: 'read' }, 'cn') : await testOperation(controller, command, { sendSnapshot, ui });
         sendSnapshot(snapshot);
@@ -146,7 +174,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result }, null, 2));
       console.log('开发验证结果：' + JSON.stringify(result));
     } catch {
-      const write = ['complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item'].includes(command);
+      const write = ['complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'set-test-date', 'set-test-time', 'clear-test-schedule'].includes(command);
       const result = { ok: false, code: write ? 'UNCERTAIN_WRITE' : 'VERIFICATION_FAILED', cloudConfirmed: false };
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result }));
       console.log('验证命令未完成，请先只读核对，不重放写入。');

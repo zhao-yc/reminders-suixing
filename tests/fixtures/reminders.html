@@ -28,6 +28,13 @@ window.fixtureCreationAutosaves = 0;
 window.fixtureHideCompleted = false;
 window.fixtureCompletedMenuClicks = 0;
 window.fixtureCompletedActionClicks = 0;
+window.fixtureScheduleSaves = 0;
+window.fixtureScheduleSaveClicks = 0;
+window.fixtureScheduleCancels = 0;
+window.fixtureScheduleInputs = [];
+window.fixtureScheduleRejectInput = false;
+window.fixtureScheduleDisableSave = false;
+window.fixtureScheduleUse12Hour = false;
 // JSDOM 不实现浏览器编辑命令；真实 Electron 保留并验证其原生实现。
 if (!document.execCommand) document.execCommand = function (command, _ui, value) {
   if (!['insertText', 'insertHTML'].includes(command) || !document.activeElement?.isContentEditable && document.activeElement?.getAttribute('contenteditable') !== 'true') return false;
@@ -44,9 +51,19 @@ function renderFixture(list) {
     '<div class="reminder-item" id="' + id + '" role="row" aria-level="1" aria-setsize="' + records.length + '">' +
     '<button class="mark-completed" data-completed="' + (index === 0 && complete) + '" aria-label="切换完成状态"></button>' +
     '<div class="title"><div role="textbox" contenteditable="true">' + title + '</div></div>' +
-    '<div class="notes"><div role="textbox" contenteditable="true"></div></div><div class="metadata">2026/11/04<span aria-hidden="true">重复无障碍文字</span></div></div>'
+    '<div class="notes"><div role="textbox" contenteditable="true"></div></div><div class="metadata">2026/11/04<span aria-hidden="true">重复无障碍文字</span></div><button class="info" data-edit-open="false" aria-haspopup="dialog">详情</button></div>'
   ).join('');
   if (window.fixtureHideCompleted) document.querySelectorAll('.mark-completed[data-completed="true"]').forEach(button => button.closest('.reminder-item').remove());
+  document.querySelectorAll('.reminder-item').forEach(row => {
+    const schedule=JSON.parse(sessionStorage.getItem('fixture-schedule-'+row.id) || '{"date":null,"time":null,"timeZone":null}');
+    let due=null;
+    if (schedule.date) {const civil=schedule.date.split('-').map(Number),clock=(schedule.time || '00:00').split(':').map(Number);const local=new Date(0);local.setFullYear(civil[0],civil[1]-1,civil[2]);local.setHours(clock[0],clock[1],0,0);due=local.getTime();}
+    const record={pk:row.id.slice('reminder-item-'.length),DueDate:due,AllDay:!!schedule.date && schedule.time===null,TimeZone:schedule.date?schedule.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone:null};
+    // 模拟官方 DOM 行的直接子组件绑定；不模拟或访问任何账户根状态。
+    Object.defineProperty(row,'__reactProps$fixture',{value:{children:{props:{item:record}}},configurable:true,writable:true});
+    if (schedule.date) {const element=document.createElement('span');element.className='due-date';element.textContent=record.AllDay?new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'numeric',day:'numeric',timeZone:'UTC'}).format(new Date(due)):schedule.date+' '+schedule.time;row.querySelector('.metadata').append(element);}
+    row.querySelector('.info').addEventListener('click',()=>openFixtureSchedule(row));
+  });
   document.querySelectorAll('.title [role="textbox"], .notes [role="textbox"]').forEach(editor => {
     const field = editor.closest('.title') ? 'title' : 'notes';
     const key = 'fixture-text-' + editor.closest('.reminder-item').id + '-' + field;
@@ -89,6 +106,64 @@ function renderFixture(list) {
     button.dataset.completed = String(next);
     sessionStorage.setItem('fixture-complete', String(next));
   }); });
+}
+function openFixtureSchedule(row) {
+  if (document.querySelector('.details-popover')) return;
+  const opener=row.querySelector('.info');opener.setAttribute('data-edit-open','true');
+  const key='fixture-schedule-'+row.id;
+  let state=JSON.parse(sessionStorage.getItem(key) || '{"date":null,"time":null,"timeZone":null}');
+  const popup=document.createElement('div');popup.className='details-popover';
+  popup.innerHTML='<div class="reminder-item-details"><div class="content-title"><div class="title"><div role="textbox"></div></div></div><div class="reminder-edit-date"><div id="atDate" role="switch" aria-checked="false" tabindex="0"></div><div class="fixture-date-fields"></div></div><button class="secondary">取消</button><button class="primary">存储</button></div>';
+  popup.querySelector('.content-title [role="textbox"]').textContent=row.querySelector('.title [role="textbox"]').textContent;
+  const dateSwitch=popup.querySelector('#atDate');
+  function close() {popup.remove();opener.setAttribute('data-edit-open','false');}
+  function daysInMonth(year,month) {return [31,year%4===0 && (year%100!==0 || year%400===0)?29:28,31,30,31,30,31,31,30,31,30,31][month-1];}
+  function renderFields() {
+    dateSwitch.setAttribute('aria-checked',String(state.date!==null));
+    const area=popup.querySelector('.fixture-date-fields');area.innerHTML='';
+    if (!state.date) return;
+    area.innerHTML='<div class="date-time-container"><div class="date-field"></div><div class="time-picker"><div id="editTime" role="checkbox" tabindex="0"></div><div class="field"></div></div></div>';
+    const parts=state.date.split('-').map(Number);
+    function segment(parent,name,value,min,max,time) {
+      const node=document.createElement('div');node.setAttribute('role','spinbutton');node.setAttribute('contenteditable','true');node.setAttribute('aria-valuenow',String(value));node.setAttribute('aria-valuemin',String(min));node.setAttribute('aria-valuemax',String(max));node.setAttribute('aria-label',name);
+      if (time && !state.time) node.setAttribute('aria-disabled','true');
+      node.textContent=String(value);parent.append(node);
+      node.addEventListener('beforeinput',event=>{
+        event.preventDefault();window.fixtureScheduleInputs.push((time?'time-':'date-')+name);
+        if (window.fixtureScheduleRejectInput) return;
+        const number=Number(event.data);if (!Number.isInteger(number) || number<min || number>max) return;
+        if (!time) {
+          parts[{year:0,month:1,day:2}[name]]=number;
+          parts[2]=Math.min(parts[2],daysInMonth(parts[0],parts[1]));
+          state.date=parts.map((value,index)=>String(value).padStart(index===0?4:2,'0')).join('-');
+        } else {
+          const clock=state.time.split(':').map(Number);
+          if (name==='minute') clock[1]=number;
+          else clock[0]=window.fixtureScheduleUse12Hour?number%12+(clock[0]>=12?12:0):number;
+          state.time=clock.map(value=>String(value).padStart(2,'0')).join(':');
+        }
+        renderFields();
+      });
+      if (name==='period') node.addEventListener('keydown',event=>{
+        if (!['Home','End'].includes(event.key)) return;event.preventDefault();window.fixtureScheduleInputs.push('time-period');
+        const clock=state.time.split(':').map(Number);clock[0]=clock[0]%12+(event.key==='End'?12:0);state.time=clock.map(value=>String(value).padStart(2,'0')).join(':');renderFields();
+      });
+    }
+    const dateField=area.querySelector('.date-field');
+    segment(dateField,'year',parts[0],1,9999,false);segment(dateField,'month',parts[1],1,12,false);segment(dateField,'day',parts[2],1,daysInMonth(parts[0],parts[1]),false);
+    const timeSwitch=area.querySelector('#editTime');timeSwitch.setAttribute('aria-checked',String(state.time!==null));
+    timeSwitch.addEventListener('click',()=>{state.time=state.time===null?'09:00':null;state.timeZone=state.time===null?null:Intl.DateTimeFormat().resolvedOptions().timeZone;renderFields();});
+    const clock=(state.time || '00:00').split(':').map(Number),field=area.querySelector('.time-picker .field');
+    segment(field,'hour',window.fixtureScheduleUse12Hour?clock[0]%12 || 12:clock[0],window.fixtureScheduleUse12Hour?1:0,window.fixtureScheduleUse12Hour?12:23,true);segment(field,'minute',clock[1],0,59,true);
+    if (window.fixtureScheduleUse12Hour) segment(field,'period',clock[0]>=12?12:0,0,12,true);
+  }
+  dateSwitch.addEventListener('click',()=>{state.date=state.date===null?'2026-11-04':null;if (state.date===null) {state.time=null;state.timeZone=null;}renderFields();});
+  popup.querySelector('.secondary').addEventListener('click',()=>{window.fixtureScheduleCancels++;close();});
+  popup.querySelector('.primary').addEventListener('click',()=>{
+    window.fixtureScheduleSaveClicks++;if (window.fixtureScheduleDisableSave) return;
+    sessionStorage.setItem(key,JSON.stringify(state));window.fixtureScheduleSaves++;close();renderFixture(document.querySelector('[role="treeitem"][aria-selected="true"]').dataset.list);
+  });
+  renderFields();document.body.append(popup);
 }
 document.querySelector('.rm-new-reminder').addEventListener('click', () => {
   window.fixtureCreationClicks++;
