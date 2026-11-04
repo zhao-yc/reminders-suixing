@@ -63,6 +63,7 @@
 import { computed, ref, onUnmounted } from 'vue';
 import { createBridge } from '../../lib/bridge.js';
 import { demoSnapshot } from '../../lib/demo.js';
+import { readRegionPreference, saveRegionPreference } from '../../lib/region-preference.js';
 // #ifdef APP-HARMONY
 import HarmonyICloudHost from '../../components/HarmonyICloudHost.vue';
 import { onBackPress } from '@dcloudio/uni-app';
@@ -73,7 +74,12 @@ const bridge = createBridge();
 onBackPress(() => bridge.hideSite());
 // #endif
 const regionLabels = ['中国大陆', '其他地区'];
-const region = ref('cn');
+// 显式调用 uni API，确保 H5 按需编译包含存储能力；测试替身只在纯逻辑测试中使用。
+const regionStorage = {
+  getStorageSync: key => uni.getStorageSync(key),
+  setStorageSync: (key, value) => uni.setStorageSync(key, value)
+};
+const region = ref(readRegionPreference(regionStorage));
 const snapshot = ref(null);
 const busy = ref(false);
 const live = ref(false);
@@ -158,11 +164,17 @@ function showDemo() {
 
 function changeRegion(event) {
   if (busy.value) return;
-  region.value = Number(event.detail.value) === 0 ? 'cn' : 'global';
+  const index = Number(event.detail.value);
+  if (![0, 1].includes(index)) return;
+  const next = index === 0 ? 'cn' : 'global';
+  if (next === region.value) return;
+  region.value = next;
   snapshot.value = null;
   isDemo.value = false;
   live.value = false;
-  notice.value = '服务区域已切换，请重新连接。';
+  const saved = saveRegionPreference(regionStorage, next);
+  notice.value = saved ? '服务区域已切换，请重新连接。' : '本次已切换区域，但未能保存设置；下次启动请重新选择。';
+  noticeError.value = !saved;
 }
 
 // 验证客户端仍通过相同的快照入口更新界面，不把诊断读取伪装成示例数据。

@@ -18,7 +18,12 @@ let controller;
 let stopLiveCheck;
 const primary = smoke || app.requestSingleInstanceLock();
 if (!primary) app.quit();
-app.on('second-instance', () => { mainWindow?.show(); controller?.openSite('cn'); });
+app.on('second-instance', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
 
 /** 查找 HBuilderX 发布产物，不接受任意远程地址作为具有桌面权限的主界面。 */
 function frontendPath() {

@@ -70,6 +70,18 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(uiState.title, '提醒事项·随行');
     assert.equal(uiState.bridge, 'function');
     assert.equal(uiState.hasNode, 'undefined');
+    // 区域设置保存在本地应用源，与远程账号会话分开；重建页面时恢复，避免回到另一区域。
+    const displayedRegion = () => ui.webContents.executeJavaScript('document.querySelector(".region-picker")?.textContent');
+    for (const [value, label] of [['global', '其他地区'], ['cn', '中国大陆']]) {
+      await ui.webContents.executeJavaScript('document.querySelector(".region-picker").click()');
+      await ui.webContents.executeJavaScript('new Promise((resolve,reject)=>{const deadline=Date.now()+5000;const timer=setInterval(()=>{const option=[...document.querySelectorAll(".uni-picker-select .uni-picker-item")].find(node=>node.textContent===' + JSON.stringify(label) + ');if(option){clearInterval(timer);option.click();resolve(true)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("区域选项未出现"))}},50)})');
+      const stored = await ui.webContents.executeJavaScript('localStorage.getItem("suixing.settings.region")');
+      assert.equal(stored, value, '实际区域选择应通过 uni API 保存设置');
+      await ui.loadURL(frontendURL);
+      await ui.webContents.executeJavaScript('new Promise((resolve,reject)=>{const deadline=Date.now()+5000;const timer=setInterval(()=>{if(document.querySelector(".region-picker")){clearInterval(timer);resolve(true)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("区域设置界面未完成加载"))}},50)})');
+      assert.ok((await displayedRegion()).includes(label), '重建页面必须恢复保存的区域');
+    }
+    console.log('构建界面服务区域恢复验证通过。');
     const ipcRead = await ui.webContents.executeJavaScript('window.suixingDesktop.execute({type:"read"},"cn").then(r=>({ok:r.ok,count:r.snapshot?.items.length}))');
     assert.equal(ipcRead.ok, true);
     assert.equal(ipcRead.count, 2);
@@ -119,7 +131,7 @@ async function runSmoke({ frontendURL, root }) {
     fs.writeFileSync(path.join(root, '.local/mobile-preview.png'), (await ui.webContents.capturePage()).toPNG());
     const report = {
       passed: true, kind: 'Electron 合成验证，不代表真实 iCloud 或真机验收',
-      checks: ['跨站 iframe 浏览器标识', '只读子页面诊断', '同源 iframe 读取', '同名事项按记录 ID 操作', '完成状态重载保持', '旧页面句柄失效', '构建界面加载', '界面通过 IPC 读取', '构建界面完成及取消完成各派发一次', '页面无 Node 权限', '桌面与手机宽度布局'],
+      checks: ['跨站 iframe 浏览器标识', '只读子页面诊断', '同源 iframe 读取', '同名事项按记录 ID 操作', '完成状态重载保持', '旧页面句柄失效', '构建界面加载', '服务区域恢复', '界面通过 IPC 读取', '构建界面完成及取消完成各派发一次', '页面无 Node 权限', '桌面与手机宽度布局'],
       capturedAt: new Date().toISOString()
     };
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });

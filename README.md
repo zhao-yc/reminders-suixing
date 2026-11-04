@@ -10,6 +10,7 @@
 
 - 自己的清单界面：桌面分栏、手机抽屉导航、搜索当前清单、深浅分明的完成状态。
 - 中国大陆 `icloud.com.cn` 与其他地区 `icloud.com` 入口分开管理。
+- 记住上次选择的服务区域，重新打开界面后恢复；设置只保存区域代码。
 - 读取网页当前列表中已经加载的清单、标题、备注、日期及重复规则文字。
 - 通过真实记录 ID、页面句柄和内容指纹定位事项，发送完成或取消完成操作。
 - 写操作只发送一次；状态不确定时停下核对，不自动重试。
@@ -58,6 +59,8 @@ powershell -ExecutionPolicy Bypass -File scripts/hbx.ps1 -Action android
 # 合成验证与本机 Windows 便携包。
 npm run desktop:smoke
 npm run desktop:pack
+# 已有旧包运行时，使用新的目录名生成，不覆盖旧目录。
+npm run desktop:pack -- --name windows-portable-20261104
 ```
 
 Web 预览地址默认 `http://localhost:5317/`。预览日志和停止按钮在 HBuilderX 的对应运行面板。桌面开发日志在启动终端中，关闭主窗口或在启动终端按 `Ctrl+C` 停止。便携包生成于 `outputs/windows-portable`；为避免覆盖正在运行的程序，打包目标目录必须不存在。
