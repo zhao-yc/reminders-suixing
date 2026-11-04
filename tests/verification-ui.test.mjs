@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { clickTestCompletion, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem } = require('../apps/desktop/verification-ui.cjs');
+const { clickTestCompletion, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList } = require('../apps/desktop/verification-ui.cjs');
 const { testOperation, summarize } = require('../apps/desktop/live-check.cjs');
 
 for (const tag of ['button', 'uni-button']) {
@@ -44,7 +44,7 @@ test('旧页面和禁用按钮不会被开发验收入口点击', async t => {
   assert.equal(clicks, 0);
 });
 
-function scopedController(completed, listTitle = '随行验证 · 合成清单') {
+function scopedController(completed, listTitle = '随行验证（2026-11-04）') {
   const snapshot = { pageId: 'test-page', activeListId: 'test-list', activeListTitle: listTitle,
     lists: [{ id: 'test-list', title: listTitle }], items: [{ id: 'test-item', listId: 'test-list', title: '随行验证 · 最小读写验证', completed }] };
   return { execute: async command => { assert.equal(command.type, 'read'); return { ok: true, snapshot }; } };
@@ -216,8 +216,32 @@ test('删除验收必须先匹配测试行，取消不触发确认，确认只�
   }
 });
 
+test('清单验收只填写匹配页面的本地编辑器，取消与保存分别只激活一次',async t=>{
+  for(const cancel of [true,false]) {
+    const dom=new JSDOM('<div class="list-content" data-page-id="synthetic-page" data-list-id="synthetic-list"><span class="list-title">随行验证 · 原清单</span><button class="add-list-button"></button></div>',{runScripts:'outside-only'});
+    t.after(()=>dom.window.close());dom.window.setTimeout=callback=>setTimeout(callback,0);const doc=dom.window.document;let opened=0,saved=0,cancelled=0,value='';
+    doc.querySelector('button').addEventListener('click',()=>{
+      opened++;const editor=doc.createElement('div');editor.className='inline-editor list-editor';editor.dataset.operation='create';
+      editor.innerHTML='<input class="list-name-input"><button class="save-list-edit"></button><button class="cancel-list-edit"></button>';
+      editor.querySelector('input').addEventListener('input',event=>value=event.target.value);
+      editor.querySelector('.save-list-edit').addEventListener('click',()=>saved++);editor.querySelector('.cancel-list-edit').addEventListener('click',()=>{cancelled++;editor.remove();});doc.body.append(editor);
+    });
+    const expected={pageId:'synthetic-page',listId:'synthetic-list',title:'随行验证 · 原清单',operation:'create',value:'随行验证 · 新清单',cancel};
+    assert.equal(await dom.window.eval('('+editTestList.toString()+')('+JSON.stringify({...expected,value:'合成普通清单'})+')'),false);assert.equal(opened,0);
+    assert.equal(await dom.window.eval('('+editTestList.toString()+')('+JSON.stringify(expected)+')'),true);assert.equal(opened,1);assert.equal(value,expected.value);assert.equal(saved,cancel?0:1);assert.equal(cancelled,cancel?1:0);
+  }
+});
+
+test('多个测试清单仍只定位原固定清单；原清单缺失时不改用另一个前缀清单',async()=>{
+  const base=scopedController(false);
+  const controller={async execute(command){const result=structuredClone(await base.execute(command));result.snapshot.lists.push({id:'managed',title:'随行验证 · Windows 清单管理验证'});return result;}};
+  assert.equal((await testOperation(controller,'uncomplete-test-item',{ui:null})).code,'UNCHANGED');
+  const wrong=scopedController(false,'随行验证 · Windows 清单管理验证');
+  assert.equal((await testOperation(wrong,'uncomplete-test-item',{ui:null})).code,'TEST_LIST_NOT_UNIQUE');
+});
+
 test('真实旗标通道只允许唯一未完成、无日期的既有专用新增事项',async()=>{
-  const snapshot={pageId:'test-page',activeListId:'test-list',activeListTitle:'随行验证 · 合成清单',lists:[{id:'test-list',title:'随行验证 · 合成清单'}],items:[{id:'synthetic-created',listId:'test-list',title:'随行验证 · Windows 新增验证',completed:false,flagged:false,schedule:{date:null,time:null,timeZone:null}}]};
+  const snapshot={pageId:'test-page',activeListId:'test-list',activeListTitle:'随行验证（2026-11-04）',lists:[{id:'test-list',title:'随行验证（2026-11-04）'}],items:[{id:'synthetic-created',listId:'test-list',title:'随行验证 · Windows 新增验证',completed:false,flagged:false,schedule:{date:null,time:null,timeZone:null}}]};
   let reads=0,clicks=0;
   const controller={async execute(command){assert.equal(command.type,'read');const result=structuredClone(snapshot);if(reads++)result.items[0].flagged=true;return {ok:true,snapshot:result};}};
   const result=await testOperation(controller,'flag-created-test-item',{sendSnapshot(){},ui:{webContents:{async executeJavaScript(){clicks++;return true;}}}});
@@ -253,4 +277,19 @@ test('本地重新连接验收只激活一次，等待新页面与可写清单�
   button.addEventListener('click',()=>{clicks++;button.disabled=true;setTimeout(()=>{const list=doc.querySelector('.list-content');list.dataset.pageId='new-page';list.dataset.listId='new-list';button.disabled=false;},15);});
   const result=await dom.window.eval('('+reconnectTestClient.toString()+')('+JSON.stringify({pageId:'old-page',listId:'old-list',title:'随行验证 · 同步清单'})+')');
   assert.equal(result,true);assert.equal(clicks,1);
+});
+
+test('重新连接验收等待前一次只读快照显示就绪，仍只点击一次',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="old-render" data-list-id="old-list" data-live="true"><span class="list-title">随行验证 · 原清单</span></div><button class="reconnect-button"></button>',{runScripts:'outside-only'});
+  t.after(()=>dom.window.close());dom.window.setTimeout=callback=>setTimeout(callback,5);const doc=dom.window.document,list=doc.querySelector('.list-content');let clicks=0;
+  doc.querySelector('button').addEventListener('click',()=>{clicks++;list.dataset.pageId='new-page';});
+  setTimeout(()=>{list.dataset.pageId='expected-page';list.dataset.listId='expected-list';},10);
+  assert.equal(await dom.window.eval('('+reconnectTestClient.toString()+')('+JSON.stringify({pageId:'expected-page',listId:'expected-list',title:'随行验证 · 原清单'})+')'),true);assert.equal(clicks,1);
+});
+
+test('重连未确认时诊断仅返回固定分类，不返回本地提示正文或重试按钮',async t=>{
+  const dom=new JSDOM('<div class="list-content" data-page-id="expected-page" data-list-id="expected-list" data-live="true"><span class="list-title">随行验证 · 原清单</span></div><button class="reconnect-button"></button><div class="notice error">synthetic-private-message</div>',{runScripts:'outside-only'});
+  t.after(()=>dom.window.close());dom.window.setTimeout=callback=>setTimeout(callback,0);let clicks=0;dom.window.document.querySelector('button').addEventListener('click',()=>clicks++);
+  const result=await dom.window.eval('('+reconnectTestClient.toString()+')('+JSON.stringify({pageId:'expected-page',listId:'expected-list',title:'随行验证 · 原清单',details:true})+')');
+  assert.equal(result.ok,false);assert.equal(result.reason,'UI_ERROR');assert.equal(result.kind,'OTHER');assert.equal(clicks,1);assert.doesNotMatch(JSON.stringify(result),/synthetic-private/);
 });

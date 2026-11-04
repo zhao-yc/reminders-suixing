@@ -19,6 +19,7 @@
         <view class="list-symbol" :style="{ background: list.color }">≡</view><text class="list-name">{{ list.title }}</text>
         <text v-if="list.id === snapshot.activeListId" class="list-count">{{ incompleteCount }}</text>
       </button>
+      <button v-if="snapshot && canManageLists" class="add-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" @click="startListEdit('create')">＋ 新建清单</button>
       <view class="sidebar-footer"><text class="footer-wordmark">随行 · 开源</text><text class="muted small">{{ bridge.platform }} · 最小验证版</text></view>
     </view>
     <view class="workspace">
@@ -48,7 +49,8 @@
         <text class="welcome-footnote">登录在 iCloud 官方页面完成</text>
       </view>
       <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-live="String(live)">
-        <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title">{{ snapshot.activeListTitle }}</text><text class="heading-count">{{ incompleteCount }}</text></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
+        <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title">{{ snapshot.activeListTitle }}</text><text class="heading-count">{{ incompleteCount }}</text><button v-if="canManageLists" class="rename-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="重命名清单" title="重命名当前清单" @click="startListEdit('rename')">✎</button></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
+        <view v-if="editing?.listOperation" class="inline-editor list-editor" :data-operation="editing.listOperation"><text class="editor-label">{{ editing.listOperation === 'create' ? '新建清单' : '重命名清单' }}</text><input v-model="editing.value" class="edit-field list-name-input" :maxlength="100" :focus="true" :disabled="busy || editing.blocked" aria-label="清单名称" @confirm="confirmEdit" @keydown="editKeydown" /><text class="muted small">颜色与图标可在官方页面设置。</text><view class="editor-actions"><button class="save-edit save-list-edit" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '保存中…' : editing.listOperation === 'create' ? '创建清单' : '保存名称' }}</button><button class="cancel-list-edit" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view></view>
         <view class="list-controls">
           <view class="tabs"><button data-status="pending" :disabled="busy || !!editing" :class="{ active: tab === 'pending' }" @click="selectTab('pending')">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :disabled="busy || !!editing" :class="{ active: tab === 'completed' }" @click="selectTab('completed')">已完成 <text>{{ completeCount }}</text></button></view>
           <view class="list-view-tools"><text class="current-scope">当前清单已加载</text>
@@ -147,6 +149,7 @@ const canEdit = computed(() => isDemo.value || bridge.capabilities?.editText ===
 const canEditSchedule = computed(() => isDemo.value || bridge.capabilities?.editSchedule === true);
 const canEditFlag = computed(() => isDemo.value || bridge.capabilities?.editFlag === true);
 const canDelete = computed(() => isDemo.value || bridge.capabilities?.deleteItem === true);
+const canManageLists = computed(() => !isDemo.value && bridge.capabilities?.manageLists === true);
 const canCreate = computed(() => isDemo.value || bridge.capabilities?.openNewItem === true);
 const notice = ref('');
 const noticeError = ref(false);
@@ -285,6 +288,22 @@ async function saveDeletion(current) {
   else current.blocked=true;
 }
 
+function startListEdit(operation) {
+  if(!canManageLists.value || !live.value || busy.value || editing.value || !['create','rename'].includes(operation)) return;
+  const list=snapshot.value.lists.find(list=>list.id===snapshot.value.activeListId);
+  if(!list?.fingerprint) {notice.value='请先刷新，再编辑清单。';noticeError.value=true;return;}
+  sidebarOpen.value=false;
+  editing.value={field:'list',listOperation:operation,value:operation==='create'?'':list.title,pageId:snapshot.value.pageId,listId:list.id,expectedListFingerprint:list.fingerprint,
+    requestId:'list-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2),blocked:false};
+}
+
+async function saveListEdit(current) {
+  if(!live.value || !current.value.trim() || current.value.length>100 || /[\r\n]/.test(current.value)) return;
+  const result=await run({type:current.listOperation==='create'?'createList':'renameList',pageId:current.pageId,listId:current.listId,expectedListFingerprint:current.expectedListFingerprint,value:current.value.trim(),requestId:current.requestId});
+  if(result?.ok) {editing.value=null;if(current.listOperation==='create'){tab.value='pending';search.value='';flagOnly.value=false;}}
+  else current.blocked=true;
+}
+
 function showDemo() {
   if (busy.value || editing.value) return;
   snapshot.value = demoSnapshot();
@@ -404,7 +423,7 @@ function handleEditKeydown(event) {
   if (event.isComposing || event.keyCode === 229) return;
   if (event.key === 'Escape') { event.preventDefault?.(); endEdit(); }
   else if(editing.value?.field==='delete') return;
-  else if (event.key === 'Enter' && (editing.value?.field === 'title' || event.ctrlKey || event.metaKey)) { event.preventDefault?.(); saveEdit(); }
+  else if (event.key === 'Enter' && (['title','list'].includes(editing.value?.field) || event.ctrlKey || event.metaKey)) { event.preventDefault?.(); saveEdit(); }
 }
 
 function confirmEdit() {
@@ -420,6 +439,7 @@ function confirmEdit() {
 async function saveEdit() {
   const current = editing.value;
   if (!current || current.blocked || busy.value) return;
+  if(current.listOperation) {await saveListEdit(current);return;}
   if(current.field==='delete') {await saveDeletion(current);return;}
   if (current.field === 'schedule') { await saveSchedule(current); return; }
   if (current.field === 'title' && !current.value.trim()) { notice.value = '请填写事项标题。'; noticeError.value = true; return; }
@@ -485,7 +505,7 @@ watch([busy,editing], () => { if (busy.value || editing.value) closeSortMenu(); 
 function workspaceKeydown(event) {
   if (event.isComposing || event.keyCode === 229 || !snapshot.value) return;
   if (event.target?.closest?.('.desktop-sort') && sortKeydown(event)) return;
-  const actionButton=event.target?.closest?.('.flag-toggle-button,.flag-filter,.reconnect-button,.delete-item-button,.confirm-delete,.cancel-delete');
+  const actionButton=event.target?.closest?.('.flag-toggle-button,.flag-filter,.reconnect-button,.delete-item-button,.confirm-delete,.cancel-delete,.add-list-button,.rename-list-button,.save-list-edit,.cancel-list-edit');
   if (actionButton && ['Enter',' '].includes(event.key)) {
     event.preventDefault();
     if (!event.repeat && !actionButton.hasAttribute('disabled')) actionButton.click();
@@ -555,4 +575,5 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 @media (max-width:760px) { .toolbar.with-tools { height:calc(114px + env(safe-area-inset-top)); padding-bottom:10px; flex-wrap:wrap; align-content:center; row-gap:10px; }.toolbar.with-tools .mobile-menu { order:1; }.toolbar-actions { order:2; margin-left:auto; }.quick-tools { order:3; flex-basis:100%; }.toolbar-search { flex:1; width:auto; }.list-content { padding-top:22px; }.new-reminder-row { padding:15px 10px; } }
 @media (max-width:760px) { .list-view-tools .current-scope { display:none; }.list-view-tools { gap:0; }.sort-picker { max-width:116px; }.sort-picker-label { font-size:10px; }.sort-description { font-size:9px; } }
 .delete-confirmation { display:flex; flex-direction:column; gap:8px; font-size:13px; line-height:1.6; color:#7d8795; }.delete-title { font-size:16px; color:#39475b; overflow-wrap:anywhere; }.editor-actions .confirm-delete { background:#ce5353; color:#fff; }.row-actions .delete-item-button { color:#bc7272; }.delete-item-button:focus-visible,.confirm-delete:focus-visible,.cancel-delete:focus-visible { outline:2px solid #1687ff; outline-offset:2px; border-radius:4px; }
+.add-list-button { margin:14px 0 0; padding:10px; color:#4f79b7; font-size:13px; text-align:left; border:1px solid #dce5f1; border-radius:8px; }.rename-list-button { margin:0; padding:2px 5px; color:#8b9bb1; font-size:17px; flex-shrink:0; }.list-heading > :first-child { min-width:0; }.title-line { flex-wrap:wrap; }.list-title { overflow-wrap:anywhere; }.list-editor { padding:15px; margin:0 0 16px; border:1px solid #dce6f4; border-radius:10px; background:#f8fbff; }.add-list-button:focus-visible,.rename-list-button:focus-visible,.save-list-edit:focus-visible,.cancel-list-edit:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
 </style>

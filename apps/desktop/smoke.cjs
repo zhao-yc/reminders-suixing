@@ -7,7 +7,7 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
 const { installDesktopIPC } = require('./ipc.cjs');
-const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, clickTestFlag, deleteTestItem } = require('./verification-ui.cjs');
+const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, clickTestFlag, deleteTestItem, editTestList } = require('./verification-ui.cjs');
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
 async function runSmoke({ frontendURL, root }) {
@@ -145,6 +145,8 @@ async function runSmoke({ frontendURL, root }) {
     };
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".reconnect-button")'),true,'Tab 应能到达重新连接');
+    await press('Tab');
+    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".rename-list-button")'),true,'Tab 应能到达清单重命名');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".flag-filter")'),true,'Tab 应先到达旗标筛选');
     await press('Tab');
@@ -488,6 +490,37 @@ async function runSmoke({ frontendURL, root }) {
     for(let attempt=0;attempt<40;attempt++) {await new Promise(resolve=>setTimeout(resolve,100));deletionAfter=await normalController.execute({type:'read'},'cn');if(deletionAfter.ok)break;}
     assert.equal(deletionAfter.ok,true);assert.equal(deletionAfter.snapshot.items.some(item=>item.id===deletionTarget.id),false);
     console.log('普通模式删除经预检及确认一次提交，默认回车和 Esc 均可取消，窄屏布局、其他事项保持及合成重载通过。');
+    await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("[role=treeitem][aria-selected=true] .inline-editable-label").textContent="随行验证 · 合成原清单"');
+    const listBefore=await normalController.execute({type:'read'},'cn'),listTitle='随行验证 · 普通模式新清单',renamedListTitle=listTitle+' · 改名';
+    normalUI.webContents.send('suixing:snapshot',{region:'cn',result:listBefore});await new Promise(resolve=>setTimeout(resolve,100));
+    const listExpected={pageId:listBefore.snapshot.pageId,listId:listBefore.snapshot.activeListId,title:listBefore.snapshot.activeListTitle,operation:'create',value:listTitle};
+    assert.equal(await normalUI.webContents.executeJavaScript('('+editTestList.toString()+')('+JSON.stringify({...listExpected,cancel:true})+')',true),true);
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureListSaves'),0);
+    assert.equal(await normalUI.webContents.executeJavaScript('('+editTestList.toString()+')('+JSON.stringify({...listExpected,preview:true})+')',true),true);
+    await normalUI.webContents.executeJavaScript('document.querySelector(".list-name-input input").dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",isComposing:true,bubbles:true,cancelable:true}))');
+    assert.equal(await normalUI.webContents.executeJavaScript('!!document.querySelector(".list-editor")'),true);
+    normalUI.setContentSize(390,780);await new Promise(resolve=>setTimeout(resolve,150));
+    const listEditorBounds=await normalUI.webContents.executeJavaScript('(()=>{const r=document.querySelector(".list-editor").getBoundingClientRect();return {left:r.left,right:r.right,width:innerWidth}})()');
+    assert.ok(listEditorBounds.left>=0 && listEditorBounds.right<=listEditorBounds.width+1);
+    fs.writeFileSync(path.join(root,'.local/list-editor-mobile-preview.png'),(await normalUI.webContents.capturePage()).toPNG());
+    normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
+    let listCreated;
+    for(let attempt=0;attempt<50;attempt++){await new Promise(resolve=>setTimeout(resolve,100));listCreated=await normalController.execute({type:'read'},'cn');if(listCreated.snapshot?.activeListTitle===listTitle)break;}
+    assert.equal(listCreated.snapshot.activeListTitle,listTitle);assert.equal(listCreated.snapshot.items.length,0);assert.equal(listCreated.snapshot.lists.length,listBefore.snapshot.lists.length+1);
+    for(const old of listBefore.snapshot.lists)assert.ok(listCreated.snapshot.lists.some(list=>list.fingerprint===old.fingerprint));
+    normalUI.setContentSize(1160,830);await new Promise(resolve=>setTimeout(resolve,100));
+    let listChanged=listCreated;
+    for(const value of [renamedListTitle,listTitle]) {
+      assert.equal(await normalUI.webContents.executeJavaScript('('+editTestList.toString()+')('+JSON.stringify({pageId:listChanged.snapshot.pageId,listId:listChanged.snapshot.activeListId,title:listChanged.snapshot.activeListTitle,operation:'rename',value})+')',true),true);
+      for(let attempt=0;attempt<50;attempt++){await new Promise(resolve=>setTimeout(resolve,100));listChanged=await normalController.execute({type:'read'},'cn');if(listChanged.snapshot?.activeListTitle===value)break;}
+      assert.equal(listChanged.snapshot.activeListId,listCreated.snapshot.activeListId);assert.equal(listChanged.snapshot.activeListTitle,value);assert.equal(listChanged.snapshot.items.length,0);
+    }
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureListSaves'),3);
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureListInputs'),3);
+    normalController.reloadSite('cn');
+    for(let attempt=0;attempt<40;attempt++){await new Promise(resolve=>setTimeout(resolve,100));listChanged=await normalController.execute({type:'read'},'cn');if(listChanged.ok)break;}
+    assert.equal(listChanged.snapshot.lists.filter(list=>list.title===listTitle).length,1);assert.equal(normalController.lastWriteOutcome(),null);
+    console.log('普通模式清单新增与重命名经正式 IPC 各提交一次，取消及输入法保护、窄屏布局和合成重载保持通过。');
     stopIPC();
     normalUI.destroy();normalUI=null;
     normalController.dispose();normalController=null;

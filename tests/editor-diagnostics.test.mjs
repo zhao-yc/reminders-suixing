@@ -33,3 +33,28 @@ test('编辑结构诊断遇到挂起或抛错时有界退出，不泄漏底层�
   const result = await diagnostics.inspectTestEditor({ executeJavaScript: () => Promise.reject(new Error('synthetic-private-error')) });
   assert.deepEqual(result, { ok: false, code: 'DIAGNOSTIC_FAILED' });
 });
+
+test('新增清单结构诊断只取消自己的草稿，不读取输入值、不完成保存',async t=>{
+  const dom=page();t.after(()=>dom.window.close());const doc=dom.window.document;let opened=0,cancelled=0,saved=0;
+  const button=doc.createElement('button');button.className='new-list-button';doc.body.append(button);
+  button.addEventListener('click',()=>{
+    opened++;const panel=doc.createElement('div');panel.className='reminder-list-detail';
+    panel.innerHTML='<div class="name-textfield"><input type="text" maxlength="128"></div><div class="color-picker"></div><div class="badge-emblem-picker"></div><button class="done-button">synthetic-private-done</button><button class="cancel-button">synthetic-private-cancel</button>';
+    Object.defineProperty(panel.querySelector('input'),'value',{get(){assert.fail('结构诊断不得读取输入值');}});
+    panel.querySelector('.done-button').addEventListener('click',()=>saved++);
+    panel.querySelector('.cancel-button').addEventListener('click',()=>{cancelled++;panel.remove();});doc.body.append(panel);
+  });
+  const result=await diagnostics.inspectNewTestListDocument(doc);
+  assert.equal(result.code,'TEST_NEW_LIST_CANCELLED');assert.equal(result.shape.nameInputs,1);assert.equal(result.shape.maximums[0],128);assert.equal(result.selectionRestored,true);
+  assert.equal(opened,1);assert.equal(cancelled,1);assert.equal(saved,0);assert.doesNotMatch(JSON.stringify(result),/synthetic-private|合成事项|编辑结构/);
+});
+
+test('普通清单或已有编辑窗口不会被新增清单诊断激活或取消',async t=>{
+  for(const existing of [false,true]) {
+    const dom=page(existing?undefined:'合成普通清单');t.after(()=>dom.window.close());const doc=dom.window.document;let clicked=0;
+    doc.body.insertAdjacentHTML('beforeend','<button class="new-list-button"></button>'+(existing?'<div class="reminder-list-detail"><button class="cancel-button"></button></div>':''));
+    doc.body.addEventListener('click',()=>clicked++);
+    assert.equal((await diagnostics.inspectNewTestListDocument(doc)).ok,false);assert.equal(clicked,0);
+  }
+  assert.equal((await diagnostics.inspectNewTestList({executeJavaScript:()=>new Promise(()=>{})},10)).code,'DIAGNOSTIC_TIMEOUT');
+});

@@ -194,18 +194,29 @@ async function clickTestFlag(expected) {
 
 /** 从本地正式入口重新连接一次，等待新页面与原清单恢复；不触发任何事项写入。 */
 async function reconnectTestClient(expected) {
-  const list=document.querySelector('.list-content'),button=document.querySelector('.reconnect-button');
-  if(list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId || document.querySelector('.inline-editor') || !button || button.hasAttribute('disabled')) return false;
+  const failed=(reason,kind)=>expected.details===true?{ok:false,reason,kind}:false;
+  let list,button;const readyDeadline=Date.now()+5000;
+  for(let attempt=0;attempt<35;attempt++) {
+    list=document.querySelector('.list-content');button=document.querySelector('.reconnect-button');
+    if(list?.dataset.pageId===expected.pageId && list.dataset.listId===expected.listId && !document.querySelector('.inline-editor') && button && !button.hasAttribute('disabled')) break;
+    if(Date.now()>=readyDeadline) break;
+    await new Promise(resolve=>setTimeout(resolve,120));
+  }
+  if(list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId || document.querySelector('.inline-editor') || !button || button.hasAttribute('disabled')) return failed('UI_NOT_READY');
   button.click();
   for(let attempt=0;attempt<450;attempt++) {
     await new Promise(resolve=>setTimeout(resolve,200));
     const current=document.querySelector('.list-content'),control=document.querySelector('.reconnect-button');
     if(control && !control.hasAttribute('disabled')) {
-      if(document.querySelector('.notice.error')) return false;
-      if(current?.dataset.pageId && current.dataset.pageId!==expected.pageId) return current.dataset.live==='true' && document.querySelector('.list-title')?.textContent.trim()===expected.title;
+      const error=document.querySelector('.notice.error');
+      if(error) {
+        const message=error.textContent.trim(),known={'重新连接暂不可用，请在官方页面核对。':'RECONNECT_FAILED','官方页面尚未就绪，请完成登录或稍后读取。':'PAGE_NOT_READY','请等待当前操作结束后再重新连接。':'BUSY','清单位置已变化，请重新读取并选择清单。':'STALE_VIEW','重新连接未完成，请打开官方页面核对。':'NAVIGATION_FAILED','重新连接超时，请稍后读取或打开官方页面核对。':'NAVIGATION_TIMEOUT'};
+        return failed('UI_ERROR',Object.hasOwn(known,message)?known[message]:'OTHER');
+      }
+      if(current?.dataset.pageId && current.dataset.pageId!==expected.pageId) return current.dataset.live==='true' && document.querySelector('.list-title')?.textContent.trim()===expected.title?true:failed('VIEW_NOT_RESTORED');
     }
   }
-  return false;
+  return failed('OBSERVATION_TIMEOUT');
 }
 
 /** 删除验收必须经过本地预检及确认界面；只操作匹配的专用测试行。 */
@@ -237,4 +248,33 @@ async function deleteTestItem(expected) {
   return false;
 }
 
-module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem };
+/** 清单写入验收只填写本地名称编辑器，仍经正式 IPC 与官方表单单次提交。 */
+async function editTestList(expected) {
+  const pause=()=>new Promise(resolve=>setTimeout(resolve,80));
+  const disabled=node=>!node || node.disabled || ['true',''].includes(node.getAttribute('disabled'));
+  if(!['create','rename'].includes(expected.operation) || !expected.value?.startsWith('随行验证') || !expected.title?.startsWith('随行验证')) return false;
+  let list;const readyDeadline=Date.now()+5000;
+  for(let attempt=0;attempt<35;attempt++) {
+    list=document.querySelector('.list-content');
+    if(list?.dataset.pageId===expected.pageId && list.dataset.listId===expected.listId && document.querySelector('.list-title')?.textContent.trim()===expected.title && !document.querySelector('.inline-editor')) break;
+    if(Date.now()>=readyDeadline) break;await pause();
+  }
+  if(list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId ||
+    document.querySelector('.list-title')?.textContent.trim()!==expected.title || !expected.title?.startsWith('随行验证') || document.querySelector('.inline-editor')) return false;
+  const button=document.querySelector(expected.operation==='create'?'.add-list-button':'.rename-list-button');
+  if(disabled(button)) return false;button.click();
+  for(let attempt=0;attempt<35 && !document.querySelector('.list-editor');attempt++) await pause();
+  const editor=document.querySelector('.list-editor'),current=document.querySelector('.list-content');
+  if(!editor || editor.dataset.operation!==expected.operation || current?.dataset.pageId!==expected.pageId || current.dataset.listId!==expected.listId) return false;
+  const input=editor.querySelector('.list-name-input input,input.list-name-input');
+  if(disabled(input)) return false;
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,expected.value);
+  input.dispatchEvent(new Event('input',{bubbles:true}));await pause();
+  if(expected.preview===true) return true;
+  const action=editor.querySelector(expected.cancel===true?'.cancel-list-edit':'.save-list-edit');
+  if(disabled(action)) return false;action.click();
+  if(expected.cancel===true) {await pause();return !document.querySelector('.list-editor');}
+  return true;
+}
+
+module.exports = { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList };

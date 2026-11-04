@@ -5,14 +5,18 @@
   <div role="treeitem" class="rm-list-menu-item" aria-selected="false" data-list="two"><button class="inline-editable-label">验证清单</button></div>
 </div>
 <button class="rm-new-reminder" role="button" aria-label="新增提醒事项">新增</button>
+<button class="new-list-button" role="button">添加列表</button>
 <button class="list-detail-button" role="button" aria-label="编辑提醒事项列表">菜单</button>
-<div class="fixture-list-menu" role="menu" hidden><button role="menuitem"></button></div>
+<div class="fixture-list-menu" role="menu" hidden><button role="menuitem"></button><button role="menuitem" data-action="info">显示列表信息</button></div>
 <div role="treegrid" aria-label="提醒列表" tabindex="0"></div>
 <script>
 // 该页面只包含合成数据，用来验证重复标题、完成回执和列表切换，绝不访问 Apple。
 window.fixtureClicks = 0;
 window.fixtureDeleteKeys = 0;
 window.fixtureDeletionCount = 0;
+window.fixtureListSaves = 0;
+window.fixtureListInputs = 0;
+window.fixtureListCancels = 0;
 window.fixtureDisableUpdates = false;
 window.fixtureRequiresPointerDown = false;
 window.fixturePointerDown = false;
@@ -50,7 +54,7 @@ if (!document.execCommand) document.execCommand = function (command, _ui, value)
 };
 function renderFixture(list) {
   const complete = sessionStorage.getItem('fixture-complete') === 'true';
-  const titles = (list === 'two' ? ['随行验证 · 第二个同名清单'] : ['随行验证 · 同名事项', '随行验证 · 同名事项']).map((title,index)=>({title,id:'reminder-item-fixture-' + list + '-' + index}));
+  const titles = (list === 'two' ? ['随行验证 · 第二个同名清单'] : list==='one'?['随行验证 · 同名事项', '随行验证 · 同名事项']:[]).map((title,index)=>({title,id:'reminder-item-fixture-' + list + '-' + index}));
   const deleted=JSON.parse(sessionStorage.getItem('fixture-deleted') || '[]');
   const records = titles.concat(JSON.parse(sessionStorage.getItem('fixture-created-' + list) || '[]')).filter(record=>!deleted.includes(record.id));
   document.querySelector('[role="treegrid"]').setAttribute('aria-rowcount',String(records.length));
@@ -209,6 +213,43 @@ document.querySelector('.fixture-list-menu [role="menuitem"]').addEventListener(
   document.querySelector('.fixture-list-menu').hidden = true;
   renderFixture(document.querySelector('[role="treeitem"][aria-selected="true"]').dataset.list);
 });
+
+function appendFixtureList(record) {
+  const node=document.createElement('div');node.setAttribute('role','treeitem');node.className='rm-list-menu-item';node.dataset.list=record.key;node.setAttribute('aria-selected','false');
+  node.innerHTML='<span class="reminder-list-icon"></span><button class="inline-editable-label"></button>';
+  node.querySelector('.inline-editable-label').textContent=record.title;node.querySelector('.reminder-list-icon').style.backgroundColor=record.color || '#1687ff';
+  document.querySelector('[role="tree"]').append(node);return node;
+}
+function selectFixtureList(node) {
+  document.querySelectorAll('[role="treeitem"]').forEach(other=>other.setAttribute('aria-selected',String(other===node)));renderFixture(node.dataset.list);
+}
+function openFixtureList(creating) {
+  if(document.querySelector('.reminder-list-detail,.details-popover'))return;
+  const selected=document.querySelector('[role="treeitem"][aria-selected="true"]'),old=selected.querySelector('.inline-editable-label').textContent;
+  let value=creating?'':old;
+  const panel=document.createElement('div');panel.className='reminder-list-detail';
+  panel.innerHTML='<div class="name-textfield"><input type="text"></div><div class="color-picker"></div><div class="badge-emblem-picker"></div><button class="done-button">完成</button><button class="cancel-button">取消</button>';
+  const input=panel.querySelector('input'),done=panel.querySelector('.done-button');input.value=value;done.disabled=!value.trim();
+  input.addEventListener('beforeinput',event=>{if(window.fixtureListRejectInput)event.preventDefault();});
+  input.addEventListener('input',()=>{window.fixtureListInputs++;value=input.value;done.disabled=!value.trim();});
+  panel.querySelector('.cancel-button').addEventListener('click',()=>{window.fixtureListCancels++;panel.remove();});
+  done.addEventListener('click',()=>{
+    window.fixtureListSaves++;if(window.fixtureListRejectDone)return;
+    const records=JSON.parse(sessionStorage.getItem('fixture-lists') || '[]');
+    if(creating) {
+      const record={key:'list-created-'+Date.now()+'-'+records.length,title:value,color:'#1687ff'};records.push(record);sessionStorage.setItem('fixture-lists',JSON.stringify(records));
+      const node=appendFixtureList(record);node.addEventListener('click',()=>selectFixtureList(node));selectFixtureList(node);
+    } else {
+      selected.querySelector('.inline-editable-label').textContent=value;sessionStorage.setItem('fixture-list-name-'+selected.dataset.list,value);
+      const record=records.find(record=>record.key===selected.dataset.list);if(record){record.title=value;sessionStorage.setItem('fixture-lists',JSON.stringify(records));}
+    }
+    panel.remove();if(window.fixtureAfterListSave)window.fixtureAfterListSave();
+  });document.body.append(panel);
+}
+document.querySelector('.new-list-button').addEventListener('click',()=>openFixtureList(true));
+document.querySelector('.fixture-list-menu [data-action="info"]').addEventListener('click',()=>{document.querySelector('.fixture-list-menu').hidden=true;openFixtureList(false);});
+for(const record of JSON.parse(sessionStorage.getItem('fixture-lists') || '[]'))appendFixtureList(record);
+document.querySelectorAll('[role="treeitem"]').forEach(node=>{const name=sessionStorage.getItem('fixture-list-name-'+node.dataset.list);if(name!==null)node.querySelector('.inline-editable-label').textContent=name;});
 document.querySelectorAll('[role="treeitem"]').forEach(node => node.addEventListener('click', () => {
   document.querySelectorAll('[role="treeitem"]').forEach(other => other.setAttribute('aria-selected', String(other === node)));
   renderFixture(node.dataset.list);

@@ -3,7 +3,7 @@ const path = require('node:path');
 const { BrowserWindow, session } = require('electron');
 const { allowedURL, allowStorage, browserUserAgent, validCommand } = require('./policy.cjs');
 const { inspectFrame, diagnosticRoute, tracePublicExceptions } = require('./page-diagnostics.cjs');
-const { inspectTestEditor } = require('./editor-diagnostics.cjs');
+const { inspectTestEditor, inspectNewTestList } = require('./editor-diagnostics.cjs');
 const { inspectTestDetails } = require('./date-diagnostics.cjs');
 const { summarizeWriteOutcome, parseCreationStage, applyCreationStage } = require('./operation-diagnostics.cjs');
 const { reopenOfficial } = require('./site-navigation.cjs');
@@ -118,7 +118,7 @@ function createController(options = {}) {
     if (!validCommand(command)) return { ok: false, code: 'INVALID_COMMAND', message: '不支持的操作参数。' };
     if (busy) return { ok: false, code: 'BUSY', message: '上一项操作尚未结束。' };
     busy = true;
-    const write = ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem'].includes(command.type);
+    const write = ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList'].includes(command.type);
     const sequence = write && options.diagnostics ? ++writeSequence : 0;
     if (sequence) lastWriteOutcome = summarizeWriteOutcome(command.type, sequence, null, true);
     const finish = result => {
@@ -164,6 +164,13 @@ function createController(options = {}) {
       const frame = site.webContents.mainFrame.framesInSubtree.find(frame => /\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url));
       if (!frame) return { ok: false, code: 'PAGE_NOT_READY' };
       return inspectTestEditor(frame);
+    },
+    async inspectNewTestList() {
+      if(!options.diagnostics) return {ok:false,code:'DIAGNOSTICS_DISABLED'};
+      if(busy || !site || site.isDestroyed()) return {ok:false,code:'PAGE_NOT_READY'};
+      const frame=site.webContents.mainFrame.framesInSubtree.find(frame=>/\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url));
+      if(!frame) return {ok:false,code:'PAGE_NOT_READY'};
+      busy=true;try {return await inspectNewTestList(frame);}finally{busy=false;}
     },
     async inspectTestDetails(action) {
       if (!options.diagnostics) return {ok:false,code:'DIAGNOSTICS_DISABLED'};
