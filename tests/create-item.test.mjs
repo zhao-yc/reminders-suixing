@@ -22,13 +22,19 @@ test('新增只激活一次并填写本次空事项，同名旧事项保持不�
   window.document.execCommand=(...args)=>{ assert.equal(window.fixtureCreationReady,true,'不能在官方创建事务结束前输入'); return insert(...args); };
   const result=await execute(command);
   assert.equal(result.code,'WEB_STATE_OBSERVED');
+  assert.equal(result.stage,'observed');
   assert.equal(result.cloudConfirmed,false);
   assert.equal(result.snapshot.items.length,3);
   assert.equal(result.snapshot.items[0].fingerprint,snapshot.items[0].fingerprint);
   assert.notEqual(result.snapshot.items[2].id,snapshot.items[0].id);
   assert.equal(result.snapshot.items[2].title,command.title);
   assert.equal(window.fixtureCreationClicks,1);
+  assert.equal(window.fixtureTextBlurs,0,'新事项等待网页自动保存，不强制失焦');
+  for(let attempt=0;attempt<20&&window.fixtureTextSaves!==1;attempt++)await new Promise(resolve=>setTimeout(resolve,10));
   assert.equal(window.fixtureTextSaves,1);
+  assert.equal(window.fixtureCreationAutosaves,1);
+  assert.equal(window.fixtureEarlyCreationBlurs,0);
+  assert.equal(window.sessionStorage.getItem('fixture-text-'+result.snapshot.items[2].id+'-title'),command.title);
   await execute({type:'read'});
   assert.equal((await execute(command)).code,'ALREADY_SUBMITTED');
   assert.equal(window.fixtureCreationClicks,1);
@@ -72,7 +78,9 @@ test('点击后未出现新事项时返回未知；重新读取也不能重放�
   const {snapshot}=await execute({type:'read'});
   window.fixtureDisableCreation=true;
   const command=creation(snapshot);
-  assert.equal((await execute(command)).code,'UNCERTAIN_WRITE');
+  const result=await execute(command);
+  assert.equal(result.code,'UNCERTAIN_WRITE');
+  assert.equal(result.stage,'waiting-draft');
   assert.equal(window.fixtureCreationClicks,1);
   await execute({type:'read'});
   assert.equal((await execute(command)).code,'ALREADY_SUBMITTED');
@@ -85,5 +93,47 @@ test('同时出现多个新事项时不得猜测目标或填写任何一个', as
   assert.equal((await execute(creation(snapshot))).code,'UNCERTAIN_WRITE');
   assert.equal(window.fixtureCreationClicks,1);
   assert.equal(window.fixtureTextInputs,0);
+  assert.equal(window.fixtureTextSaves,0);
+});
+
+test('已打开新草稿后输入异常，回执保留失败阶段且原请求不得重放', async t => {
+  const {execute,window}=setup(t);
+  const {snapshot}=await execute({type:'read'});
+  let inputs=0;
+  window.document.execCommand=()=>{inputs++;throw Error('合成文字命令失败');};
+  const command=creation(snapshot);
+  const result=await execute(command);
+  assert.equal(result.code,'UNCERTAIN_WRITE');
+  assert.equal(result.stage,'input-command');
+  assert.equal(window.fixtureCreationClicks,1);
+  assert.equal(inputs,1);
+  assert.equal(window.fixtureTextSaves,0);
+  await execute({type:'read'});
+  assert.equal((await execute(command)).code,'ALREADY_SUBMITTED');
+  assert.equal(inputs,1);
+});
+
+test('主动开启的阶段回执不包含标题、请求标识或新记录标识', async t => {
+  const {execute,window}=setup(t);
+  const {snapshot}=await execute({type:'read'});
+  const messages=[];
+  window.__suixingDiagnosticPhases=true;
+  window.__suixingDiagnosticWriteSequence=42;
+  window.console.info=message=>messages.push(message);
+  const result=await execute(creation(snapshot,'synthetic-private-request','随行验证 · synthetic-private-title'));
+  assert.equal(result.ok,true);
+  assert.deepEqual(messages,['preflight','waiting-draft','writing-title','input-command','input-accepted','input-settled','awaiting-autosave','observing-title','observed'].map(stage=>'suixing-create-stage:42:'+stage));
+  assert.doesNotMatch(JSON.stringify(messages),/synthetic|fixture|随行验证/);
+});
+
+test('新增输入被网页取消时保留取消阶段，不再执行文字命令或继续核对标题', async t => {
+  const {execute,window}=setup(t);
+  const {snapshot}=await execute({type:'read'});
+  window.document.addEventListener('beforeinput',event=>event.preventDefault());
+  window.document.execCommand=()=>{assert.fail('网页取消后不得继续执行文字命令');};
+  const result=await execute(creation(snapshot));
+  assert.equal(result.code,'UNCERTAIN_WRITE');
+  assert.equal(result.stage,'input-cancelled');
+  assert.equal(window.fixtureCreationClicks,1);
   assert.equal(window.fixtureTextSaves,0);
 });

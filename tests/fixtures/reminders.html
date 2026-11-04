@@ -20,6 +20,9 @@ window.fixtureCreationClicks = 0;
 window.fixtureDisableCreation = false;
 window.fixtureCreationCopies = 1;
 window.fixtureCreationReady = false;
+window.fixtureEarlyCreationBlurs = 0;
+window.fixtureNavigateOnCreate = false;
+window.fixtureCreationAutosaves = 0;
 // JSDOM 不实现浏览器编辑命令；真实 Electron 保留并验证其原生实现。
 if (!document.execCommand) document.execCommand = function (command, _ui, value) {
   if (!['insertText', 'insertHTML'].includes(command) || !document.activeElement?.isContentEditable && document.activeElement?.getAttribute('contenteditable') !== 'true') return false;
@@ -45,17 +48,28 @@ function renderFixture(list) {
     if (saved !== null) editor.textContent = saved;
     let changed = false;
     let prepared = false;
-    editor.addEventListener('beforeinput', () => { prepared = true; window.fixtureTextPreparations++; });
-    editor.addEventListener('input', () => {
-      if (!prepared) throw new Error('合成富文本编辑必须先准备输入范围');
-      prepared = false; changed = true; window.fixtureTextInputs++;
-    });
-    editor.addEventListener('blur', () => {
-      window.fixtureTextBlurs++;
+    let inputSettled = false;
+    const initialTitle = field === 'title' && editor.closest('.reminder-item').id.includes('-created-') && saved === null;
+    function saveField() {
       if (!changed) return;
       window.fixtureTextSaves++;
       sessionStorage.setItem(key, editor.innerText ?? editor.innerHTML.replace(/<br\s*\/?\s*>/gi, '\n').replace(/<[^>]*>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&'));
       changed = false;
+    }
+    editor.addEventListener('beforeinput', () => { prepared = true; window.fixtureTextPreparations++; });
+    editor.addEventListener('input', () => {
+      if (!prepared) throw new Error('合成富文本编辑必须先准备输入范围');
+      prepared = false; changed = true; window.fixtureTextInputs++;
+      inputSettled = false;
+      // 官方文字保存会排队执行；首次创建不能在该任务前就提交初始记录。
+      setTimeout(() => { inputSettled = true; }, 0);
+      if (initialTitle) setTimeout(() => { if (changed) { window.fixtureCreationAutosaves++; saveField(); } }, 25);
+    });
+    editor.addEventListener('blur', () => {
+      window.fixtureTextBlurs++;
+      if (!changed) return;
+      if (editor.closest('.reminder-item').id.includes('-created-') && !inputSettled) { window.fixtureEarlyCreationBlurs++; return; }
+      saveField();
     });
   });
   document.querySelectorAll('.mark-completed').forEach(button => {
@@ -72,6 +86,7 @@ function renderFixture(list) {
 }
 document.querySelector('.rm-new-reminder').addEventListener('click', () => {
   window.fixtureCreationClicks++;
+  if (window.fixtureNavigateOnCreate) { location.href='/gone'; return; }
   if (window.fixtureDisableCreation) return;
   const list = document.querySelector('[role="treeitem"][aria-selected="true"]').dataset.list;
   const created = JSON.parse(sessionStorage.getItem('fixture-created-' + list) || '[]');

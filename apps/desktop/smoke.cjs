@@ -6,6 +6,7 @@ const { once } = require('node:events');
 const { BrowserWindow, ipcMain } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
+const { installDesktopIPC } = require('./ipc.cjs');
 const { clickTestCompletion, editTestText, createTestItem } = require('./verification-ui.cjs');
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
@@ -14,13 +15,15 @@ async function runSmoke({ frontendURL, root }) {
   const html = fs.readFileSync(path.join(root, 'tests/fixtures/reminders.html'), 'utf8');
   const server = http.createServer((request, response) => {
     response.setHeader('content-type', 'text/html; charset=utf-8');
-    response.end(request.url === '/agent' ? '<!doctype html><iframe src="http://localhost:' + server.address().port + '/frame"></iframe>' : request.url === '/frame' ? html : '<!doctype html><meta charset="utf-8"><iframe src="/frame"></iframe>');
+    response.end(request.url === '/gone' ? '<!doctype html><title>合成页面已退出</title>' : request.url === '/agent' ? '<!doctype html><iframe src="http://localhost:' + server.address().port + '/frame"></iframe>' : request.url === '/frame' ? html : '<!doctype html><meta charset="utf-8"><iframe src="/frame"></iframe>');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const controller = createController({ fixtureURL: 'http://127.0.0.1:' + server.address().port + '/', diagnostics: true });
   let ui;
   let agentWindow;
   let normalUI;
+  let normalController;
+  let stopIPC;
   try {
     // localhost 与 127.0.0.1 是不同站点，验证登录所用的跨域 iframe 不会退回中文 Electron 标识。
     agentWindow = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } });
@@ -62,11 +65,10 @@ async function runSmoke({ frontendURL, root }) {
     console.log('桌面网页桥接及重载验证通过。');
 
     ui = new BrowserWindow({ show: false, width: 1160, height: 830, webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false,
-      additionalArguments:['--suixing-verify-create']
+      preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false
     } });
     ui.webContents.on('console-message', event => { if (event.level === 'error') console.error('界面错误：' + event.message); });
-    ipcMain.handle('suixing:execute', (event, args) => event.sender === ui.webContents ? controller.execute(args.command, args.region) : { ok: false });
+    stopIPC=installDesktopIPC({ipcMain,controller,getMainWindow:()=>ui});
     await ui.loadURL(frontendURL);
     await ui.webContents.executeJavaScript('new Promise((resolve,reject) => { const deadline=Date.now()+8000; const timer=setInterval(()=>{if(document.body.innerText.includes("连接我的提醒事项")){clearInterval(timer);resolve(true)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("构建界面未完成加载"))}},50) })');
     const uiState = await ui.webContents.executeJavaScript('({title:document.title, bridge:typeof window.suixingDesktop?.execute, hasNode:typeof require})');
@@ -165,7 +167,20 @@ async function runSmoke({ frontendURL, root }) {
       if(created.snapshot?.items.some(item=>item.title===createdTitle))break;
     }
     assert.equal(created.snapshot?.items.filter(item=>item.title===createdTitle).length,1);
+    const outcome=controller.lastWriteOutcome();
+    assert.equal(outcome.type,'createItem');
+    assert.equal(outcome.code,'WEB_STATE_OBSERVED');
+    assert.equal(outcome.stage,'observed');
+    assert.equal(outcome.replyPending,false);
+    assert.equal(outcome.dispatched,true);
+    assert.equal(outcome.cloudConfirmed,false);
     assert.equal(await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureCreationClicks'),1);
+    for(let attempt=0;attempt<30;attempt++) {
+      const autosaves=await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureCreationAutosaves');
+      if(autosaves===1)break;
+      await new Promise(resolve=>setTimeout(resolve,50));
+    }
+    assert.equal(await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureCreationAutosaves'),1);
     await controller.window().webContents.executeJavaScript('location.reload()');
     for(let attempt=0;attempt<30;attempt++) {
       await new Promise(resolve=>setTimeout(resolve,100));
@@ -173,23 +188,58 @@ async function runSmoke({ frontendURL, root }) {
       if(created.snapshot?.items.some(item=>item.title===createdTitle))break;
     }
     assert.equal(created.snapshot?.items.filter(item=>item.title===createdTitle).length,1);
+    assert.deepEqual(controller.lastWriteOutcome(),outcome,'后续只读操作不能抹掉实际写入阶段');
     console.log('顶栏新增及搜索快捷键、输入法取消和单次新增重载保持验证通过。');
-    // 默认窗口不开放尚未通过真实保存的直接新增；“＋”仅进入官方页面，不产生创建命令。
+    // 普通窗口不带开发参数，使用正式 IPC 与隐藏官方容器完成同一创建流程。
+    normalController=createController({fixtureURL:'http://127.0.0.1:'+server.address().port+'/'});
+    let normalSnapshot;
+    for(let attempt=0;attempt<30;attempt++) {
+      normalSnapshot=await normalController.execute({type:'read'},'cn');
+      if(normalSnapshot.ok)break;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    assert.equal(normalSnapshot.ok,true);
+    assert.equal(normalController.window().isVisible(),false);
+    assert.equal(normalController.window().webContents.getBackgroundThrottling(),false);
+    stopIPC();
     normalUI = new BrowserWindow({show:false,webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}});
-    let officialOpens=0;
-    ipcMain.handle('suixing:open-site', event=>{
-      assert.equal(event.sender,normalUI.webContents);
-      officialOpens++;return {ok:true};
-    });
+    stopIPC=installDesktopIPC({ipcMain,controller:normalController,getMainWindow:()=>normalUI});
     await normalUI.loadURL(frontendURL);
     await normalUI.webContents.executeJavaScript('new Promise(resolve=>{const timer=setInterval(()=>{if(document.querySelector(".demo-link")){clearInterval(timer);resolve(true)}},30)})');
-    normalUI.webContents.send('suixing:snapshot',{region:'cn',result:created});
-    const fallback=await normalUI.webContents.executeJavaScript(`(async()=>{for(let i=0;i<50;i++){const add=document.querySelector('.add-reminder-button');if(add){add.click();await new Promise(r=>setTimeout(r,100));return {direct:window.suixingDesktop.capabilities.createItem,draft:!!document.querySelector('.new-reminder-row'),notice:document.querySelector('.notice')?.textContent.includes('请在官方页面新增事项')}}await new Promise(r=>setTimeout(r,100))}return null})()`,true);
-    assert.deepEqual(fallback,{direct:false,draft:false,notice:true});
-    assert.equal(officialOpens,1);
-    assert.equal(await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureCreationClicks'),0);
+    normalUI.webContents.send('suixing:snapshot',{region:'cn',result:normalSnapshot});
+    assert.equal(await normalUI.webContents.executeJavaScript('window.suixingDesktop.capabilities.createItem'),true);
+    const normalTitle='随行验证 · 普通模式新增';
+    assert.equal(await normalUI.webContents.executeJavaScript('('+createTestItem.toString()+')('+JSON.stringify({pageId:normalSnapshot.snapshot.pageId,listId:normalSnapshot.snapshot.activeListId,title:normalTitle})+')',true),true);
+    for(let attempt=0;attempt<40;attempt++) {
+      await new Promise(resolve=>setTimeout(resolve,100));
+      normalSnapshot=await normalController.execute({type:'read'},'cn');
+      const saves=await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureCreationAutosaves');
+      if(normalSnapshot.snapshot?.items.some(item=>item.title===normalTitle)&&saves===1)break;
+    }
+    assert.equal(normalSnapshot.snapshot?.items.filter(item=>item.title===normalTitle).length,1);
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureCreationClicks'),1);
+    assert.equal(normalController.lastWriteOutcome(),null,'普通窗口不启用开发诊断');
+    await normalController.window().webContents.executeJavaScript('location.reload()');
+    for(let attempt=0;attempt<30;attempt++) {
+      await new Promise(resolve=>setTimeout(resolve,100));
+      normalSnapshot=await normalController.execute({type:'read'},'cn');
+      if(normalSnapshot.snapshot?.items.some(item=>item.title===normalTitle))break;
+    }
+    assert.equal(normalSnapshot.snapshot?.items.filter(item=>item.title===normalTitle).length,1);
+    stopIPC();
     normalUI.destroy();normalUI=null;
-    console.log('默认新增入口只打开官方页面，不派发未验收创建命令。');
+    normalController.dispose();normalController=null;
+    stopIPC=installDesktopIPC({ipcMain,controller,getMainWindow:()=>ui});
+    console.log('普通模式使用正式 IPC，隐藏官方容器自动保存与重载保持通过。');
+    await controller.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureNavigateOnCreate=true');
+    const interrupted=await controller.execute({type:'createItem',pageId:created.snapshot.pageId,listId:created.snapshot.activeListId,title:'随行验证 · 页面退出对照',requestId:'smoke-create-navigation'},'cn');
+    assert.equal(interrupted.code,'UNCERTAIN_WRITE');
+    const interruptedOutcome=controller.lastWriteOutcome();
+    assert.equal(interruptedOutcome.code,'UNCERTAIN_WRITE');
+    assert.equal(interruptedOutcome.stage,'waiting-draft','页面上下文退出后仍应保留退出前最后阶段');
+    assert.notEqual(interruptedOutcome.dispatched,false,'已派发或未知都不能诊断为没有派发');
+    assert.equal(interruptedOutcome.cloudConfirmed,false);
+    console.log('页面退出后保留不含正文的写入阶段，不把未知派发记录为未派发。');
     await controller.window().webContents.loadURL('http://127.0.0.1:' + server.address().port + '/home');
     const returned = once(controller.window().webContents, 'did-finish-load');
     assert.equal(controller.reloadSite('cn').ok, true);
@@ -220,17 +270,17 @@ async function runSmoke({ frontendURL, root }) {
     fs.writeFileSync(path.join(root, '.local/mobile-preview.png'), (await ui.webContents.capturePage()).toPNG());
     const report = {
       passed: true, kind: 'Electron 合成验证，不代表真实 iCloud 或真机验收',
-      checks: ['跨站 iframe 浏览器标识', '只读子页面诊断', '同源 iframe 读取', '同名事项按记录 ID 操作', '完成状态重载保持', '旧页面句柄失效', '构建界面加载', '服务区域恢复', '界面通过 IPC 读取', '构建界面完成及取消完成各派发一次', '标题和备注各保存一次及合成重载保持', '顶栏新增与搜索快捷键', '输入法取消不创建', '新增单次派发与合成重载保持', '固定提醒事项入口恢复', '页面无 Node 权限', '桌面与手机宽度布局'],
+      checks: ['跨站 iframe 浏览器标识', '只读子页面诊断', '同源 iframe 读取', '同名事项按记录 ID 操作', '完成状态重载保持', '旧页面句柄失效', '构建界面加载', '服务区域恢复', '正式 IPC 主框架校验', '构建界面完成及取消完成各派发一次', '标题和备注各保存一次及合成重载保持', '顶栏新增与搜索快捷键', '输入法取消不创建', '新增单次输入和官方自动保存', '普通模式隐藏官方容器新增与重载保持', '页面退出后保留固定阶段回执', '固定提醒事项入口恢复', '页面无 Node 权限', '桌面与手机宽度布局'],
       capturedAt: new Date().toISOString()
     };
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });
     fs.writeFileSync(path.join(root, '.local/desktop-smoke.json'), JSON.stringify(report, null, 2));
     console.log('桌面合成验证通过：' + report.checks.join('、'));
   } finally {
-    ipcMain.removeHandler('suixing:execute');
-    ipcMain.removeHandler('suixing:open-site');
+    stopIPC?.();
     ui?.destroy();
     normalUI?.destroy();
+    normalController?.dispose();
     agentWindow?.destroy();
     controller.dispose();
     await new Promise(resolve => server.close(resolve));

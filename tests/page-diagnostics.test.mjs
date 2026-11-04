@@ -1,8 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import {JSDOM} from 'jsdom';
 
 const { inspectFrame, diagnosticRoute, publicExceptionFrames } = createRequire(import.meta.url)('../apps/desktop/page-diagnostics.cjs');
+
+test('页面诊断只读控件存在性，不读取正文或提示区域中的个人内容', async () => {
+  const dom=new JSDOM('<body>synthetic-private-body<div role="alert">synthetic-private-reminder</div><input type="email" value="synthetic-private-account"><script src="/system/build/main.js?token=synthetic-private-token"></script></body>',{url:'https://www.icloud.com/',runScripts:'outside-only'});
+  try {
+    Object.defineProperty(dom.window.document.body,'innerText',{get(){assert.fail('不得读取页面正文');}});
+    Object.defineProperty(dom.window.document.body,'textContent',{get(){assert.fail('不得读取页面正文');}});
+    dom.window.isSecureContext=true;
+    const result=await inspectFrame({executeJavaScript:script=>Promise.resolve(dom.window.eval(script))});
+    assert.equal(result.accountField,true);
+    assert.equal(result.alertRegionPresent,true);
+    assert.equal(result.connectionError,null);
+    assert.doesNotMatch(JSON.stringify(result),/synthetic-private/);
+  } finally {dom.window.close();}
+});
 
 test('异常位置只保留公开脚本行列，忽略正文、对象、变量及私人地址', () => {
   const result = publicExceptionFrames({text:'synthetic-private-message',exception:{description:'synthetic-private-value'},stackTrace:{callFrames:[

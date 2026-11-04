@@ -121,7 +121,7 @@ function summarize(result) {
 }
 
 /** 仅开发验证时通过父进程标准输入收取固定命令，不监听网络端口，也不返回个人数据。 */
-function installLiveCheck({ controller, sendSnapshot, quit, directory, ui }) {
+function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, environment }) {
   const input = readline.createInterface({ input: process.stdin, terminal: false });
   const commandFile = path.join(directory, 'verification-command.json');
   const resultFile = path.join(directory, 'verification-result.json');
@@ -131,7 +131,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui }) {
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (!['diagnostics', 'inspect-test-editor', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
+    if (!['environment', 'diagnostics', 'inspect-test-editor', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
     if (command === 'quit') { quit(); return; }
     if (busy) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));
@@ -140,7 +140,9 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui }) {
     busy = true;
     try {
       let result;
-      if (command === 'open-sign-in') {
+      if (command === 'environment') {
+        result={ok:true,packaged:environment?.packaged===true,profileKind:['system-default','project-local'].includes(environment?.profileKind)?environment.profileKind:'unknown'};
+      } else if (command === 'open-sign-in') {
         result = await controller.openSignIn();
       } else if (command === 'reload') {
         result = controller.reloadSite('cn');

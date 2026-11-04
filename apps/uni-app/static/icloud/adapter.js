@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。仅访问页面 DOM，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.2.2') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.2.7') return;
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   var listHandles = new WeakMap();
@@ -9,6 +9,16 @@
   var inFlight = false;
   var lastSnapshot = null;
   var creationRequests = new Set();
+  var creationStage = 'preflight';
+  var creationDiagnosticSequence = 0;
+
+  /** 开发诊断只传递固定阶段名；页面退出前也能留下进度，不含任何业务参数或记录标识。 */
+  function setCreationStage(stage) {
+    creationStage = stage;
+    if (root.__suixingDiagnosticPhases === true && Number.isSafeInteger(creationDiagnosticSequence) && creationDiagnosticSequence > 0) {
+      try { root.console.info('suixing-create-stage:' + creationDiagnosticSequence + ':' + stage); } catch (_) { /* 日志不可用不改变写入行为。 */ }
+    }
+  }
 
   function result(ok, code, message, extra) {
     return Object.assign({ ok: ok, code: code, message: message }, extra || {});
@@ -245,8 +255,8 @@
       (!doc.queryCommandSupported || doc.queryCommandSupported(textInstruction(value).command));
   }
 
-  /** 一个字段仅一次输入前事件、一次原生命令和一次离开编辑；取消或异常绝不改用另一种写法。 */
-  function replaceEditorText(doc, editor, value) {
+  /** 已有字段单次编辑后离开；新事项保留官方自动保存流程。取消或异常绝不改用另一种写法。 */
+  async function replaceEditorText(doc, editor, value, settleInitialInput, reportStage) {
     editor.focus();
     var selection = doc.defaultView.getSelection();
     var range = doc.createRange();
@@ -264,16 +274,27 @@
       if (!editor.dispatchEvent(new doc.defaultView.InputEvent('beforeinput', {
         bubbles: true, cancelable: true, composed: true,
         inputType: value ? 'insertText' : 'deleteContentBackward', data: value || null
-      }))) return false;
+      }))) { if (reportStage) reportStage('input-cancelled'); return false; }
       var instruction = textInstruction(value);
       // 多行 insertText 会拆成多次 input；仅包含转义文字和换行的片段可一次替换完整范围。
+      if (reportStage) reportStage('input-command');
       var inserted = doc.execCommand(instruction.command, false, instruction.value);
       if (inserted) {
+        if (reportStage) reportStage('input-accepted');
+        // 新记录的文字保存由官方 input 回调排队；先让该任务执行，再离开编辑提交初始记录。
+        if (settleInitialInput) await new Promise(function (resolve) { root.setTimeout(resolve, 0); });
+        if (reportStage) reportStage('input-settled');
+        if (!editor.isConnected) { if (reportStage) reportStage('editor-detached'); return false; }
+        if (settleInitialInput) { if (reportStage) reportStage('awaiting-autosave'); return true; }
+        if (reportStage) reportStage('leaving-editor');
         editor.blur();
         if (!blurSeen && !focusOutSeen) {
           editor.dispatchEvent(new doc.defaultView.FocusEvent('blur', { bubbles: false, view: doc.defaultView, relatedTarget: doc.body }));
           editor.dispatchEvent(new doc.defaultView.FocusEvent('focusout', { bubbles: true, view: doc.defaultView, relatedTarget: doc.body }));
         }
+        if (reportStage) reportStage('editor-left');
+      } else {
+        if (reportStage) reportStage('input-rejected');
       }
       return inserted;
     } finally {
@@ -321,7 +342,7 @@
     if (!afterActivation || afterActivation.fingerprint !== command.fingerprint) return result(false, 'STALE_VIEW', '进入编辑时内容发生变化，请刷新后核对。');
     editor = activeRow.querySelector('.' + command.field + ' [role="textbox"]');
     if (afterActivation.disabled || !editor || editor.getAttribute('contenteditable') !== 'true' || editor.getAttribute('aria-readonly') === 'true') return result(false, 'READ_ONLY', '当前字段暂不可编辑。');
-    var inserted = replaceEditorText(doc, editor, command.value);
+    var inserted = await replaceEditorText(doc, editor, command.value);
     var observed = inserted && await until(function () {
       var row = doc.getElementById(command.id);
       var item = row && readItem(row, command.listId);
@@ -356,6 +377,7 @@
     if (creationRequests.size >= 512) return result(false, 'CREATION_LIMIT', '本次页面的新增操作较多，请重载后再读取。');
     var beforeIds = new Set(beforeRows.map(function (row) { return row.id; }));
     creationRequests.add(command.requestId);
+    setCreationStage('waiting-draft');
     submitButton.click();
     var draft = await until(function () {
       var selected = listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
@@ -369,27 +391,35 @@
     }, 6500);
     if (!draft) {
       lastSnapshot = null;
-      return result(false, 'UNCERTAIN_WRITE', '新增已发送，尚未取得唯一的新事项，请先在官方页面核对。', { dispatched: true, cloudConfirmed: false });
+      return result(false, 'UNCERTAIN_WRITE', '新增已发送，尚未取得唯一的新事项，请先在官方页面核对。', { dispatched: true, cloudConfirmed: false, stage: creationStage });
     }
     var id = draft.row.id;
-    var inserted = replaceEditorText(doc, draft.editor, command.title);
+    setCreationStage('writing-title');
+    var inserted = await replaceEditorText(doc, draft.editor, command.title, true, setCreationStage);
+    if (!inserted) {
+      lastSnapshot = null;
+      return result(false, 'UNCERTAIN_WRITE', '网页未确认文字输入，请先读取核对，不要重复创建。', { dispatched: true, cloudConfirmed: false, stage: creationStage });
+    }
+    setCreationStage('observing-title');
     var observed = inserted && await until(function () {
       var row = doc.getElementById(id);
       return row && text(row.querySelector('.title [role="textbox"]')) === command.title.trim();
     }, 6500);
     lastSnapshot = null;
-    if (!observed) return result(false, 'UNCERTAIN_WRITE', '新增结果尚未确认，请先读取核对，不要重复创建。', { dispatched: true, cloudConfirmed: false });
+    if (!observed) return result(false, 'UNCERTAIN_WRITE', '新增结果尚未确认，请先读取核对，不要重复创建。', { dispatched: true, cloudConfirmed: false, stage: creationStage });
+    setCreationStage('observed');
     var refreshed = read();
-    return result(true, 'WEB_STATE_OBSERVED', '新事项已在网页中出现；云端保存仍需核对。', { dispatched: true, cloudConfirmed: false, snapshot: refreshed.snapshot || null });
+    return result(true, 'WEB_STATE_OBSERVED', '新事项已在网页中出现；云端保存仍需核对。', { dispatched: true, cloudConfirmed: false, stage: creationStage, snapshot: refreshed.snapshot || null });
   }
 
   root.__suixingAdapter = {
-    version: '0.2.2',
+    version: '0.2.7',
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');
       if (!command || !['read', 'selectList', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
       inFlight = true;
+      if (command.type === 'createItem') { creationDiagnosticSequence = root.__suixingDiagnosticWriteSequence; setCreationStage('preflight'); }
       try {
         if (command.type === 'read') return read();
         if (command.type === 'selectList') return await selectList(command);
@@ -398,7 +428,7 @@
         return await setCompleted(command);
       } catch (_) {
         lastSnapshot = null;
-        return result(false, ['setCompleted', 'setText', 'createItem'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false });
+        return result(false, ['setCompleted', 'setText', 'createItem'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
       } finally { inFlight = false; }
     }
   };
