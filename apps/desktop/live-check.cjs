@@ -2,6 +2,7 @@ const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
 const { allowedURL } = require('./policy.cjs');
+const { clickTestCompletion } = require('./verification-ui.cjs');
 
 const TEST_PREFIX = '随行验证';
 const TEST_ITEM = '随行验证 · 最小读写验证';
@@ -40,18 +41,15 @@ async function testOperation(controller, command, { sendSnapshot, ui }) {
   if (item.completed === completed) return { ...result, code: 'UNCHANGED', dispatched: false };
   // 真实验证走本地界面的完成按钮和受限 IPC；点击只发一次，后续只读核对。
   sendSnapshot(result);
-  const clicked = await ui.webContents.executeJavaScript(`(async()=>{
-    for(let i=0;i<50;i++){
-      const title=document.querySelector('.list-title');
-      if(title?.textContent.startsWith('随行验证')){
-        document.querySelectorAll('.tabs button')[${item.completed ? 1 : 0}]?.click();
-        await new Promise(r=>setTimeout(r,20));
-        const rows=[...document.querySelectorAll('.reminder-row')].filter(x=>x.querySelector('.reminder-title')?.textContent==='随行验证 · 最小读写验证');
-        if(rows.length===1){const b=rows[0].querySelector('.completion-button');if(b&&!b.disabled&&b.classList.contains('checked')===${item.completed}){b.click();return true}}
-      }
-      await new Promise(r=>setTimeout(r,100));
-    }return false;
-  })()`, true);
+  let clicked;
+  try {
+    clicked = await ui.webContents.executeJavaScript('(' + clickTestCompletion.toString() + ')(' + JSON.stringify({
+      pageId: result.snapshot.pageId, listId: item.listId, id: item.id, completed: item.completed
+    }) + ')', true);
+  } catch {
+    // 渲染器中断可能发生在点击之后，不能当作“没有写入”来自动重放。
+    return { ok: false, code: 'UNCERTAIN_WRITE', dispatched: undefined, cloudConfirmed: false };
+  }
   if (!clicked) return { ok: false, code: 'TEST_UI_NOT_READY' };
   for (let attempt = 0; attempt < 80; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 200));
@@ -85,10 +83,14 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui }) {
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (!['diagnostics', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'reload', 'quit'].includes(command) || busy) return;
+    if (!['diagnostics', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'reload', 'quit'].includes(command)) return;
+    if (command === 'quit') { quit(); return; }
+    if (busy) {
+      if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));
+      return;
+    }
     busy = true;
     try {
-      if (command === 'quit') { quit(); return; }
       let result;
       if (command === 'open-sign-in') {
         result = await controller.openSignIn();
@@ -103,7 +105,11 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui }) {
       }
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result }, null, 2));
       console.log('开发验证结果：' + JSON.stringify(result));
-    } catch { console.log('验证命令未完成，请重新读取诊断状态。'); }
+    } catch {
+      const result = { ok: false, code: /^(un)?complete-test-item$/.test(command) ? 'UNCERTAIN_WRITE' : 'VERIFICATION_FAILED', cloudConfirmed: false };
+      if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result }));
+      console.log('验证命令未完成，请先只读核对，不重放写入。');
+    }
     finally { busy = false; }
   }
   input.on('line', line => run(line));
@@ -120,4 +126,4 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui }) {
   return () => { input.close(); fs.unwatchFile(commandFile); };
 }
 
-module.exports = { installLiveCheck };
+module.exports = { installLiveCheck, testOperation, summarize };

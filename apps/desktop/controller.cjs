@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { BrowserWindow, session } = require('electron');
 const { allowedURL, allowStorage, browserUserAgent, validCommand } = require('./policy.cjs');
+const { inspectFrame } = require('./page-diagnostics.cjs');
 
 const ROOT = path.resolve(__dirname, '../..');
 const SOURCE = fs.readFileSync(path.join(ROOT, 'apps/uni-app/static/icloud/adapter.js'), 'utf8');
@@ -86,7 +87,8 @@ function createController(options = {}) {
     site = new BrowserWindow({
       width: 1180, height: 830, minWidth: 700, minHeight: 600, show: false,
       title: 'iCloud 官方页面 · 提醒事项随行', autoHideMenuBar: true,
-      webPreferences: { partition, nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true }
+      // 仅开发验收禁用后台节流，避免隐藏官方窗口的菜单/只读轮询被拖延；日常使用保留节流。
+      webPreferences: { partition, nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: !options.diagnostics }
     });
     harden(site.webContents);
     site.webContents.setUserAgent(browserUserAgent(process.versions.chrome));
@@ -136,14 +138,13 @@ function createController(options = {}) {
     async diagnostics() {
       if (!site || site.isDestroyed()) return { opened: false, trace };
       const frames = [];
-      for (const frame of site.webContents.mainFrame.framesInSubtree) {
+      const available = site.webContents.mainFrame.framesInSubtree;
+      for (const frame of available.slice(0, 12)) {
         const entry = { route: route(frame.url) };
-        try {
-          entry.state = await frame.executeJavaScript('({passwordField:!!document.querySelector("input[type=password]"),accountField:!!document.querySelector("input[type=email],input[autocomplete=username]"),connectionError:/There was a problem connecting to the server|连接服务器时出现问题|无法连接服务器/.test(document.body?.innerText||""),reminders:!!document.querySelector(".rm-list-menu-item"),runtime:{ua:navigator.userAgent,secure:isSecureContext,crypto:!!crypto.subtle,indexedDB:typeof indexedDB,worker:typeof Worker},scripts:[...document.scripts].filter(x=>x.src).map(x=>{const u=new URL(x.src);return u.origin+u.pathname})})');
-        } catch { entry.state = '页面暂不可读取'; }
+        entry.state = await inspectFrame(frame);
         frames.push(entry);
       }
-      return { opened: true, frames, trace };
+      return { opened: true, frames, framesTruncated: available.length > frames.length, trace };
     },
     dispose() { closing = true; if (site && !site.isDestroyed()) site.destroy(); }
   };

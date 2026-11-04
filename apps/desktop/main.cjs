@@ -57,7 +57,7 @@ app.whenReady().then(async () => {
   mainWindow = new BrowserWindow({
     width: 1160, height: 830, minWidth: 390, minHeight: 600, show: false,
     title: '提醒事项·随行', autoHideMenuBar: true, backgroundColor: '#f6f7f9',
-    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true }
+    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: !liveCheck }
   });
   installIPC();
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

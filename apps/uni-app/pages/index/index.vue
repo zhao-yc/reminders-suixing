@@ -38,12 +38,12 @@
         <button class="demo-link" @click="showDemo">先看看界面示例 →</button>
         <text class="welcome-footnote">登录在 iCloud 官方页面完成</text>
       </view>
-      <view v-else class="list-content">
+      <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId">
         <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title">{{ snapshot.activeListTitle }}</text><text class="heading-count">{{ incompleteCount }}</text></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
-        <view class="list-controls"><view class="tabs"><button :class="{ active: tab === 'pending' }" @click="tab = 'pending'">未完成 <text>{{ incompleteCount }}</text></button><button :class="{ active: tab === 'completed' }" @click="tab = 'completed'">已完成 <text>{{ completeCount }}</text></button></view><input v-model="search" class="search" placeholder="搜索当前清单" aria-label="搜索当前清单" /></view>
+        <view class="list-controls"><view class="tabs"><button data-status="pending" :class="{ active: tab === 'pending' }" @click="tab = 'pending'">未完成 <text>{{ incompleteCount }}</text></button><button data-status="completed" :class="{ active: tab === 'completed' }" @click="tab = 'completed'">已完成 <text>{{ completeCount }}</text></button></view><input v-model="search" class="search" placeholder="搜索当前清单" aria-label="搜索当前清单" /></view>
         <scroll-view class="items-scroll" scroll-y>
           <view v-if="!visibleItems.length" class="empty-list"><text class="empty-circle">✓</text><text>{{ search ? '没有找到相关事项' : tab === 'completed' ? '这里会显示网页已加载的完成事项' : '这份清单暂时没有待办事项' }}</text></view>
-          <view v-for="item in visibleItems" :key="item.id" class="reminder-row" :class="{ completed: item.completed }">
+          <view v-for="item in visibleItems" :key="item.id" class="reminder-row" :data-record-id="item.id" :class="{ completed: item.completed }">
             <button class="completion-button" :class="{ checked: item.completed }" :disabled="busy || (!live && !isDemo) || item.disabled" :aria-label="(item.completed ? '取消完成：' : '完成：') + item.title" @click="toggle(item)"><text v-if="item.completed">✓</text></button>
             <view class="reminder-copy"><text class="reminder-title">{{ item.title }}</text><text v-if="item.notes" class="reminder-notes">{{ item.notes }}</text><text v-if="item.metadata" class="reminder-metadata">{{ item.metadata }}</text></view>
             <text v-if="item.level > 1" class="subtask-tag">子事项</text>
