@@ -136,6 +136,41 @@ async function runSmoke({ frontendURL, root }) {
     assert.deepEqual(await displayedIds(),originalIds.slice().reverse());
     await selectSort('清单顺序');
     assert.deepEqual(await displayedIds(),originalIds);
+    const calendarDay=offset=>{const date=new Date();date.setDate(date.getDate()+offset);return [date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');};
+    const viewItem=(id,title,date,extra={})=>({id,title,notes:'',completed:false,flagged:false,priority:'none',level:1,schedule:{date,time:null,timeZone:null},...extra});
+    const viewItems=[viewItem('view-root','随行验证 · 日期父项',null),viewItem('view-child','随行验证 · 日期子项',calendarDay(0),{level:2,flagged:true}),viewItem('view-overdue','随行验证 · 逾期',calendarDay(-1)),viewItem('view-future','随行验证 · 将来',calendarDay(1)),viewItem('view-completed','随行验证 · 完成',calendarDay(0),{completed:true}),viewItem('view-unknown','随行验证 · 日期未知',null,{schedule:null,metadata:'今天（合成文案，不得用于猜测）'})];
+    const viewSnapshot={...sorting.snapshot,items:viewItems};
+    ui.webContents.send('suixing:snapshot',{region:'cn',result:{ok:true,code:'READY',snapshot:viewSnapshot}});
+    await new Promise(resolve=>setTimeout(resolve,80));
+    const chooseView=async view=>{await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="'+view+'"]\').click()');await new Promise(resolve=>setTimeout(resolve,80));};
+    await chooseView('today');
+    assert.deepEqual(await displayedIds(),['view-root','view-child','view-overdue']);
+    assert.deepEqual(await ui.webContents.executeJavaScript('(()=>{const n=document.querySelector(".date-view-description");return [n.dataset.matches,n.dataset.unknown,n.textContent.includes("当前清单已加载")];})()'),['2','1',true]);
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(\'[data-record-id="view-root"] .completion-button\').hasAttribute("disabled")'),true);
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(\'[data-record-id="view-root"] .row-actions\')===null'),true);
+    const viewWrites=controller.lastWriteOutcome()?.sequence || 0;
+    await ui.webContents.executeJavaScript('(()=>{const row=document.querySelector(\'[data-record-id="view-root"]\');row.querySelector(".completion-button").click();row.querySelector(".reminder-title").dispatchEvent(new MouseEvent("dblclick",{bubbles:true}));})()');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".inline-editor")===null'),true);
+    assert.equal(controller.lastWriteOutcome()?.sequence || 0,viewWrites);
+    await ui.webContents.executeJavaScript('document.querySelector(".flag-filter").click()');
+    await new Promise(resolve=>setTimeout(resolve,60));assert.deepEqual(await displayedIds(),['view-root','view-child']);
+    await ui.webContents.executeJavaScript('document.querySelector(".flag-filter").click()');
+    ui.show();ui.focus();ui.webContents.focus();
+    await ui.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+    fs.writeFileSync(path.join(root,'.local/date-views-desktop-preview.png'),(await ui.webContents.capturePage()).toPNG());
+    const viewSize=ui.getSize();ui.setSize(430,932);
+    await new Promise(resolve=>setTimeout(resolve,300));
+    assert.equal(await ui.webContents.executeJavaScript('document.documentElement.scrollWidth<=window.innerWidth+2'),true,'日期视图说明和四个入口在窄屏不得横向溢出');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".sidebar").getBoundingClientRect().right<=1'),true,'等待抽屉收起动画后再核对与截图');
+    await ui.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+    fs.writeFileSync(path.join(root,'.local/date-views-mobile-preview.png'),(await ui.webContents.capturePage()).toPNG());
+    ui.setSize(...viewSize);await new Promise(resolve=>setTimeout(resolve,80));
+    await chooseView('scheduled');assert.deepEqual(await displayedIds(),['view-root','view-child','view-overdue','view-future']);
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".date-view-description").dataset.matches'),'3');
+    await chooseView('pending');
+    ui.webContents.send('suixing:snapshot',{region:'cn',result:sorting});
+    await new Promise(resolve=>setTimeout(resolve,80));assert.deepEqual(await displayedIds(),originalIds);
+    console.log('今天包含逾期、计划排除无日期，未知日期单独提示；匹配子项保留只读祖先，旗标组合与原视图恢复通过。');
     ui.show();ui.focus();ui.webContents.focus();
     await ui.webContents.executeJavaScript('(()=>{const input=document.querySelector(".toolbar-search input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,"随行验证");input.dispatchEvent(new Event("input",{bubbles:true}));input.focus()})()');
     const press=async keyCode=>{
@@ -151,6 +186,14 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".list-appearance-button")'),true,'Tab 应能到达清单颜色与图标');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".delete-list-button")'),true,'Tab 应能到达清单删除');
+    for(const view of ['pending','today','scheduled','completed']) {
+      await press('Tab');
+      assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(\'.view-tab[data-status="'+view+'"]\')'),true,'Tab 应能到达各清单视图');
+      if(view==='today') {
+        await press('Enter');assert.equal(await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="today"]\').getAttribute("aria-pressed")'),'true');
+      }
+    }
+    await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="pending"]\').click()');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".flag-filter")'),true,'Tab 应先到达旗标筛选');
     await press('Tab');
