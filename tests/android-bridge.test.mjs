@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import fs from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import { createAndroidBridge } from '../apps/uni-app/lib/android-bridge.js';
+import { reconnectLoadedList } from '../apps/uni-app/lib/reconnect.js';
 
 const source = await fs.readFile(new URL('../apps/uni-app/static/icloud/adapter.js', import.meta.url), 'utf8');
 const fixture = await fs.readFile(new URL('./fixtures/reminders.html', import.meta.url), 'utf8');
@@ -16,10 +17,10 @@ const writeCommand = () => ({ type: 'setCompleted', pageId: 'synthetic-page', li
 /** 只替代原生传输；注入脚本确实执行，并通过拦截的 URL 回到同一窗口。 */
 function setup(t, options = {}) {
   const views = [];
-  const runtime = { webview: { create(url, id, styles) {
+  const runtime = { networkinfo: options.networkinfo, webview: { create(url, id, styles) {
     const listeners = new Map();
     const view = {
-      id, styles, scripts: [], calls: [], replies: [], closed: 0, shown: 0, hidden: 0, reloads: 0,
+      id, styles, scripts: [], calls: [], replies: [], loads: [], closed: 0, shown: 0, hidden: 0, reloads: 0,
       emit(event) { for (const listener of listeners.get(event) || []) listener(); },
       addEventListener(event, callback) { listeners.set(event, [...(listeners.get(event) || []), callback]); },
       overrideUrlLoading(policy, callback) {
@@ -27,7 +28,7 @@ function setup(t, options = {}) {
         this.policy = policy; this.receive = callback;
       },
       getURL() { return this.url; },
-      loadURL(value) { this.url = value; this.emit('loading'); },
+      loadURL(value) { this.loads.push(value); this.url = value; this.emit('loading'); },
       close() { this.closed++; this.emit('close'); },
       show() { this.shown++; }, hide() { this.hidden++; },
       reload() { this.reloads++; this.emit('loading'); },
@@ -82,10 +83,12 @@ test('写入期间切换区域、重载或另发命令都不关闭当前窗口',
   assert.equal((await state.bridge.execute({ type: 'read' }, 'global')).code, 'BUSY');
   assert.equal((await state.bridge.openSite('global')).code, 'BUSY');
   assert.equal((await state.bridge.reloadSite()).code, 'BUSY');
+  assert.equal((await state.bridge.reconnectSite()).code, 'BUSY');
   assert.equal((await state.bridge.openSite()).ok, true);
   assert.equal(state.views.length, 1);
   assert.equal(view.closed, 0);
   assert.equal(view.reloads, 0);
+  assert.equal(view.loads.length, 1);
   view.calls.at(-1).resolve({ ...readResult(), code: 'WEB_STATE_OBSERVED', cloudConfirmed: true });
   assert.equal((await write).cloudConfirmed, false);
   assert.equal(view.scripts.length, 2);
@@ -165,6 +168,89 @@ test('官方页面配置系统返回为隐藏，工具栏返回后继续复用�
   assert.equal(view.shown, 2);
   view.calls.at(-1).resolve(readResult());
   assert.equal((await write).ok, true);
+  assert.equal(view.scripts.length, 2);
+});
+
+test('Android 重连复用窗口并仅恢复唯一的原清单，尚未加载时只读取指定清单', async t => {
+  const state = setup(t);
+  const view = await state.open();
+  await state.read(view);
+  const title = '随行验证 · 原清单';
+  const connection = reconnectLoadedList(state.bridge, 'cn', { title, pageId: snapshot().pageId }, {
+    wait: async () => view.emit('loaded'), attempts: 3
+  });
+  const listId = 'new-list';
+  const pageId = 'new-page';
+  const lists = [{ id: 'default-list', title: '随行验证 · 默认清单' }, { id: listId, title }];
+  await tick();
+  assert.deepEqual(view.loads, ['https://www.icloud.com.cn/reminders/', 'https://www.icloud.com.cn/reminders/']);
+  assert.equal(view.closed, 0);
+  assert.equal(state.views.length, 1);
+  assert.equal(view.calls.at(-1).command.type, 'readLists');
+  view.calls.at(-1).resolve({ ...readResult(), snapshot: { ...snapshot(), pageId, activeListId: null, lists } });
+  await tick();
+  assert.equal(view.calls.at(-1).command.type, 'selectList');
+  assert.equal(view.calls.at(-1).command.listId, listId);
+  view.calls.at(-1).resolve({ ok: false, code: 'LIST_LOADING' });
+  await tick();
+  const read = view.calls.at(-1);
+  assert.equal(read.command.type, 'readList');
+  assert.equal(read.command.pageId, pageId);
+  assert.equal(read.command.listId, listId);
+  read.resolve({ ...readResult(), snapshot: { ...snapshot(), pageId, activeListId: listId, activeListTitle: title, lists } });
+  assert.equal((await connection).code, 'RECONNECTED');
+  assert.deepEqual(view.calls.map(call => call.command.type), ['read', 'readLists', 'selectList', 'readList']);
+});
+
+test('Android 导航回执不授权写入，实际共享适配器只在指定清单就绪后返回事项', async t => {
+  const state = setup(t, { realAdapter: true });
+  const view = await state.open();
+  const navigation = await state.bridge.execute({ type: 'readLists' });
+  assert.equal(navigation.ok, true);
+  assert.equal(navigation.snapshot.activeListId, null);
+  assert.equal(navigation.snapshot.items.length, 0);
+  assert.equal((await state.bridge.execute(writeCommand())).code, 'READ_REQUIRED');
+  const { pageId, lists } = navigation.snapshot;
+  const listId = lists[1].id;
+  assert.equal((await state.bridge.execute({ type: 'readList', pageId, listId })).code, 'STALE_VIEW');
+  const selected = await state.bridge.execute({ type: 'selectList', pageId, listId });
+  assert.equal(selected.snapshot.activeListId, listId);
+  assert.equal(selected.snapshot.items.length, 1);
+  const loaded = await state.bridge.execute({ type: 'readList', pageId, listId });
+  assert.equal(loaded.snapshot.activeListId, listId);
+  assert.equal(view.window.fixtureClicks, 0);
+});
+
+test('Android 拒绝使用选错清单的回执恢复写入权限', async t => {
+  const state = setup(t);
+  const view = await state.open();
+  for (const type of ['selectList', 'readList']) {
+    const result = state.bridge.execute({ type, pageId: snapshot().pageId, listId: 'other-list' });
+    await tick();
+    view.calls.at(-1).resolve(readResult());
+    assert.equal((await result).code, 'STALE_VIEW');
+    assert.equal((await state.bridge.execute(writeCommand())).code, 'READ_REQUIRED');
+  }
+  assert.equal(view.calls.length, 2);
+});
+
+test('Android 断网时中断写入，网络恢复及旧回执都不能解除重新读取要求', async t => {
+  let type = 0;
+  const state = setup(t, { networkinfo: { CONNECTION_NONE: 1, getCurrentType: () => type } });
+  const view = await state.open();
+  await state.read(view);
+  assert.equal(state.bridge.connectionState().state, 'unknown');
+  const write = state.bridge.execute(writeCommand());
+  await tick();
+  const oldCall = view.calls.at(-1);
+  type = 1;
+  assert.equal(state.bridge.connectionState().state, 'offline');
+  assert.equal((await write).code, 'UNCERTAIN_WRITE');
+  type = 3;
+  assert.equal(state.bridge.connectionState().state, 'available');
+  oldCall.resolve(readResult());
+  await tick();
+  assert.equal((await state.bridge.execute(writeCommand())).code, 'READ_REQUIRED');
   assert.equal(view.scripts.length, 2);
 });
 

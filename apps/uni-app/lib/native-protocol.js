@@ -2,13 +2,13 @@
 export const REPLY_PREFIX = 'suixingbridge://reply?payload=';
 export const MAX_PAYLOAD = 110000;
 
-export function normalizeCommand(command) {
+export function normalizeCommand(command, { scopedReads = false } = {}) {
   if (!command || typeof command !== 'object') return null;
-  if (command.type === 'read') return { type: 'read' };
+  if (command.type === 'read' || (scopedReads && command.type === 'readLists')) return { type: command.type };
   const bounded = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
   if (!bounded(command.pageId, 150) || !bounded(command.listId, 150)) return null;
   const result = { type: command.type, pageId: command.pageId, listId: command.listId };
-  if (command.type === 'selectList') return result;
+  if (command.type === 'selectList' || (scopedReads && command.type === 'readList')) return result;
   if (command.type !== 'setCompleted' || !bounded(command.id, 1024) || !bounded(command.fingerprint, 16000) ||
       typeof command.expectedCompleted !== 'boolean' || typeof command.completed !== 'boolean') return null;
   return { ...result, id: command.id, fingerprint: command.fingerprint,

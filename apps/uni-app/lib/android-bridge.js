@@ -22,7 +22,12 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
     if (pending !== current) return;
     pending = null;
     clearTimeout(current.timer);
-    needsRead = !result.ok || !result.snapshot;
+    const { type, pageId, listId } = current.command;
+    if (result.ok && (type === 'readList' || type === 'selectList') &&
+        (result.snapshot.pageId !== pageId || result.snapshot.activeListId !== listId)) {
+      result = failure('STALE_VIEW', '当前清单已变化，请重新读取并选择清单。');
+    }
+    needsRead = !result.ok || type === 'readLists' || !result.snapshot?.activeListId;
     current.resolve(result);
   }
 
@@ -99,17 +104,18 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
 
   /** 不重放写入；超时、导航或回执异常后，必须先成功读取当前页面。 */
   async function execute(input, region = 'cn') {
-    const command = normalizeCommand(input);
+    const command = normalizeCommand(input, { scopedReads: true });
     if (!command) return failure('INVALID_COMMAND', '不支持或不完整的操作。');
     const blocked = unavailable(region, true);
     if (blocked) return blocked;
     let view;
     try { view = ensure(region); } catch { return failure('BRIDGE_ERROR', '官方页面暂时无法打开，请稍后重试。'); }
     if (!ready || !official(view)) return failure('PAGE_NOT_READY', '请先打开官方页面，完成登录并等待页面载入。');
-    if (command.type !== 'read' && needsRead) return failure('READ_REQUIRED', '请先刷新，核对当前页面后再操作。');
+    const write = command.type === 'setCompleted';
+    if (write && needsRead) return failure('READ_REQUIRED', '请先刷新，核对当前页面后再操作。');
     return new Promise(resolve => {
       const id = Date.now().toString(36) + '-' + (++counter);
-      const current = { id, view, resolve, write: command.type === 'setCompleted' };
+      const current = { id, view, resolve, write, command };
       pending = current;
       current.timer = setTimeout(() => {
         if (pending === current) interrupt('BRIDGE_TIMEOUT', '页面响应超时，请在官方页面核对后重新读取。');
@@ -122,7 +128,18 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
   }
 
   return {
-    platform: 'Android', execute,
+    platform: 'Android', capabilities: { reconnect: true }, execute,
+    connectionState() {
+      const network = runtime.networkinfo;
+      const type = network?.getCurrentType();
+      if (!Number.isInteger(type)) return { ok: true, state: 'unknown' };
+      if (type === network.CONNECTION_NONE) {
+        interrupt('OFFLINE', '网络已断开，联网后请重新读取。');
+        return { ok: true, state: 'offline' };
+      }
+      // 仅判断设备已联网，仍需读取官方页面才能恢复写入。
+      return { ok: true, state: type > network.CONNECTION_NONE ? 'available' : 'unknown' };
+    },
     async openSite(region = 'cn') {
       const blocked = unavailable(region);
       if (blocked) return blocked;
@@ -140,6 +157,18 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
         if (existing) view.reload();
         return { ok: true, message: '官方页面正在重新加载，请稍后读取。' };
       } catch { return failure('BRIDGE_ERROR', '官方页面暂时无法重新加载，请稍后重试。'); }
+    },
+    async reconnectSite(region = 'cn') {
+      const blocked = unavailable(region, true);
+      if (blocked) return blocked;
+      try {
+        if (webview && activeRegion === region) {
+          ready = false;
+          needsRead = true;
+          webview.loadURL(REGIONS[region].url);
+        } else ensure(region);
+        return { ok: true };
+      } catch { return failure('BRIDGE_ERROR', '官方页面暂时无法重新连接，请稍后重试。'); }
     },
     dispose() {
       if (disposed) return;
