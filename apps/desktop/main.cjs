@@ -42,7 +42,7 @@ app.whenReady().then(async () => {
   if (!primary) return;
   const frontendURL = serveFrontend(frontendPath());
   if (smoke) {
-    const { runSmoke } = require('./smoke.cjs');
+    const { runSmoke } = require(process.argv.includes('--smoke-auto-read') ? './smoke-auto-read.cjs' : './smoke.cjs');
     try { await runSmoke({ frontendURL, root: ROOT }); app.exit(0); }
     catch (error) { console.error('桌面合成验证失败：' + error.message); app.exit(1); }
     return;
