@@ -72,6 +72,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
     activeRegion = region;
     const view = runtime.webview.create('', 'suixing-icloud-' + region, {
       plusrequire: 'none', top: '0px', bottom: '0px', popGesture: 'hide',
+      backButtonAutoControl: 'hide',
       titleNView: {
         titleText: 'iCloud 官方页面', titleColor: '#202735', backgroundColor: '#f6f7f9',
         buttons: [{ text: '返回应用', fontSize: '14px', width: '88px', onclick() {

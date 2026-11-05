@@ -150,6 +150,24 @@ test('切换区域后旧窗口的加载、关闭和返回按钮都不影响新�
   assert.equal((await read).ok, true);
 });
 
+test('官方页面配置系统返回为隐藏，工具栏返回后继续复用原窗口和待处理回执', async t => {
+  const state = setup(t);
+  const view = await state.open();
+  assert.equal(view.styles.backButtonAutoControl, 'hide');
+  await state.read(view);
+  const write = state.bridge.execute(writeCommand());
+  await tick();
+  view.styles.titleNView.buttons[0].onclick();
+  assert.equal(view.hidden, 1);
+  assert.equal(view.closed, 0);
+  assert.equal((await state.bridge.openSite()).ok, true);
+  assert.equal(state.views.length, 1);
+  assert.equal(view.shown, 2);
+  view.calls.at(-1).resolve(readResult());
+  assert.equal((await write).ok, true);
+  assert.equal(view.scripts.length, 2);
+});
+
 test('关闭连接即结束待处理写入，之后不能重新创建窗口', async t => {
   const state = setup(t);
   const view = await state.open();
