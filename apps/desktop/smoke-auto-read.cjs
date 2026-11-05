@@ -32,6 +32,10 @@ async function runSmoke({frontendURL,root}) {
     await waitFor(()=>visibleTitle('随行验证 · 自动更新起点'),'初始清单未显示');
     await title('随行验证 · 自动更新第一次');await focus();await waitFor(()=>visibleTitle('随行验证 · 自动更新第一次'),'聚焦后未自动更新');
     assert.deepEqual(commands,[{type:'readList',pageId:first.snapshot.pageId,listId:first.snapshot.activeListId,background:true}]);
+    const automaticReceipt=controller.lastAutomaticReadOutcome();
+    assert.deepEqual(automaticReceipt,{sequence:1,ok:true,code:'READY',samePage:true,sameList:true,capturedAt:automaticReceipt.capturedAt});
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".list-content").dataset.capturedAt'),automaticReceipt.capturedAt);
+    assert.ok(!Number.isNaN(Date.parse(automaticReceipt.capturedAt)));
     console.log('聚焦自动读取经正式 IPC 通过，未切换清单或重连。');
 
     await title('随行验证 · 周期自动更新');await waitFor(()=>visibleTitle('随行验证 · 周期自动更新'),'20 秒周期未自动取得内容',25000);assert.equal(commands.length,2);

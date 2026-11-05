@@ -5,6 +5,8 @@ const { verifyTestOffline } = require('./offline-verification.cjs');
 const { verifyTestViews } = require('./view-verification.cjs');
 const {VIEW_SCENARIO_COMMANDS,VIEW_SCENARIO_WRITES,runViewScenario}=require('./view-scenario.cjs');
 const {originalDateRepair}=require('./original-date-repair.cjs');
+const {verifyTestAutoRead}=require('./auto-read-verification.cjs');
+const {AUTO_UPDATE_COMMANDS,createAutoUpdateScenario}=require('./auto-update-scenario.cjs');
 const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList, deleteTestList, selectTestListClient, editTestListAppearance, editTestSubtask } = require('./verification-ui.cjs');
 
 const TEST_PREFIX = '随行验证';
@@ -455,6 +457,7 @@ function summarize(result) {
 
 /** 仅开发验证时通过父进程标准输入收取固定命令，不监听网络端口，也不返回个人数据。 */
 function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, environment }) {
+  const autoUpdateScenario=createAutoUpdateScenario();
   const input = readline.createInterface({ input: process.stdin, terminal: false });
   const commandFile = path.join(directory, 'verification-command.json');
   const resultFile = path.join(directory, 'verification-result.json');
@@ -464,7 +467,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (!VIEW_SCENARIO_COMMANDS.has(command) && !DATE_TEST_COMMANDS.has(command) && !['repair-original-test-date','read-original-test-repair-state','verify-test-date-views','verify-test-offline','verify-test-public-unavailable','create-date-roundtrip-test-item','read-date-roundtrip-test-item','set-date-roundtrip-test-time','clear-date-roundtrip-test-time','delete-date-roundtrip-test-item','create-subtask-test-parent','create-subtask-test-child','read-subtask-test-state','cancel-subtask-test-indent','indent-subtask-test-item','outdent-subtask-test-item','delete-subtask-test-child','delete-subtask-test-parent','select-appearance-test-list','create-appearance-test-list','read-appearance-test-style','cancel-appearance-test-edit','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list','read-test-list-appearance','read-test-lists','select-test-list-in-client','cancel-management-list-delete','delete-management-test-list','inspect-management-list-delete','select-management-test-list','cancel-management-list-create','create-management-test-list','rename-management-test-list','restore-management-test-list','inspect-new-test-list','create-delete-test-item','cancel-delete-test-item','delete-test-item','inspect-sync-delete','open-sync-priority','inspect-sync-priority','cancel-sync-priority','reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date','cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
+    if (command!=='verify-test-auto-read' && !AUTO_UPDATE_COMMANDS.has(command) && !VIEW_SCENARIO_COMMANDS.has(command) && !DATE_TEST_COMMANDS.has(command) && !['repair-original-test-date','read-original-test-repair-state','verify-test-date-views','verify-test-offline','verify-test-public-unavailable','create-date-roundtrip-test-item','read-date-roundtrip-test-item','set-date-roundtrip-test-time','clear-date-roundtrip-test-time','delete-date-roundtrip-test-item','create-subtask-test-parent','create-subtask-test-child','read-subtask-test-state','cancel-subtask-test-indent','indent-subtask-test-item','outdent-subtask-test-item','delete-subtask-test-child','delete-subtask-test-parent','select-appearance-test-list','create-appearance-test-list','read-appearance-test-style','cancel-appearance-test-edit','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list','read-test-list-appearance','read-test-lists','select-test-list-in-client','cancel-management-list-delete','delete-management-test-list','inspect-management-list-delete','select-management-test-list','cancel-management-list-create','create-management-test-list','rename-management-test-list','restore-management-test-list','inspect-new-test-list','create-delete-test-item','cancel-delete-test-item','delete-test-item','inspect-sync-delete','open-sync-priority','inspect-sync-priority','cancel-sync-priority','reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date','cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
     if (command === 'quit') { quit(); return; }
     if (busy) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));
@@ -473,8 +476,12 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
     busy = true;
     try {
       let result;
-      if (command === 'environment') {
-        result={ok:true,packaged:environment?.packaged===true,profileKind:['system-default','project-local'].includes(environment?.profileKind)?environment.profileKind:'unknown',appVersion:/^\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?$/.test(environment?.appVersion || '')?environment.appVersion:undefined,adapterVersion:controller.adapterVersion?.(),verificationVersion:'installer-1'};
+      if(AUTO_UPDATE_COMMANDS.has(command)) {
+        result=await autoUpdateScenario.run(controller,ui,command,{sendSnapshot});
+      } else if (command === 'verify-test-auto-read') {
+        result=await verifyTestAutoRead(controller,ui,{sendSnapshot});
+      } else if (command === 'environment') {
+        result={ok:true,packaged:environment?.packaged===true,profileKind:['system-default','project-local'].includes(environment?.profileKind)?environment.profileKind:'unknown',appVersion:/^\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?$/.test(environment?.appVersion || '')?environment.appVersion:undefined,adapterVersion:controller.adapterVersion?.(),verificationVersion:'auto-read-1'};
       } else if (command === 'open-sign-in') {
         result = await controller.openSignIn();
       } else if (command === 'reload') {

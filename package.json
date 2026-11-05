@@ -1,6 +1,6 @@
 {
   "name": "reminders-suixing",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "提醒事项·随行：基于 uni-app 的 iCloud 提醒事项跨端客户端最小验证",
   "license": "MIT",

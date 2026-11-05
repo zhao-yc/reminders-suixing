@@ -22,6 +22,7 @@ function createController(options = {}) {
   let closing = false;
   let writeSequence = 0;
   let lastWriteOutcome = null;
+  let automaticReadSequence=0,lastAutomaticReadOutcome=null;
   let lastReconnectOutcome = null;
   let reconnectSequence = 0;
   let connectionCache=null,connectionFailures=0,connectionSuspended=false;
@@ -144,10 +145,16 @@ function createController(options = {}) {
     if (!validCommand(command)) return { ok: false, code: 'INVALID_COMMAND', message: '不支持的操作参数。' };
     if (busy) return { ok: false, code: 'BUSY', message: '上一项操作尚未结束。' };
     busy = true;
+    const automaticSequence=options.diagnostics && command.type==='readList' && command.background===true?++automaticReadSequence:0;
+    if(automaticSequence)lastAutomaticReadOutcome={sequence:automaticSequence,ok:false,code:'IN_FLIGHT'};
     const write = ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList','deleteList','setListAppearance','setSubtask'].includes(command.type);
     const sequence = write && options.diagnostics ? ++writeSequence : 0;
     if (sequence) lastWriteOutcome = summarizeWriteOutcome(command.type, sequence, null, true);
     const finish = result => {
+      if(automaticSequence)lastAutomaticReadOutcome={sequence:automaticSequence,ok:result?.ok===true,
+        code:/^[A-Z_]{1,60}$/.test(result?.code || '')?result.code:'UNKNOWN',
+        samePage:result?.snapshot?.pageId===command.pageId,sameList:result?.snapshot?.activeListId===command.listId,
+        capturedAt:result?.ok && !Number.isNaN(Date.parse(result?.snapshot?.capturedAt))?result.snapshot.capturedAt:undefined};
       if (sequence) {
         const outcome=summarizeWriteOutcome(command.type,sequence,result);
         if (outcome.stage === 'unknown' && lastWriteOutcome?.sequence === sequence) outcome.stage=lastWriteOutcome.stage;
@@ -197,6 +204,7 @@ function createController(options = {}) {
     adapterVersion() {return SOURCE.match(/version:\s*'(\d+\.\d+\.\d+)'/)?.[1] || 'unknown';},
     reconnectSite,
     lastWriteOutcome() { return lastWriteOutcome ? {...lastWriteOutcome} : null; },
+    lastAutomaticReadOutcome() {return lastAutomaticReadOutcome?{...lastAutomaticReadOutcome}:null;},
     async inspectTestEditor() {
       if (!options.diagnostics) return { ok: false, code: 'DIAGNOSTICS_DISABLED' };
       if (!site || site.isDestroyed()) return { ok: false, code: 'PAGE_NOT_READY' };
