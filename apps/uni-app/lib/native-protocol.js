@@ -3,10 +3,10 @@ export const REPLY_PREFIX = 'suixingbridge://reply?payload=';
 export const MAX_PAYLOAD = 110000;
 
 export function isNativeWrite(type) {
-  return type === 'setCompleted' || type === 'setText' || type === 'setFlagged';
+  return type === 'setCompleted' || type === 'setText' || type === 'setFlagged' || type === 'createItem';
 }
 
-export function normalizeCommand(command, { scopedReads = false, itemEdits = false } = {}) {
+export function normalizeCommand(command, { scopedReads = false, itemWrites = false } = {}) {
   if (!command || typeof command !== 'object') return null;
   const { type } = command;
   if (type === 'read' || (scopedReads && type === 'readLists')) return { type };
@@ -14,7 +14,13 @@ export function normalizeCommand(command, { scopedReads = false, itemEdits = fal
   if (!bounded(command.pageId, 150) || !bounded(command.listId, 150)) return null;
   const result = { type, pageId: command.pageId, listId: command.listId };
   if (type === 'selectList' || (scopedReads && type === 'readList')) return result;
-  if (!isNativeWrite(type) || (type !== 'setCompleted' && !itemEdits)) return null;
+  if (!isNativeWrite(type) || (type !== 'setCompleted' && !itemWrites)) return null;
+  if (type === 'createItem') {
+    const { title, requestId } = command;
+    if (!bounded(title, 1000) || !title.trim() || /[\r\n]/.test(title) ||
+        typeof requestId !== 'string' || !/^[a-z0-9-]{1,100}$/.test(requestId)) return null;
+    return { ...result, title, requestId };
+  }
   const { id, fingerprint, expectedCompleted } = command;
   if (!bounded(id, 1024) || !bounded(fingerprint, 16000) || typeof expectedCompleted !== 'boolean') return null;
   const target = { ...result, id, fingerprint, expectedCompleted };

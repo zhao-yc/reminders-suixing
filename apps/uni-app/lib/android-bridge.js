@@ -106,7 +106,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
 
   /** 不重放写入；超时、导航或回执异常后，必须先成功读取当前页面。 */
   async function execute(input, region = 'cn') {
-    const command = normalizeCommand(input, { scopedReads: true, itemEdits: true });
+    const command = normalizeCommand(input, { scopedReads: true, itemWrites: true });
     if (!command) return failure('INVALID_COMMAND', '不支持或不完整的操作。');
     const blocked = unavailable(region, true);
     if (blocked) return blocked;
@@ -130,7 +130,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
   }
 
   return {
-    platform: 'Android', capabilities: { reconnect: true, editText: true, editFlag: true }, execute,
+    platform: 'Android', capabilities: { reconnect: true, editText: true, editFlag: true, openNewItem: true, createItem: true }, execute,
     connectionState() {
       const network = runtime.networkinfo;
       const type = network?.getCurrentType();

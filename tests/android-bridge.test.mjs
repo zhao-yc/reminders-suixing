@@ -102,6 +102,50 @@ test('Android 通过共用适配器保存标题、备注和旗标，每项只保
   assert.equal(view.scripts.length, 4);
 });
 
+test('Android 在当前清单新增同名事项时只触发一次，拒绝重放原请求', async t => {
+  const { bridge, open } = setup(t, { realAdapter: true });
+  const view = await open();
+  assert.equal(bridge.capabilities.openNewItem, true);
+  assert.equal(bridge.capabilities.createItem, true);
+  const { snapshot: before } = await bridge.execute({ type: 'read' });
+  const command = { type: 'createItem', pageId: before.pageId, listId: before.activeListId,
+    requestId: 'create-android-test', title: before.items[0].title };
+  const result = await bridge.execute(command);
+  assert.equal(result.code, 'WEB_STATE_OBSERVED');
+  assert.equal(result.cloudConfirmed, false);
+  const originalIds = new Set(before.items.map(item => item.id));
+  const added = result.snapshot.items.filter(item => !originalIds.has(item.id));
+  assert.equal(added.length, 1);
+  assert.equal(added[0].title, command.title);
+  assert.equal(result.snapshot.items.find(item => item.id === before.items[0].id).fingerprint, before.items[0].fingerprint);
+  await bridge.execute({ type: 'read' });
+  assert.equal((await bridge.execute(command)).code, 'ALREADY_SUBMITTED');
+  assert.equal(view.window.fixtureCreationClicks, 1);
+});
+
+test('Android 未读取或新增参数有误时不派发，新增回执中断后要求核对', async t => {
+  const state = setup(t);
+  const view = await state.open();
+  const command = { type: 'createItem', pageId: snapshot().pageId, listId: snapshot().activeListId,
+    requestId: 'create-android-test', title: '随行验证 · 新增测试' };
+  for (const patch of [{ title: ' ' }, { title: '甲\n乙' }, { requestId: '../test' }, { title: '验'.repeat(1001) }, { listId: '' }]) {
+    assert.equal((await state.bridge.execute({ ...command, ...patch })).code, 'INVALID_COMMAND');
+  }
+  assert.equal((await state.bridge.execute(command)).code, 'READ_REQUIRED');
+  assert.equal(view.scripts.length, 0);
+  await state.read(view);
+  const creating = state.bridge.execute(command);
+  await tick();
+  assert.equal((await state.bridge.reconnectSite()).code, 'BUSY');
+  view.emit('loading');
+  assert.equal((await creating).code, 'UNCERTAIN_WRITE');
+  view.calls.at(-1).resolve(readResult());
+  view.emit('loaded');
+  await tick();
+  assert.equal((await state.bridge.execute(command)).code, 'READ_REQUIRED');
+  assert.equal(view.scripts.length, 2);
+});
+
 test('Android 拒绝不完整的文字和旗标命令，保留待核对前的写入保护', async t => {
   const { bridge, open } = setup(t);
   const view = await open();
@@ -182,14 +226,19 @@ for (const event of ['loading', 'error', 'close']) test(`Android ${event} 中断
 });
 
 test('读写超时后只允许重新读取，旧请求回执不影响新请求', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const state = setup(t, { timeoutMs: 15 });
   const view = await state.open();
-  assert.equal((await state.bridge.execute({ type: 'read' })).code, 'BRIDGE_TIMEOUT');
+  const read = state.bridge.execute({ type: 'read' });
+  await tick();
   const lateRead = view.calls.at(-1);
+  t.mock.timers.tick(15);
+  assert.equal((await read).code, 'BRIDGE_TIMEOUT');
   await state.read(view);
   const write = state.bridge.execute(writeCommand());
   await tick();
   const lateWrite = view.calls.at(-1);
+  t.mock.timers.tick(15);
   assert.equal((await write).code, 'UNCERTAIN_WRITE');
   assert.equal((await state.bridge.execute(writeCommand())).code, 'READ_REQUIRED');
   const reread = state.bridge.execute({ type: 'read' });
