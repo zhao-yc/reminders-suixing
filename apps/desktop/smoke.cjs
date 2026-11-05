@@ -13,8 +13,14 @@ const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, ed
 async function runSmoke({ frontendURL, root }) {
   console.log('正在验证桌面网页桥接和构建界面…');
   const html = fs.readFileSync(path.join(root, 'tests/fixtures/reminders.html'), 'utf8');
+  let delayFirstReminderFrame = false;
   const server = http.createServer((request, response) => {
     response.setHeader('content-type', 'text/html; charset=utf-8');
+    if (request.url === '/frame' && delayFirstReminderFrame) {
+      delayFirstReminderFrame = false;
+      setTimeout(() => response.end(html), 500);
+      return;
+    }
     response.end(request.url === '/gone' ? '<!doctype html><title>合成页面已退出</title>' : request.url === '/agent' ? '<!doctype html><iframe src="http://localhost:' + server.address().port + '/frame"></iframe>' : request.url === '/frame' ? html : '<!doctype html><meta charset="utf-8"><iframe src="/frame"></iframe>');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -36,15 +42,14 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(allowedURL('https://www.icloud.com.cn/reminders/'), true);
     assert.equal(allowedURL('https://icloud.com.evil.example/'), false);
     assert.equal(validCommand({ type: 'setCompleted', completed: 'true' }), false);
+    delayFirstReminderFrame = true;
     controller.openSite('cn');
     controller.window().hide();
-    let first;
-    for (let attempt = 0; attempt < 30; attempt++) {
-      first = await controller.execute({ type: 'read' }, 'cn');
-      if (first.ok) break;
-      await new Promise(resolve => setTimeout(resolve, 150));
-    }
+    const first = await controller.execute({ type: 'read' }, 'cn');
     assert.equal(first.ok, true, first.message);
+    assert.equal(delayFirstReminderFrame,false,'冷启动专项必须实际走延迟 iframe');
+    assert.equal(controller.lastWriteOutcome(),null);
+    console.log('合成官方 iframe 延迟加载时，单次前台读取等待就绪并返回，无写入。');
     const diagnostics = await controller.diagnostics();
     assert.equal(diagnostics.opened, true);
     assert.equal(diagnostics.frames.length, 2);
