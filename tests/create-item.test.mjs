@@ -14,6 +14,56 @@ function setup(t) {
 function creation(snapshot, requestId='create-test-one', title='随行验证 · 新增合成事项') {
   return { type:'createItem', pageId:snapshot.pageId, listId:snapshot.activeListId, requestId, title };
 }
+
+test('已观察的新增保留官方输入焦点时可继续后台只读，不失焦且不扩大到弹层',async t=>{
+  const {execute,window}=setup(t),before=await execute({type:'read'}),created=await execute(creation(before.snapshot));
+  const editor=window.document.activeElement,row=editor.closest('.reminder-item');row.setAttribute('data-edit','true');editor.setAttribute('data-edit','true');
+  const command={type:'readList',pageId:created.snapshot.pageId,listId:created.snapshot.activeListId,background:true};
+  const read=await execute(command);assert.equal(read.code,'READY');assert.equal(window.document.activeElement,editor);assert.equal(window.fixtureEarlyCreationBlurs,0);assert.equal(window.fixtureCreationClicks,1);
+  const panel=window.document.createElement('div');panel.setAttribute('role','dialog');row.append(panel);assert.equal((await execute(command)).code,'AUTO_READ_DEFERRED');panel.remove();assert.equal((await execute(command)).code,'READY');
+});
+
+test('新增字段再次输入或开始输入法合成便撤销后台只读放行',async t=>{
+  for(const event of ['beforeinput','input','compositionstart']) {
+    const {execute,window}=setup(t),before=await execute({type:'read'}),created=await execute(creation(before.snapshot));
+    const editor=window.document.activeElement;editor.dispatchEvent(new window.Event(event,{bubbles:true}));
+    assert.equal((await execute({type:'readList',pageId:created.snapshot.pageId,listId:created.snapshot.activeListId,background:true})).code,'AUTO_READ_DEFERRED',event);assert.equal(window.fixtureEarlyCreationBlurs,0);
+  }
+});
+
+test('仅已确认的同一新增行日期保存可保留原标题的后台只读放行',async t=>{
+  const {execute,window}=setup(t),before=await execute({type:'read'}),created=await execute(creation(before.snapshot));
+  const editor=window.document.activeElement,row=editor.closest('.reminder-item');
+  row.setAttribute('data-edit','true');
+  window.fixtureReturnToTitleAfterSchedule=true;
+  const item=created.snapshot.items.find(candidate=>candidate.id===row.id);
+  const scope={pageId:created.snapshot.pageId,listId:item.listId};
+  const binding={...scope,id:item.id,fingerprint:item.fingerprint,expectedCompleted:false};
+  const schedule=await execute({type:'getSchedule',...binding});
+  const value={date:'2030-01-15',time:'14:35',timeZone:schedule.editorTimeZone};
+  const saved=await execute({type:'setSchedule',...binding,expectedSchedule:schedule.schedule,
+    expectedScheduleFingerprint:schedule.scheduleFingerprint,value});
+  assert.equal(saved.code,'WEB_STATE_OBSERVED');
+  assert.equal(window.document.activeElement,editor);
+  const background={type:'readList',...scope,background:true};
+  assert.equal((await execute(background)).code,'READY');
+  assert.equal(window.fixtureScheduleSaveClicks,1);
+  assert.equal(window.fixtureEarlyCreationBlurs,0);
+  const stale=await execute({type:'setSchedule',...binding,expectedSchedule:schedule.schedule,
+    expectedScheduleFingerprint:schedule.scheduleFingerprint,value});
+  assert.equal(stale.code,'STALE_VIEW');
+  const paused=await execute(background);
+  assert.equal(paused.code,'AUTO_READ_DEFERRED');
+  assert.equal(paused.reason,'focused-field');
+  assert.equal(window.fixtureScheduleSaveClicks,1);
+});
+
+test('新增字段不匹配及连接失效后不借用旧放行',async t=>{
+  const {execute,window}=setup(t),before=await execute({type:'read'}),created=await execute(creation(before.snapshot));
+  const editor=window.document.activeElement,command={type:'readList',pageId:created.snapshot.pageId,listId:created.snapshot.activeListId,background:true};
+  editor.textContent='随行验证 · 外部变化';assert.equal((await execute(command)).code,'AUTO_READ_DEFERRED');editor.textContent='随行验证 · 新增合成事项';
+  window.__suixingAdapter.invalidateConnection();const fresh=await execute({type:'read'});assert.equal((await execute({...command,pageId:fresh.snapshot.pageId,listId:fresh.snapshot.activeListId})).code,'AUTO_READ_DEFERRED');
+});
 test('新增只激活一次并填写本次空事项，同名旧事项保持不变且不能重放请求', async t => {
   const {execute,window}=setup(t);
   const {snapshot}=await execute({type:'read'});

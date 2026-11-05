@@ -55,6 +55,17 @@ if (!document.execCommand) document.execCommand = function (command, _ui, value)
   document.activeElement.dispatchEvent(new InputEvent('input', { bubbles: true, data: value, inputType: 'insertText' }));
   return true;
 };
+function syncFixtureDate(row) {
+  const schedule=JSON.parse(sessionStorage.getItem('fixture-schedule-'+row.id) || '{"date":null,"time":null,"timeZone":null}');
+  let due=null;
+  if (schedule.date) {const civil=schedule.date.split('-').map(Number),clock=(schedule.time || '00:00').split(':').map(Number);const local=new Date(0);local.setFullYear(civil[0],civil[1]-1,civil[2]);local.setHours(clock[0],clock[1],0,0);due=local.getTime();}
+  const record={pk:row.id.slice('reminder-item-'.length),DueDate:due,AllDay:!!schedule.date && schedule.time===null,TimeZone:schedule.date?schedule.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone:null};
+  // 模拟官方 DOM 行的直接子组件绑定。
+  Object.defineProperty(row,'__reactProps$fixture',{value:{children:{props:{item:record}}},configurable:true,writable:true});
+  row.querySelector('.due-date')?.remove();
+  if (schedule.date) {const element=document.createElement('span');element.className='due-date';element.textContent=record.AllDay?new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'numeric',day:'numeric',timeZone:'UTC'}).format(new Date(due)):schedule.date+' '+schedule.time;row.querySelector('.metadata').append(element);}
+  if (window.fixtureScheduleOmitLoadedDate) {delete record.DueDate;delete record.TimeZone;}
+}
 function renderFixture(list) {
   const complete = sessionStorage.getItem('fixture-complete') === 'true';
   const titles = (list === 'two' ? ['随行验证 · 第二个同名清单'] : list==='one'?['随行验证 · 同名事项', '随行验证 · 同名事项']:[]).map((title,index)=>({title,id:'reminder-item-fixture-' + list + '-' + index}));
@@ -70,14 +81,7 @@ function renderFixture(list) {
   if (window.fixtureHideCompleted) document.querySelectorAll('.mark-completed[data-completed="true"]').forEach(button => button.closest('.reminder-item').remove());
   document.querySelectorAll('.reminder-item').forEach(row => {
     if (sessionStorage.getItem('fixture-flag-'+row.id)==='true') row.querySelector('.flag-container').innerHTML='<div class="flag" aria-label="合成旗标"></div>';
-    const schedule=JSON.parse(sessionStorage.getItem('fixture-schedule-'+row.id) || '{"date":null,"time":null,"timeZone":null}');
-    let due=null;
-    if (schedule.date) {const civil=schedule.date.split('-').map(Number),clock=(schedule.time || '00:00').split(':').map(Number);const local=new Date(0);local.setFullYear(civil[0],civil[1]-1,civil[2]);local.setHours(clock[0],clock[1],0,0);due=local.getTime();}
-    const record={pk:row.id.slice('reminder-item-'.length),DueDate:due,AllDay:!!schedule.date && schedule.time===null,TimeZone:schedule.date?schedule.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone:null};
-    // 模拟官方 DOM 行的直接子组件绑定；不模拟或访问任何账户根状态。
-    Object.defineProperty(row,'__reactProps$fixture',{value:{children:{props:{item:record}}},configurable:true,writable:true});
-    if (schedule.date) {const element=document.createElement('span');element.className='due-date';element.textContent=record.AllDay?new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'numeric',day:'numeric',timeZone:'UTC'}).format(new Date(due)):schedule.date+' '+schedule.time;row.querySelector('.metadata').append(element);}
-    if (window.fixtureScheduleOmitLoadedDate) {delete record.DueDate;delete record.TimeZone;}
+    syncFixtureDate(row);
     row.querySelector('.info').addEventListener('click',()=>openFixtureSchedule(row));
   });
   applyFixtureHierarchy();
@@ -136,7 +140,10 @@ function openFixtureSchedule(row) {
   flagButton.addEventListener('click',()=>{window.fixtureFlagToggleClicks++;if(window.fixtureFlagRejectToggle)return;flagged=!flagged;flagButton.setAttribute('aria-pressed',String(flagged));});
   popup.querySelector('.content-title [role="textbox"]').textContent=row.querySelector('.title [role="textbox"]').textContent;
   const dateSwitch=popup.querySelector('#atDate');
-  function close() {popup.remove();opener.setAttribute('data-edit-open','false');}
+  function close() {
+    popup.remove();opener.setAttribute('data-edit-open','false');
+    if (window.fixtureReturnToTitleAfterSchedule) row.querySelector('.title [role="textbox"]').focus();
+  }
   function daysInMonth(year,month) {return [31,year%4===0 && (year%100!==0 || year%400===0)?29:28,31,30,31,30,31,31,30,31,30,31][month-1];}
   function renderFields() {
     dateSwitch.setAttribute('aria-checked',String(state.date!==null));
@@ -183,7 +190,9 @@ function openFixtureSchedule(row) {
     window.fixtureScheduleSaveClicks++;if (window.fixtureScheduleDisableSave) return;
     if (JSON.stringify(state)!==initialSchedule) {sessionStorage.setItem(key,JSON.stringify(state));window.fixtureScheduleSaves++;}
     if (flagged!==initialFlag) {sessionStorage.setItem('fixture-flag-'+row.id,String(flagged));window.fixtureFlagSaves++;}
-    close();renderFixture(document.querySelector('[role="treeitem"][aria-selected="true"]').dataset.list);
+    close();
+    if (window.fixtureReturnToTitleAfterSchedule) syncFixtureDate(row);
+    else renderFixture(document.querySelector('[role="treeitem"][aria-selected="true"]').dataset.list);
   });
   renderFields();document.body.append(popup);
 }

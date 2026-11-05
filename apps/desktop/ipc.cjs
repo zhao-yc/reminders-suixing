@@ -1,11 +1,15 @@
 /** 正式客户端与合成验收共用同一 IPC 入口，仅信任本地主窗口的主框架和固定区域。 */
-function installDesktopIPC({ipcMain, controller, getMainWindow}) {
+function installDesktopIPC({ipcMain, controller, getMainWindow, notifications}) {
   const handlers = [
-    ['suixing:execute', args=>controller.execute(args.command,args.region)],
+    ['suixing:execute', async args=>{await notifications?.waitForRead?.();return controller.execute(args.command,args.region);}],
     ['suixing:open-site', args=>controller.openSite(args.region)],
     ['suixing:reload-site', args=>controller.reloadSite(args.region)],
     ['suixing:reconnect-site', args=>controller.reconnectSite(args.region)],
-    ['suixing:connection-state', args=>controller.connectionState(args.region)]
+    ['suixing:connection-state', args=>controller.connectionState(args.region)],
+    ['suixing:notifications-state', ()=>notifications?.state() || {ok:true,supported:false,enabled:false,allDayTime:'09:00',phase:'off'}],
+    ['suixing:notifications-configure', args=>notifications?.configure(args) || {ok:false,code:'NOTIFICATION_UNSUPPORTED'}],
+    ['suixing:notifications-context', args=>notifications?.context(args) || {ok:false,code:'NOTIFICATION_UNSUPPORTED'}],
+    ['suixing:notifications-test', ()=>notifications?.test() || {ok:false,code:'NOTIFICATION_UNSUPPORTED'}]
   ];
   for (const [channel,handler] of handlers) {
     ipcMain.handle(channel,(event,args)=>{

@@ -37,3 +37,60 @@ export function projectLoadedItems(items,options={}) {
   }
   return {items:items.filter(item=>included.has(item.id)),contextIds:new Set([...included].filter(id=>!matches.has(id))),matchCount:matches.size,counts,unknownDates,unknownToday,flaggedCount:base.filter(item=>item.flagged===true).length};
 }
+
+const TODAY_SECTIONS = ['逾期','全天','上午','下午','今晚'];
+const UNKNOWN_ZONE = '时区待核对';
+
+/** 只重排已筛出的行。每组主子事项以首个匹配事项为归组依据，保留原行引用与层级。 */
+export function groupLoadedDateView({items,contextIds},{view,today,tomorrow,timeZone,descending=false}) {
+  const headings = new Map();
+  if (view !== 'today' && view !== 'scheduled') return {items,headings};
+  const zone = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const sections = new Map();
+  let family = [], rootLevel = 1;
+
+  function addFamily() {
+    const matched = family.find(item => !contextIds.has(item.id));
+    if (!matched) return;
+    const {date,time,timeZone:itemZone} = matched.schedule;
+    let key = date;
+    if (view === 'today') {
+      if (date < today) key = '逾期';
+      else if (time === null) key = '全天';
+      else if (time < '12:00') key = '上午';
+      else if (time < '18:00') key = '下午';
+      else key = '今晚';
+    } else if (time !== null && itemZone !== zone) {
+      key = UNKNOWN_ZONE;
+    }
+    if (!sections.has(key)) sections.set(key,[]);
+    sections.get(key).push(...family);
+  }
+
+  for (const item of items) {
+    const level = Number.isInteger(item.level) && item.level > 0 ? item.level : 1;
+    if (!family.length || level <= rootLevel) {
+      addFamily();
+      family = [];
+      rootLevel = level;
+    }
+    family.push(item);
+  }
+  addFamily();
+  const keys = view === 'today' ? TODAY_SECTIONS : [...sections.keys()].filter(key => key !== UNKNOWN_ZONE).sort();
+  if (view === 'scheduled') {
+    if (descending) keys.reverse();
+    keys.push(UNKNOWN_ZONE);
+  }
+  const grouped = [];
+  for (const key of keys) {
+    const section = sections.get(key);
+    if (!section) continue;
+    let label = key;
+    if (view === 'scheduled' && key === today) label = '今天';
+    if (view === 'scheduled' && key === tomorrow) label = '明天';
+    headings.set(section[0].id,label);
+    grouped.push(...section);
+  }
+  return {items:grouped,headings};
+}

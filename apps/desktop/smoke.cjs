@@ -138,14 +138,23 @@ async function runSmoke({ frontendURL, root }) {
     assert.deepEqual(await displayedIds(),originalIds);
     const calendarDay=offset=>{const date=new Date();date.setDate(date.getDate()+offset);return [date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');};
     const viewItem=(id,title,date,extra={})=>({id,title,notes:'',completed:false,flagged:false,priority:'none',level:1,schedule:{date,time:null,timeZone:null},...extra});
-    const viewItems=[viewItem('view-root','随行验证 · 日期父项',null),viewItem('view-child','随行验证 · 日期子项',calendarDay(0),{level:2,flagged:true}),viewItem('view-overdue','随行验证 · 逾期',calendarDay(-1)),viewItem('view-future','随行验证 · 将来',calendarDay(1)),viewItem('view-completed','随行验证 · 完成',calendarDay(0),{completed:true}),viewItem('view-unknown','随行验证 · 日期未知',null,{schedule:null,metadata:'今天（合成文案，不得用于猜测）'})];
+    const timedViewItem=(id,title,time)=>viewItem(id,title,calendarDay(0),{
+      schedule:{date:calendarDay(0),time,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},metadata:time
+    });
+    const viewItems=[viewItem('view-root','随行验证 · 日期父项',null),viewItem('view-child','随行验证 · 日期子项',calendarDay(0),{level:2,flagged:true}),
+      timedViewItem('view-evening','随行验证 · 今晚事项','18:00'),viewItem('view-overdue','随行验证 · 逾期',calendarDay(-1)),
+      timedViewItem('view-morning','随行验证 · 上午事项','09:30'),viewItem('view-future','随行验证 · 将来',calendarDay(1)),
+      timedViewItem('view-afternoon','随行验证 · 下午事项','12:00'),viewItem('view-completed','随行验证 · 完成',calendarDay(0),{completed:true}),
+      viewItem('view-unknown','随行验证 · 日期未知',null,{schedule:null,metadata:'今天（合成文案，不得用于猜测）'})];
     const viewSnapshot={...sorting.snapshot,items:viewItems};
     ui.webContents.send('suixing:snapshot',{region:'cn',result:{ok:true,code:'READY',snapshot:viewSnapshot}});
     await new Promise(resolve=>setTimeout(resolve,80));
     const chooseView=async view=>{await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="'+view+'"]\').click()');await new Promise(resolve=>setTimeout(resolve,80));};
+    const dateHeadings=()=>ui.webContents.executeJavaScript('[...document.querySelectorAll(".date-section-heading[role=heading]")].map(node=>node.textContent.trim())');
     await chooseView('today');
-    assert.deepEqual(await displayedIds(),['view-root','view-child','view-overdue']);
-    assert.deepEqual(await ui.webContents.executeJavaScript('(()=>{const n=document.querySelector(".date-view-description");return [n.dataset.matches,n.dataset.unknown,n.textContent.includes("当前清单已加载")];})()'),['2','1',true]);
+    assert.deepEqual(await displayedIds(),['view-overdue','view-root','view-child','view-morning','view-afternoon','view-evening']);
+    assert.deepEqual(await dateHeadings(),['逾期','全天','上午','下午','今晚']);
+    assert.deepEqual(await ui.webContents.executeJavaScript('(()=>{const n=document.querySelector(".date-view-description");return [n.dataset.matches,n.dataset.unknown,n.textContent.includes("当前清单已加载")];})()'),['5','1',true]);
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(\'[data-record-id="view-root"] .completion-button\').hasAttribute("disabled")'),true);
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(\'[data-record-id="view-root"] .row-actions\')===null'),true);
     const viewWrites=controller.lastWriteOutcome()?.sequence || 0;
@@ -153,7 +162,7 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".inline-editor")===null'),true);
     assert.equal(controller.lastWriteOutcome()?.sequence || 0,viewWrites);
     await ui.webContents.executeJavaScript('document.querySelector(".flag-filter").click()');
-    await new Promise(resolve=>setTimeout(resolve,60));assert.deepEqual(await displayedIds(),['view-root','view-child']);
+    await new Promise(resolve=>setTimeout(resolve,60));assert.deepEqual(await displayedIds(),['view-root','view-child']);assert.deepEqual(await dateHeadings(),['全天']);
     await ui.webContents.executeJavaScript('document.querySelector(".flag-filter").click()');
     ui.show();ui.focus();ui.webContents.focus();
     await ui.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
@@ -165,12 +174,14 @@ async function runSmoke({ frontendURL, root }) {
     await ui.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
     fs.writeFileSync(path.join(root,'.local/date-views-mobile-preview.png'),(await ui.webContents.capturePage()).toPNG());
     ui.setSize(...viewSize);await new Promise(resolve=>setTimeout(resolve,80));
-    await chooseView('scheduled');assert.deepEqual(await displayedIds(),['view-root','view-child','view-overdue','view-future']);
-    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".date-view-description").dataset.matches'),'3');
+    await chooseView('scheduled');assert.deepEqual(await displayedIds(),['view-overdue','view-root','view-child','view-evening','view-morning','view-afternoon','view-future']);
+    assert.deepEqual(await dateHeadings(),[calendarDay(-1),'今天','明天']);
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".date-view-description").dataset.matches'),'6');
     await chooseView('pending');
+    assert.deepEqual(await dateHeadings(),[]);
     ui.webContents.send('suixing:snapshot',{region:'cn',result:sorting});
     await new Promise(resolve=>setTimeout(resolve,80));assert.deepEqual(await displayedIds(),originalIds);
-    console.log('今天包含逾期、计划排除无日期，未知日期单独提示；匹配子项保留只读祖先，旗标组合与原视图恢复通过。');
+    console.log('今天五段、计划日期分组、未知日期、只读祖先、旗标组合与原视图恢复通过。');
     ui.show();ui.focus();ui.webContents.focus();
     await ui.webContents.executeJavaScript('(()=>{const input=document.querySelector(".toolbar-search input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,"随行验证");input.dispatchEvent(new Event("input",{bubbles:true}));input.focus()})()');
     const press=async keyCode=>{

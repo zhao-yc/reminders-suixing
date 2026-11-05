@@ -2,6 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {installDesktopIPC} from '../apps/desktop/ipc.cjs';
 
+test('前台请求等待已经在执行的通知只读请求，随后只提交一次原命令',async()=>{
+  const handlers=new Map(),frame={},contents={mainFrame:frame},calls=[];let release;
+  const wait=new Promise(resolve=>release=resolve),command={type:'setCompleted',id:'synthetic'};
+  const stop=installDesktopIPC({ipcMain:{handle:(k,v)=>handlers.set(k,v),removeHandler:k=>handlers.delete(k)},controller:{execute:c=>calls.push(c)},getMainWindow:()=>({webContents:contents}),notifications:{waitForRead:()=>wait}});
+  const pending=handlers.get('suixing:execute')({sender:contents,senderFrame:frame},{region:'cn',command});await Promise.resolve();assert.equal(calls.length,0);release();await pending;assert.deepEqual(calls,[command]);stop();
+});
+
 test('原生窗口隐藏或最小化时自动读取不触及控制器，手动读取入口保持独立',async()=>{
   const handlers=new Map(),frame={},contents={mainFrame:frame},calls=[];
   let visible=true,minimized=false;

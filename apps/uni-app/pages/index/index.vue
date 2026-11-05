@@ -20,7 +20,7 @@
         <text v-if="list.id === snapshot.activeListId" class="list-count">{{ incompleteCount }}</text>
       </button>
       <button v-if="snapshot && canManageLists" class="add-list-button" role="button" :tabindex="busy || editing || (!live && !canCreateFirstList) ? -1 : 0" :disabled="busy || !!editing || (!live && !canCreateFirstList)" @click="startListEdit('create')">＋ 新建清单</button>
-      <view class="sidebar-footer"><text class="footer-wordmark">随行 · 开源</text><text class="muted small">{{ bridge.platform }} · 最小验证版</text></view>
+      <view class="sidebar-footer"><button v-if="canNotify" class="notifications-settings-button" role="button" :aria-expanded="String(notificationsPanelOpen)" :disabled="busy || !!editing" @click="toggleNotificationPanel">系统通知{{ notificationState.enabled ? ' · 已开启' : '' }}</button><text class="footer-wordmark">随行 · 开源</text><text class="muted small">{{ bridge.platform }} · 最小验证版</text></view>
     </view>
     <view class="workspace">
       <view class="toolbar" :class="{ 'with-tools': !!snapshot }">
@@ -37,10 +37,18 @@
           <button class="primary-button refresh-button" :disabled="busy || (!!editing && !editing.blocked)" @click="refresh">{{ busy && !autoReading ? '处理中…' : '刷新' }}</button>
         </view>
       </view>
+      <view v-if="canNotify && notificationsPanelOpen" class="notification-panel" role="region" aria-label="系统通知设置">
+        <view class="notification-heading"><text>通知与后台运行</text><button class="close-notification-panel" role="button" aria-label="关闭通知设置" @click="notificationsPanelOpen=false">×</button></view>
+        <text>提醒当前清单已加载且日期可确认的事项。开启后，关闭窗口会留在托盘；退出随行后停止提醒。</text>
+        <text>通知正文不显示事项内容。请先刷新并选中清单；编辑或连接待核对时暂停。</text>
+        <view class="notification-time"><text>全天事项提醒时间</text><picker mode="time" :value="notificationTime" :disabled="notificationBusy" @change="notificationTime=$event.detail.value"><view class="notification-time-picker" role="button" aria-label="全天事项提醒时间">{{ notificationTime }}</view></picker><text>跟随系统时区</text></view>
+        <view class="notification-actions"><button class="enable-system-notifications" role="button" :disabled="notificationBusy || !notificationState.supported" @click="setNotifications(!notificationState.enabled)">{{ notificationState.enabled ? '关闭通知与后台运行' : '开启通知并在托盘运行' }}</button><button v-if="notificationState.enabled && notificationTime!==notificationState.allDayTime" class="save-notification-time" role="button" :disabled="notificationBusy" @click="setNotifications(true)">保存全天时间</button><button class="test-system-notification" role="button" :disabled="notificationBusy || !notificationState.supported" @click="testSystemNotification">发送测试通知</button></view>
+        <text class="notification-state" role="status">{{ notificationMessage || notificationStatusText }}</text><text v-if="notificationState.unknownDates">{{ notificationState.unknownDates }} 项日期不可确认，暂不提醒；请在官方页面核对。</text>
+      </view>
       <view v-if="!isDemo && (networkOffline || networkNeedsRead)" class="notice network-notice" :class="{ error: networkOffline }" :data-state="networkOffline ? networkReason : 'read-required'" role="status"><text>{{ networkOffline ? networkReason === 'offline' ? '网络已断开，当前内容仅供查看；联网后请刷新核对。' : '暂时无法连接 iCloud，当前内容仅供查看；连接恢复后请刷新核对。' : '检测到网络可用，请刷新核对后继续编辑。' }}</text></view>
       <view v-if="notice" class="notice" :data-code="noticeCode" :data-reconnect-stage="noticeStage" :class="{ error: noticeError }" role="status"><text>{{ notice }}</text></view>
       <view v-if="editing?.blocked" class="edit-recovery"><text>{{ editing.offline ? '草稿保留在当前窗口；请联网后先刷新核对。' : '请先核对修改结果。' }}</text><button class="end-blocked-edit" role="button" :disabled="busy" @click="endEdit">结束本次编辑</button></view>
-      <view v-if="!snapshot" class="welcome">
+      <view v-if="!snapshot" class="welcome" :class="{'notification-settings-open':notificationsPanelOpen}">
         <view class="welcome-art"><view class="welcome-line"><text>✓</text><view></view></view><view class="welcome-line"><text>○</text><view></view></view><view class="welcome-line"><text>○</text><view></view></view></view>
         <text class="welcome-kicker">熟悉的提醒，新的随行方式</text>
         <view class="welcome-title" role="heading" aria-level="1"><view>每一件小事，</view><view>都值得被记住。</view></view>
@@ -78,7 +86,9 @@
         <scroll-view class="items-scroll" scroll-y>
           <view v-if="editing?.creating" class="reminder-row new-reminder-row"><view class="draft-circle"></view><view class="inline-editor"><text class="editor-label">新提醒事项 · {{ snapshot.activeListTitle }}</text><input v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" placeholder="提醒我…" aria-label="新事项标题" @confirm="confirmEdit" @keydown="editKeydown" /><view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '添加中…' : '添加' }}</button><button :disabled="busy" @click="endEdit">取消</button></view></view></view>
           <view v-if="!visibleItems.length && !editing?.creating" class="empty-list"><text class="empty-circle">✓</text><text>{{ !snapshot.activeListId ? snapshot.emptyAccount ? '还没有清单，先新建一份。' : '请选择一份清单继续。' : search ? '没有找到相关事项' : flagOnly ? '当前已加载内容中没有符合筛选的旗标事项' : tab === 'today' ? '当前已确认日期的已加载事项中，没有今天或逾期待办' : tab === 'scheduled' ? '当前已确认日期的已加载事项中，没有计划待办' : tab === 'completed' ? '这里会显示网页已加载的完成事项' : '这份清单暂时没有待办事项' }}</text><button v-if="canCreateFirstList" class="empty-add" :disabled="busy || !!editing" @click="startListEdit('create')">新建清单</button><button v-else-if="flagOnly" class="empty-add" @click="flagOnly = false">显示全部事项</button><button v-else-if="snapshot.activeListId && canCreate && tab === 'pending' && !search" class="empty-add" :disabled="busy || !!editing || (!live && !isDemo)" @click="startCreate">添加提醒事项</button></view>
-          <view v-for="item in visibleItems" :key="item.id" class="reminder-row" :data-record-id="item.id" :data-priority="item.priority" :data-view-context="String(viewContext.has(item.id))" :class="{ completed: item.completed, 'is-subtask': item.level > 1, 'view-context': viewContext.has(item.id) }">
+          <template v-for="item in visibleItems" :key="item.id">
+          <view v-if="dateView.headings.has(item.id)" class="date-section-heading" role="heading" aria-level="2">{{ dateView.headings.get(item.id) }}</view>
+          <view class="reminder-row" :data-record-id="item.id" :data-priority="item.priority" :data-view-context="String(viewContext.has(item.id))" :class="{ completed: item.completed, 'is-subtask': item.level > 1, 'view-context': viewContext.has(item.id) }">
             <button class="completion-button" :class="{ checked: item.completed }" :disabled="busy || !!editing || (!live && !isDemo) || item.disabled || viewContext.has(item.id)" :aria-label="(viewContext.has(item.id) ? '所属主事项，仅供定位：' : item.completed ? '取消完成：' : '完成：') + item.title" @click="toggle(item)"><text v-if="item.completed">✓</text></button>
             <view class="reminder-copy">
               <view v-if="editing?.id === item.id" class="inline-editor">
@@ -107,6 +117,7 @@
             <view v-if="(canEdit || canEditSchedule || canEditFlag || canDelete || canEditHierarchy) && !editing && !viewContext.has(item.id)" class="row-actions"><button v-if="canEdit" class="edit-title-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑标题" @click="startEdit(item, 'title')">✎</button><button v-if="canEdit" class="edit-notes-button" :disabled="busy || (!live && !isDemo) || item.disabled || item.notesTruncated" aria-label="编辑备注" @click="startEdit(item, 'notes')">≡</button><button v-if="canEditSchedule" class="edit-schedule-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑日期与时间" @click="startScheduleEdit(item)">▦</button><button v-if="canEditFlag" class="flag-toggle-button" role="button" :tabindex="busy || item.disabled || typeof item.flagged !== 'boolean' ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled || typeof item.flagged !== 'boolean'" :aria-pressed="String(item.flagged === true)" :aria-label="item.flagged ? '移除旗标' : '添加旗标'" :class="{ 'flag-active': item.flagged }" @click="toggleFlag(item)">⚑</button><button v-if="canEditHierarchy" class="subtask-item-button" role="button" :tabindex="busy || item.disabled || !item.hierarchyReadable ? -1 : 0" :disabled="busy || !live || item.disabled || !item.hierarchyReadable" :aria-label="item.level > 1 ? '提升为顶层事项' : '设为上一主事项的子事项'" :title="item.level > 1 ? '提升为顶层事项' : '设为上一主事项的子事项'" @click="startSubtask(item)">{{ item.level > 1 ? '⇤' : '⇥' }}</button><button v-if="canDelete" class="delete-item-button" role="button" :tabindex="busy || item.disabled ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="删除事项" title="删除这一条事项" @click="startDelete(item)">⌫</button></view>
             <text v-if="item.level > 1" class="subtask-tag">子事项</text>
           </view>
+          </template>
           <view class="list-bottom-space"></view>
         </scroll-view>
         <view class="list-footer"><text>{{ isDemo ? '此处操作只改变示例数据' : snapshot.coverage }}{{ snapshot.partial ? ' · 尚有内容未加载' : '' }}</text><view class="read-status"><button v-if="canAutoRead && !isDemo" class="auto-read-toggle" role="button" :aria-pressed="String(autoReadEnabled)" :disabled="autoReading" title="窗口可见且没有编辑时，自动更新当前清单；不切换清单，网络恢复后仍需手动刷新。" @click="autoReadEnabled = !autoReadEnabled">{{ autoReading ? '更新中…' : autoReadEnabled ? '自动更新已开启' : '自动更新已暂停' }}</button><text>{{ formattedTime }}</text></view></view>
@@ -125,7 +136,7 @@ import { validSchedule, localDateString } from '../../lib/schedule.js';
 import { SORT_OPTIONS, readSortPreference, saveSortPreference, sortLoadedItems } from '../../lib/list-sort.js';
 import { reconnectLoadedList } from '../../lib/reconnect.js';
 import { listIconURL, appearanceColorLabel } from '../../lib/list-appearance.js';
-import { VIEW_OPTIONS, projectLoadedItems } from '../../lib/list-views.js';
+import { VIEW_OPTIONS, groupLoadedDateView, projectLoadedItems } from '../../lib/list-views.js';
 import { monitorConnection, connectionResult } from '../../lib/connection.js';
 import { monitorLoadedList } from '../../lib/loaded-list-monitor.js';
 // #ifdef APP-HARMONY
@@ -162,6 +173,23 @@ const editing = ref(null);
 const canAutoRead = bridge.capabilities?.loadedListRefresh === true;
 const autoReadEnabled = ref(true);
 const autoReading = ref(false);
+const canNotify=bridge.capabilities?.localNotifications===true;
+const notificationsPanelOpen=ref(false),notificationBusy=ref(false),notificationMessage=ref(''),notificationTime=ref('09:00');
+const notificationState=ref({enabled:false,supported:false,allDayTime:'09:00',phase:'off',unknownDates:0});
+const explicitReadGeneration=ref(0);
+function toggleNotificationPanel(){notificationsPanelOpen.value=!notificationsPanelOpen.value;sidebarOpen.value=false;}
+const notificationStatusText=computed(()=>!notificationState.value.supported?'当前环境暂不能发送系统通知。':!notificationState.value.enabled?'系统通知已关闭。':notificationState.value.code==='READ_REQUIRED'?'通知已暂停，请刷新当前清单核对后继续。':notificationState.value.lastDeliveryUnconfirmed?'此前通知未确认显示，不会自动重发。':notificationState.value.phase==='ready'?'当前清单通知已开启。':notificationState.value.phase==='checking'?'正在核对当前清单。':'通知已开启，等待清单就绪或结束编辑。');
+function receiveNotifications(value){if(!value?.ok)return;const previous=notificationState.value.allDayTime;notificationState.value=value;if(!notificationsPanelOpen.value || notificationTime.value===previous)notificationTime.value=value.allDayTime;}
+async function setNotifications(enabled){
+  if(notificationBusy.value)return;notificationBusy.value=true;notificationMessage.value='';
+  try{const result=await bridge.configureNotifications({enabled,allDayTime:notificationTime.value},region.value);if(result.ok)receiveNotifications(result);else notificationMessage.value='设置未保存，请稍后重试；通知状态保持原状。';}
+  catch{notificationMessage.value='暂时无法设置系统通知。';}finally{notificationBusy.value=false;}
+}
+async function testSystemNotification(){
+  if(notificationBusy.value)return;notificationBusy.value=true;notificationMessage.value='';
+  try{const result=await bridge.testNotification(region.value);notificationMessage.value=result.ok?'系统已接收测试通知；未看到时请检查 Windows 通知或勿扰设置。':'测试通知未确认显示，请检查 Windows 通知设置。';}
+  catch{notificationMessage.value='暂时无法发送测试通知。';}finally{notificationBusy.value=false;}
+}
 const canEdit = computed(() => isDemo.value || bridge.capabilities?.editText === true);
 const canEditSchedule = computed(() => isDemo.value || bridge.capabilities?.editSchedule === true);
 const canEditFlag = computed(() => isDemo.value || bridge.capabilities?.editFlag === true);
@@ -187,9 +215,15 @@ const flagReadable = computed(() => snapshot.value?.items.some(item => typeof it
 const unreadableFlags = computed(() => snapshot.value?.items.some(item => typeof item.flagged !== 'boolean') || false);
 const flaggedCount = computed(() => viewProjection.value.flaggedCount);
 const viewClock=ref(Date.now());
-const viewProjection=computed(()=>projectLoadedItems(sortLoadedItems(snapshot.value?.items || [],sortMode.value),{view:tab.value,flagOnly:flagOnly.value,query:search.value,today:localDateString(new Date(viewClock.value))}));
+const viewDates=computed(()=>{
+  const date=new Date(viewClock.value),today=localDateString(date);
+  date.setDate(date.getDate()+1);
+  return {today,tomorrow:localDateString(date)};
+});
+const viewProjection=computed(()=>projectLoadedItems(sortLoadedItems(snapshot.value?.items || [],sortMode.value),{view:tab.value,flagOnly:flagOnly.value,query:search.value,today:viewDates.value.today}));
 const viewContext=computed(()=>viewProjection.value.contextIds);
-const visibleItems=computed(()=>viewProjection.value.items);
+const dateView=computed(()=>groupLoadedDateView(viewProjection.value,{view:tab.value,...viewDates.value,descending:sortMode.value==='date-descending'}));
+const visibleItems=computed(()=>dateView.value.items);
 function unknownForView(view) {return view==='today'?viewProjection.value.unknownToday:view==='scheduled'?viewProjection.value.unknownDates:0;}
 let viewClockTimer;
 const updateViewClock=()=>{viewClock.value=Date.now();};
@@ -208,7 +242,7 @@ function accept(result,readRecovery=false) {
   noticeCode.value = result.code || '';
   noticeStage.value = ['home','reminders','opening','waiting-navigation','selecting-list','waiting-selected'].includes(result.reconnectStage)?result.reconnectStage:'';
   if (result.ok && result.snapshot) {
-    if(readRecovery){networkOffline.value=false;networkNeedsRead.value=false;}
+    if(readRecovery){networkOffline.value=false;networkNeedsRead.value=false;explicitReadGeneration.value++;}
     snapshot.value = result.snapshot;
     if(result.needsListSelection) listSelectionRequired.value=true;
     live.value = !listSelectionRequired.value && !networkOffline.value && !networkNeedsRead.value;
@@ -614,7 +648,11 @@ function sortOutsidePointer(event) {
 watch([busy,editing], () => { if (busy.value || editing.value) closeSortMenu(); });
 
 function workspaceKeydown(event) {
-  if (event.isComposing || event.keyCode === 229 || !snapshot.value) return;
+  if (event.isComposing || event.keyCode === 229) return;
+  const notificationButton=event.target?.closest?.('.notifications-settings-button,.close-notification-panel,.enable-system-notifications,.save-notification-time,.test-system-notification');
+  if(notificationButton && ['Enter',' '].includes(event.key)){event.preventDefault();if(!event.repeat && !notificationButton.hasAttribute('disabled'))notificationButton.click();return;}
+  if(notificationsPanelOpen.value && event.key==='Escape'){event.preventDefault();notificationsPanelOpen.value=false;nextTick(()=>document.querySelector('.notifications-settings-button')?.focus());return;}
+  if(!snapshot.value)return;
   if (event.target?.closest?.('.desktop-sort') && sortKeydown(event)) return;
   if(editing.value?.field==='list-appearance' && event.target?.closest?.('.appearance-choice') && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key)){
     event.preventDefault();if(busy.value || editing.value.blocked)return;
@@ -659,13 +697,21 @@ function updateConnection(state) {
 let stopConnectionMonitor;
 onMounted(()=>{stopConnectionMonitor=monitorConnection(bridge,()=>region.value,updateConnection);});
 onUnmounted(()=>stopConnectionMonitor?.());
+let stopNotifications;
+onMounted(async()=>{if(!canNotify)return;stopNotifications=bridge.onNotifications?.(receiveNotifications);try{receiveNotifications(await bridge.notificationsState(region.value));}catch{};});
+onUnmounted(()=>stopNotifications?.());
+watch(()=>[region.value,live.value,busy.value,!!editing.value,isDemo.value,networkNeedsRead.value,networkOffline.value,listSelectionRequired.value,snapshot.value?.pageId,snapshot.value?.activeListId,explicitReadGeneration.value,notificationsPanelOpen.value],()=>{
+  if(!canNotify)return;
+  bridge.notificationsContext({region:region.value,ready:live.value && !isDemo.value && !networkNeedsRead.value && !networkOffline.value && !listSelectionRequired.value,
+    busy:busy.value,editing:!!editing.value,pageId:snapshot.value?.pageId || '',listId:snapshot.value?.activeListId || '',readGeneration:explicitReadGeneration.value}).catch(()=>{});
+},{immediate:true});
 // #ifdef H5
 let loadedListMonitor;
 const checkLoadedList=()=>loadedListMonitor?.check();
 onMounted(()=>{
   if(!canAutoRead)return;
   loadedListMonitor=monitorLoadedList({
-    state:()=>({enabled:autoReadEnabled.value,visible:document.visibilityState==='visible',busy:busy.value,editing:!!editing.value || sortMenuOpen.value,
+    state:()=>({enabled:autoReadEnabled.value,visible:document.visibilityState==='visible',busy:busy.value,editing:!!editing.value || sortMenuOpen.value || notificationsPanelOpen.value,
       recovery:networkOffline.value || networkNeedsRead.value || listSelectionRequired.value,live:live.value,demo:isDemo.value,region:region.value,revision:networkRevision,snapshot:snapshot.value}),
     read:(command,currentRegion)=>bridge.execute(command,currentRegion),
     started:()=>{autoReading.value=true;busy.value=true;},
@@ -688,6 +734,12 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 </script>
 
 <style scoped>
+.notifications-settings-button { text-align:left; color:#657c96; font-size:12px; margin-bottom:16px; padding:8px 0; }
+.welcome.notification-settings-open { display:none; }
+.notification-panel { margin:16px 38px 0; border:1px solid #dbe6f2; background:#f7faff; border-radius:12px; padding:16px 20px; display:flex; flex-direction:column; gap:10px; color:#657c96; font-size:12px; flex-shrink:0; max-height:36vh; overflow-y:auto; }
+.notification-heading { display:flex; justify-content:space-between; align-items:center; color:#354e6c; font-size:16px; font-weight:600; }
+.close-notification-panel { color:#657c96; padding:0 8px; font-size:20px; }.notification-time,.notification-actions { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }.notification-time-picker { padding:6px 12px; background:#fff; border:1px solid #dbe6f2; border-radius:6px; color:#354e6c; }.notification-actions button { padding:7px 12px; background:#e8f1fc; border-radius:6px; color:#2874bd; font-size:12px; }.notification-state { color:#526b87; }
+@media (max-width:760px) { .notification-panel { margin:12px 20px 0; padding:12px; font-size:11px; }.notification-heading { font-size:14px; } }
 .read-status { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px 12px; min-width:0; text-align:right; }
 .auto-read-toggle { color:#6d849c; font-size:10px; line-height:1.6; padding:0 3px; flex-shrink:0; }
 .auto-read-toggle:focus-visible { outline:2px solid #1687ff; outline-offset:3px; border-radius:3px; }
@@ -736,4 +788,5 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .reminder-row.is-subtask { margin-left:18px; padding-left:12px; border-left:2px solid #e3eaf4; }.affected-subtasks { max-height:180px; overflow-y:auto; display:flex; flex-direction:column; gap:5px; overflow-wrap:anywhere; }.subtask-item-button:focus-visible,.confirm-subtask:focus-visible,.cancel-subtask:focus-visible { outline:2px solid #1687ff; outline-offset:2px; border-radius:4px; }
 @media (max-width:760px) { .reminder-row { display:grid; grid-template-columns:22px minmax(0,1fr); column-gap:13px; row-gap:10px; }.reminder-row > .completion-button { grid-column:1; grid-row:1; align-self:start; }.reminder-row > .reminder-copy { grid-column:2; grid-row:1; min-width:0; }.reminder-row > .row-actions { grid-column:2; grid-row:2; justify-content:flex-start; opacity:1; flex-wrap:wrap; }.reminder-row > .subtask-tag { grid-column:2; grid-row:3; justify-self:start; }.row-actions button { padding:4px 6px; } }
 .list-controls { flex-wrap:wrap; gap:0 14px; }.tabs { gap:18px; flex-wrap:wrap; min-width:0; }.tabs button { white-space:nowrap; }.view-tab:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }.date-view-description { display:block; flex-shrink:0; color:#78899e; font-size:11px; line-height:1.7; margin:10px 0 0; }.view-context .reminder-title { color:#8795a6; }.view-context { background:#fafcff; }
+.date-section-heading { margin-top:14px; padding:7px 2px 5px; border-bottom:1px solid #e5ebf2; color:#53657b; font-size:13px; font-weight:600; }
 </style>
