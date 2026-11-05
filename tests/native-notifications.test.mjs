@@ -6,9 +6,10 @@ import path from 'node:path';
 import {EventEmitter} from 'node:events';
 import {createNativeNotifications} from '../apps/desktop/native-notifications.cjs';
 
-function setup(t,{supported=true,fail=false,badSettings=false,read}={}) {
+function setup(t,{supported=true,fail=false,badSettings=false,read,preferences}={}) {
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'suixing-notifications-'));
   const settingsPath=badSettings?directory:path.join(directory,'preferences.json');
+  if(preferences)fs.writeFileSync(settingsPath,JSON.stringify(preferences));
   const notes=[],trays=[],calls=[],states=[];let visible=true,focused=0,quit=0,tick,clock=Date.parse('2026-11-05T03:59:00Z');
   class Notification extends EventEmitter {static isSupported(){return supported;}constructor(options){super();this.options=options;notes.push(this);}show(){queueMicrotask(()=>this.emit(fail?'failed':'show',{},'synthetic-private-error'));}close(){this.emit('close');}}
   class Tray extends EventEmitter {constructor(){super();trays.push(this);}setToolTip(value){this.tooltip=value;}setContextMenu(menu){this.menu=menu;}destroy(){this.destroyed=true;}}
@@ -26,6 +27,14 @@ test('公开通知设置拒绝可隐式转为时间的数组或对象，不创�
 test('通知开启创建托盘且只持久化两个设置值，关闭时恢复隐藏窗口并移除托盘',t=>{
   const s=setup(t);assert.equal(s.service.hideOnClose(),false);assert.equal(s.service.configure({enabled:true,allDayTime:'09:30'}).ok,true);assert.equal(s.service.hideOnClose(),true);
   assert.deepEqual(JSON.parse(fs.readFileSync(s.settingsPath)),{enabled:true,allDayTime:'09:30'});s.hide();s.trays[0].menu[1].click();assert.equal(s.service.hideOnClose(),false);assert.equal(s.focused(),1);assert.equal(s.trays[0].destroyed,true);assert.equal(s.calls.length,0);
+});
+
+test('以关闭通知的状态冷启动时保留已保存的全天时间',t=>{
+  const s=setup(t,{preferences:{enabled:false,allDayTime:'07:45'}});
+  assert.equal(s.service.state().enabled,false);
+  assert.equal(s.service.state().allDayTime,'07:45');
+  assert.equal(s.trays.length,0);
+  assert.equal(s.calls.length,0);
 });
 
 test('真实通知端只得到固定文案与数量，点击仅返回应用，不修改提醒事项',async t=>{

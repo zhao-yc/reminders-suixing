@@ -50,7 +50,8 @@ function createNativeNotifications({Notification,Tray,Menu,nativeImage,controlle
     } catch {if(!scheduler.state().enabled)destroyTray(false);return {ok:false,code:'NOTIFICATION_SETTINGS_FAILED'};}
     finally {configuring=false;}
   }
-  if(preferences.enabled && supported) {try{ensureTray();scheduler.configure(preferences);}catch{preferences.enabled=false;}}
+  if(preferences.enabled && supported) {try{ensureTray();}catch{preferences.enabled=false;}}
+  scheduler.configure({...preferences,enabled:preferences.enabled && !!tray});
   return {state:()=>({ok:true,supported,...scheduler.state()}),configure,context:args=>scheduler.updateContext(args),test:()=>show(0,true),waitForRead:async()=>{try{await currentRead;}catch{}},
     hideOnClose:()=>scheduler.state().enabled && !!tray,
     dispose(){disposed=true;scheduler.stop();destroyTray(false);for(const note of active)note.close();active.clear();}};
