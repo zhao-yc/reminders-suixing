@@ -34,7 +34,7 @@
           <picker :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || !!editing" @change="changeRegion"><view class="region-picker">{{ region === 'cn' ? '中国大陆' : '其他地区' }}⌄</view></picker>
           <button class="quiet-button" :disabled="busy || (!!editing && !editing.blocked)" @click="connect">{{ snapshot && !isDemo ? '官方页面' : '登录 iCloud' }}</button>
           <button v-if="snapshot && !isDemo && bridge.capabilities?.reconnect" class="quiet-button reconnect-button" role="button" :tabindex="busy || editing || networkOffline ? -1 : 0" :disabled="busy || !!editing || networkOffline" title="重新打开官方页面并读取清单，复用现有会话" @click="reconnectClient">重新连接</button>
-          <button class="primary-button refresh-button" :disabled="busy || (!!editing && !editing.blocked)" @click="refresh">{{ busy ? '处理中…' : '刷新' }}</button>
+          <button class="primary-button refresh-button" :disabled="busy || (!!editing && !editing.blocked)" @click="refresh">{{ busy && !autoReading ? '处理中…' : '刷新' }}</button>
         </view>
       </view>
       <view v-if="!isDemo && (networkOffline || networkNeedsRead)" class="notice network-notice" :class="{ error: networkOffline }" :data-state="networkOffline ? networkReason : 'read-required'" role="status"><text>{{ networkOffline ? networkReason === 'offline' ? '网络已断开，当前内容仅供查看；联网后请刷新核对。' : '暂时无法连接 iCloud，当前内容仅供查看；连接恢复后请刷新核对。' : '检测到网络可用，请刷新核对后继续编辑。' }}</text></view>
@@ -49,7 +49,7 @@
         <button class="demo-link" :disabled="busy" @click="showDemo">先看看界面示例 →</button>
         <text class="welcome-footnote">登录在 iCloud 官方页面完成</text>
       </view>
-      <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-live="String(live)">
+      <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-captured-at="snapshot.capturedAt" :data-live="String(live)">
         <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title">{{ snapshot.activeListTitle || (snapshot.emptyAccount ? '还没有清单' : '选择清单') }}</text><text v-if="snapshot.activeListId" class="heading-count">{{ incompleteCount }}</text><button v-if="canManageLists && snapshot.activeListId" class="rename-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="重命名清单" title="重命名当前清单" @click="startListEdit('rename')">✎</button><button v-if="canEditListAppearance && snapshot.activeListId" class="list-appearance-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="清单颜色与图标" title="清单颜色与图标" @click="startListAppearance">◉</button><button v-if="canDeleteList && snapshot.activeListId" class="delete-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="删除清单" title="删除当前清单" @click="startListDeletion">⌫</button></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : !snapshot.activeListId ? '清单导航' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
         <view v-if="editing?.field === 'list-delete'" class="inline-editor list-delete-confirmation" role="alertdialog" aria-label="确认删除清单"><text class="delete-title">删除清单“{{ editing.title }}”？</text><text>清单及其中的全部事项都会从 iCloud 和同步设备移除，包括当前尚未加载的内容。</text><text class="muted small">共享清单请在官方页面处理。</text><view class="editor-actions"><button class="confirm-list-delete" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '删除中…' : '确认删除清单' }}</button><button class="cancel-list-delete" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view></view>
         <view v-if="editing?.field === 'list-appearance'" class="inline-editor appearance-editor" role="group" aria-label="清单颜色与图标"><text class="editor-label">{{ editing.title }} · 颜色与图标</text><view class="appearance-colors" role="radiogroup" aria-label="清单颜色"><button v-for="(option,index) in editing.colors" :key="option.key" class="appearance-choice color-choice" :data-key="option.key" role="radio" :aria-checked="String(editing.color === option.key)" :aria-label="appearanceColorLabel(option.color,index)" :title="appearanceColorLabel(option.color,index)" :tabindex="busy || editing.blocked || editing.color !== option.key ? -1 : 0" :disabled="busy || editing.blocked" :style="{background:option.color}" @click="editing.color = option.key"><text v-if="editing.color === option.key">✓</text></button></view><scroll-view class="appearance-icons-scroll" scroll-y><view class="appearance-icons" role="radiogroup" aria-label="清单图标"><button v-for="(option,index) in editing.icons" :key="option.key" class="appearance-choice icon-choice" :data-key="option.key" :class="{'icon-choice-selected':editing.iconKey === option.key}" role="radio" :aria-checked="String(editing.iconKey === option.key)" :aria-label="'图标 '+(index+1)" :title="'图标 '+(index+1)" :tabindex="busy || editing.blocked || editing.iconKey !== option.key ? -1 : 0" :disabled="busy || editing.blocked" @click="editing.iconKey = option.key"><image class="appearance-glyph" :src="listIconURL(option.icon)" mode="aspectFit" aria-hidden="true" /></button></view></scroll-view><text class="muted small">保存后同步到使用此清单的设备。</text><view class="editor-actions"><button class="save-list-appearance" role="button" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '保存中…' : '保存外观' }}</button><button class="cancel-list-appearance" role="button" :disabled="busy" @click="endEdit">取消</button></view></view>
@@ -109,7 +109,7 @@
           </view>
           <view class="list-bottom-space"></view>
         </scroll-view>
-        <view class="list-footer"><text>{{ isDemo ? '此处操作只改变示例数据' : snapshot.coverage }}{{ snapshot.partial ? ' · 尚有内容未加载' : '' }}</text><text>{{ formattedTime }}</text></view>
+        <view class="list-footer"><text>{{ isDemo ? '此处操作只改变示例数据' : snapshot.coverage }}{{ snapshot.partial ? ' · 尚有内容未加载' : '' }}</text><view class="read-status"><button v-if="canAutoRead && !isDemo" class="auto-read-toggle" role="button" :aria-pressed="String(autoReadEnabled)" :disabled="autoReading" title="窗口可见且没有编辑时，自动更新当前清单；不切换清单，网络恢复后仍需手动刷新。" @click="autoReadEnabled = !autoReadEnabled">{{ autoReading ? '更新中…' : autoReadEnabled ? '自动更新已开启' : '自动更新已暂停' }}</button><text>{{ formattedTime }}</text></view></view>
       </view>
     </view>
   </view>
@@ -127,6 +127,7 @@ import { reconnectLoadedList } from '../../lib/reconnect.js';
 import { listIconURL, appearanceColorLabel } from '../../lib/list-appearance.js';
 import { VIEW_OPTIONS, projectLoadedItems } from '../../lib/list-views.js';
 import { monitorConnection, connectionResult } from '../../lib/connection.js';
+import { monitorLoadedList } from '../../lib/loaded-list-monitor.js';
 // #ifdef APP-HARMONY
 import HarmonyICloudHost from '../../components/HarmonyICloudHost.vue';
 import { onBackPress } from '@dcloudio/uni-app';
@@ -158,6 +159,9 @@ const networkReason = ref('offline');
 const networkNeedsRead = ref(false);
 let networkRevision = 0;
 const editing = ref(null);
+const canAutoRead = bridge.capabilities?.loadedListRefresh === true;
+const autoReadEnabled = ref(true);
+const autoReading = ref(false);
 const canEdit = computed(() => isDemo.value || bridge.capabilities?.editText === true);
 const canEditSchedule = computed(() => isDemo.value || bridge.capabilities?.editSchedule === true);
 const canEditFlag = computed(() => isDemo.value || bridge.capabilities?.editFlag === true);
@@ -618,7 +622,7 @@ function workspaceKeydown(event) {
     const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(['ArrowLeft','ArrowUp'].includes(event.key)?-1:1)+buttons.length)%buttons.length;
     buttons[next].click();nextTick(()=>buttons[next].focus());return;
   }
-  const actionButton=event.target?.closest?.('.view-tab,.flag-toggle-button,.flag-filter,.reconnect-button,.delete-item-button,.confirm-delete,.cancel-delete,.add-list-button,.rename-list-button,.save-list-edit,.cancel-list-edit,.delete-list-button,.confirm-list-delete,.cancel-list-delete,.list-appearance-button,.appearance-choice,.save-list-appearance,.cancel-list-appearance,.subtask-item-button,.confirm-subtask,.cancel-subtask');
+  const actionButton=event.target?.closest?.('.view-tab,.flag-toggle-button,.flag-filter,.reconnect-button,.auto-read-toggle,.delete-item-button,.confirm-delete,.cancel-delete,.add-list-button,.rename-list-button,.save-list-edit,.cancel-list-edit,.delete-list-button,.confirm-list-delete,.cancel-list-delete,.list-appearance-button,.appearance-choice,.save-list-appearance,.cancel-list-appearance,.subtask-item-button,.confirm-subtask,.cancel-subtask');
   if (actionButton && ['Enter',' '].includes(event.key)) {
     event.preventDefault();
     if (!event.repeat && !actionButton.hasAttribute('disabled')) actionButton.click();
@@ -656,6 +660,23 @@ let stopConnectionMonitor;
 onMounted(()=>{stopConnectionMonitor=monitorConnection(bridge,()=>region.value,updateConnection);});
 onUnmounted(()=>stopConnectionMonitor?.());
 // #ifdef H5
+let loadedListMonitor;
+const checkLoadedList=()=>loadedListMonitor?.check();
+onMounted(()=>{
+  if(!canAutoRead)return;
+  loadedListMonitor=monitorLoadedList({
+    state:()=>({enabled:autoReadEnabled.value,visible:document.visibilityState==='visible',busy:busy.value,editing:!!editing.value || sortMenuOpen.value,
+      recovery:networkOffline.value || networkNeedsRead.value || listSelectionRequired.value,live:live.value,demo:isDemo.value,region:region.value,revision:networkRevision,snapshot:snapshot.value}),
+    read:(command,currentRegion)=>bridge.execute(command,currentRegion),
+    started:()=>{autoReading.value=true;busy.value=true;},
+    finished:()=>{autoReading.value=false;busy.value=false;},
+    // 自动读取只更新内容；不抹去仍待核对的保存提示，也不自动解除断网恢复保护。
+    received:result=>{snapshot.value=result.snapshot;},
+    failed:result=>accept(result)
+  });
+  window.addEventListener('focus',checkLoadedList);document.addEventListener('visibilitychange',checkLoadedList);
+});
+onUnmounted(()=>{loadedListMonitor?.stop();window.removeEventListener('focus',checkLoadedList);document.removeEventListener('visibilitychange',checkLoadedList);});
 const networkLost=()=>updateConnection('offline'),networkAvailable=()=>updateConnection('available');
 onMounted(()=>{window.addEventListener('offline',networkLost);window.addEventListener('online',networkAvailable);if(window.navigator.onLine===false)networkLost();});
 onUnmounted(()=>{window.removeEventListener('offline',networkLost);window.removeEventListener('online',networkAvailable);});
@@ -667,6 +688,9 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 </script>
 
 <style scoped>
+.read-status { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px 12px; min-width:0; text-align:right; }
+.auto-read-toggle { color:#6d849c; font-size:10px; line-height:1.6; padding:0 3px; flex-shrink:0; }
+.auto-read-toggle:focus-visible { outline:2px solid #1687ff; outline-offset:3px; border-radius:3px; }
 .app-shell { display:flex; height:100vh; height:100dvh; min-height:500px; background:#fff; }
 .sidebar { width:272px; flex-shrink:0; display:flex; flex-direction:column; padding:34px 20px 22px; background:#f5f6f8; border-right:1px solid #e9ecf1; }
 .brand { display:flex; align-items:center; gap:12px; margin-bottom:34px; }

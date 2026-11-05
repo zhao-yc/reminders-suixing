@@ -7,6 +7,26 @@ const source=await fs.readFile(new URL('../apps/uni-app/static/icloud/adapter.js
 const fixture=await fs.readFile(new URL('./fixtures/reminders.html',import.meta.url),'utf8');
 async function setup(t){const dom=new JSDOM(fixture,{url:'https://www.icloud.com.cn/reminders/',runScripts:'dangerously'});t.after(()=>dom.window.close());dom.window.eval(source);return {window:dom.window,execute:command=>dom.window.__suixingAdapter.execute(command)};}
 
+test('自动指定读取在官方编辑或可见弹层期间不查询事项、不失焦或点击',async t=>{
+  const {window,execute}=await setup(t),navigation=await execute({type:'readLists'}),command={type:'readList',pageId:navigation.snapshot.pageId,listId:navigation.snapshot.lists[0].id,background:true};
+  for(const selector of ['[role="dialog"]','[role="alertdialog"]','[role="menu"]','.details-popover','.reminder-list-detail','[data-edit="true"]']) {
+    const blocker=window.document.createElement('div');
+    if(selector.startsWith('[role='))blocker.setAttribute('role',selector.slice(7,-2));else if(selector.startsWith('.'))blocker.className=selector.slice(1);else blocker.setAttribute('data-edit','true');
+    window.document.body.append(blocker);
+    assert.equal((await execute(command)).code,'AUTO_READ_DEFERRED',selector);blocker.hidden=true;assert.equal((await execute(command)).code,'READY');blocker.remove();
+  }
+  const editor=window.document.querySelector('.title [role="textbox"]');editor.setAttribute('tabindex','0');editor.focus();let blurs=0;editor.addEventListener('blur',()=>blurs++);
+  const rows=[...window.document.querySelectorAll('.reminder-item')];rows.forEach(row=>{row.querySelector=()=>assert.fail('自动读取不查询官方草稿');});
+  assert.equal((await execute(command)).code,'AUTO_READ_DEFERRED');assert.equal(window.document.activeElement,editor);assert.equal(blurs,0);assert.equal(window.fixtureClicks,0);
+});
+
+test('后台参数必须为布尔值，自动读取仍先核对页面及官方选区',async t=>{
+  const {window,execute}=await setup(t),navigation=await execute({type:'readLists'}),command={type:'readList',pageId:navigation.snapshot.pageId,listId:navigation.snapshot.lists[0].id,background:true};
+  assert.equal(validCommand(command),true);assert.equal(validCommand({...command,background:'true'}),false);assert.equal((await execute({...command,background:'true'})).code,'INVALID_COMMAND');
+  const blocker=window.document.createElement('div');blocker.setAttribute('role','dialog');window.document.body.append(blocker);
+  assert.equal((await execute({...command,listId:navigation.snapshot.lists[1].id})).code,'STALE_VIEW');assert.equal((await execute({...command,pageId:'old'})).code,'STALE_VIEW');
+});
+
 test('指定读取在官方选中其他清单时不查询任何事项字段',async t=>{
   const {window,execute}=await setup(t),navigation=await execute({type:'readLists'});
   assert.equal(navigation.snapshot.activeListId,null);assert.equal(navigation.snapshot.items.length,0);

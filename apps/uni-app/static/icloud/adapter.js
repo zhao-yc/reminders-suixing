@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.15') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.16') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -149,11 +149,19 @@
   /** 等待指定清单时先核对页面和官方选区，不能读取自动改选的其他事项。 */
   function readSelectedList(command) {
     if(typeof command.pageId!=='string' || !command.pageId || typeof command.listId!=='string' || !command.listId)return result(false,'INVALID_COMMAND','请指定要读取的清单。');
+    if(command.background!==undefined && typeof command.background!=='boolean')return result(false,'INVALID_COMMAND','自动读取参数无效。');
     if(command.pageId!==pageId){lastSnapshot=null;return result(false,'STALE_VIEW','页面已变化，请重新选择清单。');}
     var doc=application();
     if(!doc || isLoading(doc)){lastSnapshot=null;return result(false,'LIST_LOADING','指定清单正在加载，请稍后读取。');}
     var selected=listNodes(doc).filter(function(node){return node.getAttribute('aria-selected')==='true';});
     if(selected.length!==1 || handle(selected[0])!==command.listId){lastSnapshot=null;return result(false,'STALE_VIEW','官方选中的清单已变化，请重新选择。');}
+    // 自动读取不碰官方编辑草稿或弹层，也不通过失焦结束编辑。
+    if(command.background===true) {
+      var focused=doc.activeElement;
+      var editing=focused && focused.closest('[contenteditable="true"],input,textarea');
+      var panels=Array.from(doc.querySelectorAll('.reminder-list-detail,.details-popover,[role="dialog"],[role="alertdialog"],[role="menu"],[data-edit="true"]')).some(visibleControl);
+      if(editing || panels)return result(false,'AUTO_READ_DEFERRED','正在官方页面编辑，自动更新暂缓。');
+    }
     return read();
   }
 
@@ -1353,7 +1361,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.15',
+    version: '0.3.16',
     dispose:function(){root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */

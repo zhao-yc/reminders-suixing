@@ -12,6 +12,9 @@ function installDesktopIPC({ipcMain, controller, getMainWindow}) {
       const window=getMainWindow();
       if (!window || window.isDestroyed?.() || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame ||
           !args || !['cn','global'].includes(args.region)) return {ok:false,code:'INVALID_REQUEST',message:'请求来源或区域无效。'};
+      // 关闭节流的验证窗口可能仍报告网页可见，后台读取须以原生窗口状态兜底。
+      if(channel==='suixing:execute' && args.command?.type==='readList' && args.command.background===true &&
+          (window.isVisible?.()===false || window.isMinimized?.()===true))return {ok:false,code:'AUTO_READ_DEFERRED',reason:'window-hidden'};
       return handler(args);
     });
   }
