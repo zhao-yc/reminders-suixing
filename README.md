@@ -75,7 +75,7 @@ Windows 可构建本用户安装器：
 npm run desktop:installer -- --name windows-installer-test
 ```
 
-使用全新目录名；输出位于 `outputs/<目录名>/reminders-suixing-<版本>-setup-x64.exe`。版本取根 `package.json`，Android manifest 版本独立。当前 0.1.2 候选未签名，仅供测试；安装器不含登录会话，不自动发布更新或启动应用。运行中的随行会阻止安装/升级/卸载，请先处理草稿并正常退出。默认卸载保留应用自身会话目录，官方认证过期仍需登录；真实安装、0.1.0→0.1.1 及本轮 0.1.1→0.1.2 升级均免再次认证。卸载重装证据来自 0.1.1，0.1.2 本轮只验升级与真实读取。
+使用全新目录名。输出位于 `outputs/<目录名>/reminders-suixing-<版本>-setup-x64.exe`。Windows 版本取根 `package.json`，Android manifest 独立。当前 0.1.3 安装包未签名，仅供测试。安装包不含登录会话，安装后由用户自行启动，发布更新走独立流程。运行中的随行会阻止安装、升级或卸载，请先处理草稿并正常退出。默认卸载保留应用自身会话目录，官方认证过期后需再次登录。0.1.3 已在 Windows 虚拟机的非管理员账户中完成升级保护、卸载重装和原 iCloud 会话复用验收。
 
 ```powershell
 # HBuilderX 界面管理的预览和安卓资源构建。
