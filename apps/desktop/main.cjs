@@ -26,6 +26,7 @@ let mainWindow;
 let controller;
 let stopLiveCheck;
 let notifications;
+let observeLiveNotification;
 const primary = smoke || app.requestSingleInstanceLock();
 if (!primary) app.quit();
 app.on('second-instance', () => {
@@ -61,7 +62,10 @@ app.whenReady().then(async () => {
   });
   notifications=createNativeNotifications({Notification,Tray,Menu,nativeImage,controller,window:mainWindow,
     settingsPath:path.join(app.getPath('userData'),'notification-preferences.json'),quit:()=>app.quit(),
-    changed:state=>{if(!mainWindow.isDestroyed())mainWindow.webContents.send('suixing:notifications-state',state);}});
+    changed:state=>{
+      if(!mainWindow.isDestroyed())mainWindow.webContents.send('suixing:notifications-state',state);
+      observeLiveNotification?.(state);
+    }});
   installDesktopIPC({ipcMain,controller,getMainWindow:()=>mainWindow,notifications});
   bindNotificationClose(mainWindow,notifications,()=>quitting);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -71,9 +75,13 @@ app.whenReady().then(async () => {
   console.log('已打开“提醒事项·随行”Windows 验证客户端。');
   if (liveCheck) {
     const { installLiveCheck } = require('./live-check.cjs');
-    stopLiveCheck = installLiveCheck({ controller, ui: mainWindow, directory: path.join(ROOT, '.local'),
+    const {createNotificationLiveCheck} = require('./notification-live-check.cjs');
+    const sendSnapshot = result => mainWindow.webContents.send('suixing:snapshot', { region: 'cn', result });
+    const notificationCheck = createNotificationLiveCheck({controller, ui:mainWindow, notifications, sendSnapshot});
+    observeLiveNotification = notificationCheck.observe;
+    stopLiveCheck = installLiveCheck({ controller, ui: mainWindow, directory: path.join(ROOT, '.local'), notificationCheck,
       environment:{packaged:app.isPackaged,profileKind:app.isPackaged?'system-default':'project-local',appVersion:app.getVersion()},
-      sendSnapshot: result => mainWindow.webContents.send('suixing:snapshot', { region: 'cn', result }), quit: () => app.quit() });
+      sendSnapshot, quit: () => app.quit() });
     console.log('开发验证通道已就绪，命令信箱位于已忽略的 .local 目录。');
   }
   if (process.argv.includes('--open-icloud')) controller.openSite('cn');

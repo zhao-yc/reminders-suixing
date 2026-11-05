@@ -7,6 +7,7 @@ const {VIEW_SCENARIO_COMMANDS,VIEW_SCENARIO_WRITES,runViewScenario}=require('./v
 const {originalDateRepair}=require('./original-date-repair.cjs');
 const {verifyTestAutoRead}=require('./auto-read-verification.cjs');
 const {AUTO_UPDATE_COMMANDS,createAutoUpdateScenario}=require('./auto-update-scenario.cjs');
+const {NOTIFICATION_TEST_COMMANDS,NOTIFICATION_TEST_WRITES}=require('./notification-live-check.cjs');
 const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, editTestSchedule, verifyTestSorting, clickTestFlag, reconnectTestClient, deleteTestItem, editTestList, deleteTestList, selectTestListClient, editTestListAppearance, editTestSubtask } = require('./verification-ui.cjs');
 
 const TEST_PREFIX = '随行验证';
@@ -35,6 +36,7 @@ for (const [name,title,date,time,allDay] of [
 
 /** 固定验收命令的中断分类；新增命令不能把可能已写入的异常降为普通失败。 */
 function isWriteTestCommand(command) {
+  if(NOTIFICATION_TEST_COMMANDS.has(command))return NOTIFICATION_TEST_WRITES.has(command);
   if(command==='clear-test-schedule' || command==='read-original-test-repair-state')return false;
   if(command==='repair-original-test-date')return true;
   if(VIEW_SCENARIO_COMMANDS.has(command))return VIEW_SCENARIO_WRITES.has(command);
@@ -456,7 +458,7 @@ function summarize(result) {
 }
 
 /** 仅开发验证时通过父进程标准输入收取固定命令，不监听网络端口，也不返回个人数据。 */
-function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, environment }) {
+function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, environment, notificationCheck }) {
   const autoUpdateScenario=createAutoUpdateScenario();
   const input = readline.createInterface({ input: process.stdin, terminal: false });
   const commandFile = path.join(directory, 'verification-command.json');
@@ -467,7 +469,7 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
   async function run(line, requestId) {
     if (typeof line !== 'string') return;
     const command = line.trim();
-    if (command!=='verify-test-auto-read' && !AUTO_UPDATE_COMMANDS.has(command) && !VIEW_SCENARIO_COMMANDS.has(command) && !DATE_TEST_COMMANDS.has(command) && !['repair-original-test-date','read-original-test-repair-state','verify-test-date-views','verify-test-offline','verify-test-public-unavailable','create-date-roundtrip-test-item','read-date-roundtrip-test-item','set-date-roundtrip-test-time','clear-date-roundtrip-test-time','delete-date-roundtrip-test-item','create-subtask-test-parent','create-subtask-test-child','read-subtask-test-state','cancel-subtask-test-indent','indent-subtask-test-item','outdent-subtask-test-item','delete-subtask-test-child','delete-subtask-test-parent','select-appearance-test-list','create-appearance-test-list','read-appearance-test-style','cancel-appearance-test-edit','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list','read-test-list-appearance','read-test-lists','select-test-list-in-client','cancel-management-list-delete','delete-management-test-list','inspect-management-list-delete','select-management-test-list','cancel-management-list-create','create-management-test-list','rename-management-test-list','restore-management-test-list','inspect-new-test-list','create-delete-test-item','cancel-delete-test-item','delete-test-item','inspect-sync-delete','open-sync-priority','inspect-sync-priority','cancel-sync-priority','reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date','cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
+    if (command!=='verify-test-auto-read' && !NOTIFICATION_TEST_COMMANDS.has(command) && !AUTO_UPDATE_COMMANDS.has(command) && !VIEW_SCENARIO_COMMANDS.has(command) && !DATE_TEST_COMMANDS.has(command) && !['repair-original-test-date','read-original-test-repair-state','verify-test-date-views','verify-test-offline','verify-test-public-unavailable','create-date-roundtrip-test-item','read-date-roundtrip-test-item','set-date-roundtrip-test-time','clear-date-roundtrip-test-time','delete-date-roundtrip-test-item','create-subtask-test-parent','create-subtask-test-child','read-subtask-test-state','cancel-subtask-test-indent','indent-subtask-test-item','outdent-subtask-test-item','delete-subtask-test-child','delete-subtask-test-parent','select-appearance-test-list','create-appearance-test-list','read-appearance-test-style','cancel-appearance-test-edit','set-appearance-test-style','restore-appearance-test-style','delete-appearance-test-list','read-test-list-appearance','read-test-lists','select-test-list-in-client','cancel-management-list-delete','delete-management-test-list','inspect-management-list-delete','select-management-test-list','cancel-management-list-create','create-management-test-list','rename-management-test-list','restore-management-test-list','inspect-new-test-list','create-delete-test-item','cancel-delete-test-item','delete-test-item','inspect-sync-delete','open-sync-priority','inspect-sync-priority','cancel-sync-priority','reconnect-test-client','create-sync-test-item','flag-sync-test-item','unflag-sync-test-item','show-test-site','hide-test-site','reopen-test-site','flag-created-test-item', 'unflag-created-test-item', 'environment', 'diagnostics', 'verify-test-sorting', 'inspect-test-editor', 'open-test-details', 'inspect-test-details', 'inspect-test-date-binding', 'preview-test-date','cancel-test-details', 'read-test-schedule', 'set-test-date', 'set-test-time', 'clear-test-schedule', 'read', 'open-sign-in', 'select-test-list', 'show-completed', 'complete-test-item', 'uncomplete-test-item', 'edit-test-title', 'restore-test-title', 'edit-test-note', 'clear-test-note', 'create-test-item', 'reload', 'quit'].includes(command)) return;
     if (command === 'quit') { quit(); return; }
     if (busy) {
       if (requestId) fs.writeFileSync(resultFile, JSON.stringify({ requestId, result: { ok: false, code: 'BUSY' } }));
@@ -476,7 +478,9 @@ function installLiveCheck({ controller, sendSnapshot, quit, directory, ui, envir
     busy = true;
     try {
       let result;
-      if(AUTO_UPDATE_COMMANDS.has(command)) {
+      if(NOTIFICATION_TEST_COMMANDS.has(command)) {
+        result=await notificationCheck.run(command);
+      } else if(AUTO_UPDATE_COMMANDS.has(command)) {
         result=await autoUpdateScenario.run(controller,ui,command,{sendSnapshot});
       } else if (command === 'verify-test-auto-read') {
         result=await verifyTestAutoRead(controller,ui,{sendSnapshot});
