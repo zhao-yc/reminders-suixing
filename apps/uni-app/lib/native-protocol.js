@@ -15,7 +15,7 @@ export function normalizeCommand(command, { scopedReads = false, itemWrites = fa
   const bounded = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
   if (!bounded(command.pageId, 150) || !bounded(command.listId, 150)) return null;
   const result = { type, pageId: command.pageId, listId: command.listId };
-  if (type === 'selectList' || (scopedReads && type === 'readList')) return result;
+  if (type === 'selectList' || (scopedReads && (type === 'readList' || type === 'showCompleted'))) return result;
   if ((!isNativeWrite(type) && type !== 'getSchedule') || (type !== 'setCompleted' && !itemWrites)) return null;
   if (type === 'createItem') {
     const { title, requestId } = command;

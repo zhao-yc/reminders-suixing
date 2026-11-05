@@ -211,6 +211,43 @@ test('Android 日期命令校验真实日期和指纹，失去保存回执时要
   assert.equal(view.scripts.length, 2);
 });
 
+test('Android 展开当前清单的已完成事项，重复查看不反转显示或修改事项', async t => {
+  const { bridge, open } = setup(t, { realAdapter: true, timeoutMs: 5000 });
+  const view = await open();
+  assert.equal(bridge.capabilities.showCompleted, true);
+  view.window.sessionStorage.setItem('fixture-complete', 'true');
+  view.window.fixtureHideCompleted = true;
+  view.window.renderFixture('one');
+  const { snapshot: before } = await bridge.execute({ type: 'read' });
+  assert.equal(before.items.length, 1);
+  const command = { type: 'showCompleted', pageId: before.pageId, listId: before.activeListId };
+  const result = await bridge.execute(command);
+  assert.equal(result.code, 'VIEW_REQUESTED');
+  assert.equal(result.snapshot.activeListId, before.activeListId);
+  assert.equal(result.snapshot.items.filter(item => item.completed).length, 1);
+  assert.match(result.snapshot.coverage, /已加载/);
+  const again = await bridge.execute(command);
+  assert.equal(again.snapshot.items.length, 2);
+  assert.equal(view.window.fixtureCompletedActionClicks, 1);
+  assert.equal(view.window.fixtureClicks, 0);
+});
+
+test('Android 已完成视图只接受当前清单的回执，并保留重新读取保护', async t => {
+  const state = setup(t);
+  const view = await state.open();
+  const command = { type: 'showCompleted', pageId: snapshot().pageId, listId: snapshot().activeListId };
+  assert.equal((await state.bridge.execute({ ...command, listId: '' })).code, 'INVALID_COMMAND');
+  assert.equal((await state.bridge.execute(command)).code, 'READ_REQUIRED');
+  assert.equal(view.scripts.length, 0);
+  await state.read(view);
+  const expanded = state.bridge.execute(command);
+  await tick();
+  view.calls.at(-1).resolve({ ...readResult(), snapshot: { ...snapshot(), activeListId: 'other-list' } });
+  assert.equal((await expanded).code, 'STALE_VIEW');
+  assert.equal((await state.bridge.execute(writeCommand())).code, 'READ_REQUIRED');
+  assert.equal(view.scripts.length, 2);
+});
+
 test('Android 拒绝不完整的文字和旗标命令，保留待核对前的写入保护', async t => {
   const { bridge, open } = setup(t);
   const view = await open();

@@ -23,7 +23,8 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
     pending = null;
     clearTimeout(current.timer);
     const { type, pageId, listId } = current.command;
-    if (result.ok && (current.write || type === 'readList' || type === 'selectList' || type === 'getSchedule') &&
+    const scoped = current.write || ['readList', 'selectList', 'getSchedule', 'showCompleted'].includes(type);
+    if (result.ok && scoped &&
         (result.snapshot.pageId !== pageId || result.snapshot.activeListId !== listId)) {
       result = current.write
         ? { ...failure('UNCERTAIN_WRITE', '当前清单已变化，请在官方页面核对修改结果，不要重复提交。'), cloudConfirmed: false }
@@ -114,7 +115,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
     try { view = ensure(region); } catch { return failure('BRIDGE_ERROR', '官方页面暂时无法打开，请稍后重试。'); }
     if (!ready || !official(view)) return failure('PAGE_NOT_READY', '请先打开官方页面，完成登录并等待页面载入。');
     const write = isNativeWrite(command.type);
-    if ((write || command.type === 'getSchedule') && needsRead) return failure('READ_REQUIRED', '请先刷新，核对当前页面后再操作。');
+    if (needsRead && (write || command.type === 'getSchedule' || command.type === 'showCompleted')) return failure('READ_REQUIRED', '请先刷新，核对当前页面后再操作。');
     return new Promise(resolve => {
       const id = Date.now().toString(36) + '-' + (++counter);
       const current = { id, view, resolve, write, command };
@@ -130,7 +131,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
   }
 
   return {
-    platform: 'Android', capabilities: { reconnect: true, editText: true, editFlag: true, editSchedule: true, openNewItem: true, createItem: true }, execute,
+    platform: 'Android', capabilities: { reconnect: true, editText: true, editFlag: true, editSchedule: true, openNewItem: true, createItem: true, showCompleted: true }, execute,
     connectionState() {
       const network = runtime.networkinfo;
       const type = network?.getCurrentType();
