@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
 import {validCommand} from '../apps/desktop/policy.cjs';
+import {projectLoadedItems} from '../apps/uni-app/lib/list-views.js';
 const source=await fs.readFile(new URL('../apps/uni-app/static/icloud/adapter.js',import.meta.url),'utf8');
 const fixture=await fs.readFile(new URL('./fixtures/reminders.html',import.meta.url),'utf8');
 async function setup(t,parents={},extra=false){
@@ -22,6 +23,25 @@ test('子事项预检只打开并取消详情、形成唯一单选，不发送�
   assert.equal(validCommand(request),true);assert.equal(info.code,'SUBTASK_READY');assert.equal(info.dispatched,false);assert.equal(info.subtask.affectedCount,1);
   assert.equal(info.subtask.parentTitle,snapshot.items[0].title);assert.equal(window.fixtureSubtaskKeys || 0,0);assert.equal(window.fixtureScheduleSaveClicks,0);assert.equal(window.fixtureTextInputs,0);
   assert.equal(window.document.querySelectorAll('.reminder-item[aria-selected="true"]').length,1);assert.equal(window.document.activeElement.id,request.id);
+});
+
+test('带过去日期的事项缩进与提升保持日期，日期视图只计子项并带只读主项',async t=>{
+  const {window,execute,snapshot:initial}=await setup(t),date={date:'2024-02-29',time:null,timeZone:null};
+  window.sessionStorage.setItem('fixture-schedule-'+initial.items[1].id,JSON.stringify(date));window.renderFixture('one');
+  const before=(await execute({type:'read'})).snapshot,request=command(before),info=await execute(request),nested=await execute(write(request,info,'synthetic-dated-indent'));
+  assert.equal(nested.code,'WEB_STATE_OBSERVED');assert.equal(JSON.stringify(nested.snapshot.items[1].schedule),JSON.stringify(date));
+  const view=projectLoadedItems(nested.snapshot.items,{view:'today',today:'2026-11-05',timeZone:'Asia/Shanghai'});
+  assert.equal(view.matchCount,1);assert.deepEqual([...view.contextIds],[before.items[0].id]);assert.deepEqual(view.items.map(item=>item.id),before.items.map(item=>item.id));
+  const out=command(nested.snapshot,1,'outdent'),ready=await execute(out),restored=await execute(write(out,ready,'synthetic-dated-outdent'));
+  assert.equal(restored.code,'WEB_STATE_OBSERVED');assert.deepEqual(restored.snapshot.items.map(item=>item.fingerprint),before.items.map(item=>item.fingerprint));
+  assert.equal(window.fixtureSubtaskKeys,2);assert.equal(window.fixtureScheduleSaveClicks,0);assert.equal(window.fixtureTextInputs,0);
+});
+
+test('层级预检以固定阶段区分结构、编辑与选区失败，拒绝时没有派发层级写入',async t=>{
+  const {window,execute,snapshot}=await setup(t),input=window.document.createElement('input');window.document.body.append(input);input.focus();
+  const editing=await execute(command(snapshot));assert.equal(editing.subtaskStage,'active-editor');assert.equal(editing.dispatched,false);
+  input.blur();window.document.querySelector('[role="treegrid"]').setAttribute('aria-rowcount','99');
+  const structure=await execute(command((await execute({type:'read'})).snapshot));assert.equal(structure.subtaskStage,'structure');assert.equal(structure.dispatched,false);assert.equal(window.fixtureSubtaskKeys || 0,0);
 });
 
 test('普通事项缩进和提升各只发送一次官方键，保持记录、字段与顺序',async t=>{

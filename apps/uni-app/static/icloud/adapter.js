@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.13') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.14') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -1285,24 +1285,28 @@
     var context=itemContext(command),scope=context && hierarchyScope(context),focused=context && context.doc.activeElement;
     if(!context)return {error:result(false,'STALE_VIEW','事项已变化，请先刷新。')};
     var plan=scope && subtaskPlan(scope,command.id,command.direction);
-    if(!plan || focused && focused.closest('[contenteditable="true"],input,textarea'))return {error:result(false,'SUBTASK_UNAVAILABLE','请在官方页面调整；当前需要可核对的两级清单（最多 80 条），缩进不能带有子项或跨完成状态。')};
+    function unavailable(stage,message){return {error:result(false,'SUBTASK_UNAVAILABLE',message,{subtaskStage:stage,dispatched:false,cloudConfirmed:false})};}
+    if(!scope)return unavailable('structure','当前清单层级尚不可核对，请在官方页面查看完整清单后重新读取。');
+    if(!plan)return unavailable('plan','当前不能确认缩进或提升的影响；不能带有子项或跨完成状态缩进。');
+    if(focused && focused.closest('[contenteditable="true"],input,textarea'))return unavailable('active-editor','官方页面仍在编辑，请先结束该处编辑再读取核对。');
     for(var item of [context.item,plan.parent]){
       var related=scope.entries.find(function(entry){return entry.item.id===item.id;});
       var details=await openItemDetails({doc:context.doc,row:related.row,item:item});
       if(!details)return {error:result(false,'EDIT_UNAVAILABLE','请先结束官方页面的编辑，再读取。')};
       var recurring=!!details.panel.querySelector('.repeat-info');
-      if(!await cancelItemDetails(details) || recurring){lastSnapshot=null;return {error:result(false,'SUBTASK_UNAVAILABLE','重复事项或其父项请在苹果设备上调整。')};}
+      if(!await cancelItemDetails(details)){lastSnapshot=null;return unavailable('details-cancel','未确认官方详情已经关闭，请先在官方页面核对。');}
+      if(recurring){lastSnapshot=null;return unavailable('recurrence','重复事项或其父项请在苹果设备上调整。');}
       var current=itemContext(command),latest=current && hierarchyScope(current);
       if(!latest || latest.fingerprint!==scope.fingerprint)return {error:result(false,'STALE_VIEW','事项层级已变化，请重新核对。')};
     }
     function single(row){var selected=scope.entries.filter(function(entry){return entry.row.getAttribute('aria-selected')==='true';});return selected.length===1 && selected[0].row===row && context.doc.activeElement===row;}
     function key(row,name){assertConnected();row.dispatchEvent(new context.doc.defaultView.KeyboardEvent('keydown',{key:name,bubbles:true,cancelable:true,ctrlKey:false,metaKey:false,shiftKey:false,altKey:false,repeat:false}));}
     assertConnected();scope.grid.focus();key(scope.grid,'Home');
-    if(!await until(function(){return single(scope.entries[0].row);},900))return {error:result(false,'SUBTASK_UNAVAILABLE','无法核对官方单选，请在官方页面调整。')};
+    if(!await until(function(){return single(scope.entries[0].row);},900))return unavailable('selection-start','无法核对官方单选，请在官方页面调整。');
     var index=scope.entries.findIndex(function(entry){return entry.item.id===command.id;});
     for(var position=1;position<=index;position++){
       key(scope.entries[position-1].row,'ArrowDown');
-      if(!await until(function(){return single(scope.entries[position].row);},900))return {error:result(false,'SUBTASK_UNAVAILABLE','选区已变化，请重新读取。')};
+      if(!await until(function(){return single(scope.entries[position].row);},900))return unavailable('selection-step','选区已变化，请重新读取。');
     }
     var current=itemContext(command),latest=current && hierarchyScope(current);
     return latest && latest.fingerprint===scope.fingerprint && single(context.row)?{context:context,scope:scope,plan:plan,single:function(){return single(context.row);}}:{error:result(false,'STALE_VIEW','事项或选区已变化，请先刷新。')};
@@ -1338,7 +1342,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.13',
+    version: '0.3.14',
     dispose:function(){root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
