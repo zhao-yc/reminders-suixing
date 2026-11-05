@@ -1,6 +1,6 @@
 // #ifdef APP-PLUS
 import { REGIONS, isApplePage } from './origins.js';
-import { REPLY_PREFIX, MAX_PAYLOAD, normalizeCommand, parseNativeReply, nativeCommandScript } from './native-protocol.js';
+import { REPLY_PREFIX, MAX_PAYLOAD, isNativeWrite, normalizeCommand, parseNativeReply, nativeCommandScript } from './native-protocol.js';
 
 const failure = (code, message) => ({ ok: false, code, message });
 
@@ -23,9 +23,11 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
     pending = null;
     clearTimeout(current.timer);
     const { type, pageId, listId } = current.command;
-    if (result.ok && (type === 'readList' || type === 'selectList') &&
+    if (result.ok && (current.write || type === 'readList' || type === 'selectList') &&
         (result.snapshot.pageId !== pageId || result.snapshot.activeListId !== listId)) {
-      result = failure('STALE_VIEW', '当前清单已变化，请重新读取并选择清单。');
+      result = current.write
+        ? { ...failure('UNCERTAIN_WRITE', '当前清单已变化，请在官方页面核对修改结果，不要重复提交。'), cloudConfirmed: false }
+        : failure('STALE_VIEW', '当前清单已变化，请重新读取并选择清单。');
     }
     needsRead = !result.ok || type === 'readLists' || !result.snapshot?.activeListId;
     current.resolve(result);
@@ -104,14 +106,14 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
 
   /** 不重放写入；超时、导航或回执异常后，必须先成功读取当前页面。 */
   async function execute(input, region = 'cn') {
-    const command = normalizeCommand(input, { scopedReads: true });
+    const command = normalizeCommand(input, { scopedReads: true, itemEdits: true });
     if (!command) return failure('INVALID_COMMAND', '不支持或不完整的操作。');
     const blocked = unavailable(region, true);
     if (blocked) return blocked;
     let view;
     try { view = ensure(region); } catch { return failure('BRIDGE_ERROR', '官方页面暂时无法打开，请稍后重试。'); }
     if (!ready || !official(view)) return failure('PAGE_NOT_READY', '请先打开官方页面，完成登录并等待页面载入。');
-    const write = command.type === 'setCompleted';
+    const write = isNativeWrite(command.type);
     if (write && needsRead) return failure('READ_REQUIRED', '请先刷新，核对当前页面后再操作。');
     return new Promise(resolve => {
       const id = Date.now().toString(36) + '-' + (++counter);
@@ -128,7 +130,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
   }
 
   return {
-    platform: 'Android', capabilities: { reconnect: true }, execute,
+    platform: 'Android', capabilities: { reconnect: true, editText: true, editFlag: true }, execute,
     connectionState() {
       const network = runtime.networkinfo;
       const type = network?.getCurrentType();

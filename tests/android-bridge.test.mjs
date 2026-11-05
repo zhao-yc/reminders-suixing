@@ -11,8 +11,9 @@ const fixture = await fs.readFile(new URL('./fixtures/reminders.html', import.me
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const snapshot = () => ({ pageId: 'synthetic-page', activeListId: 'synthetic-list', lists: [], items: [] });
 const readResult = () => ({ ok: true, code: 'READY', snapshot: snapshot() });
-const writeCommand = () => ({ type: 'setCompleted', pageId: 'synthetic-page', listId: 'synthetic-list',
-  id: 'synthetic-item', fingerprint: 'synthetic-fingerprint', expectedCompleted: false, completed: true });
+const targetCommand = { pageId: 'synthetic-page', listId: 'synthetic-list',
+  id: 'synthetic-item', fingerprint: 'synthetic-fingerprint', expectedCompleted: false };
+const writeCommand = () => ({ ...targetCommand, type: 'setCompleted', completed: true });
 
 /** 只替代原生传输；注入脚本确实执行，并通过拦截的 URL 回到同一窗口。 */
 function setup(t, options = {}) {
@@ -72,6 +73,68 @@ test('Android 共享适配器在合成页面经 URL 传输读写，每个完成�
   const allowed = new RegExp(view.policy.match);
   assert.equal(allowed.test('https://idmsa.apple.com/appleauth/'), true);
   for (const url of ['http://www.icloud.com/', 'https://icloud.com.evil.test/', 'https://www.icloud.com:8443/', 'file:///test']) assert.equal(allowed.test(url), false);
+});
+
+test('Android 通过共用适配器保存标题、备注和旗标，每项只保存一次', async t => {
+  const { bridge, open } = setup(t, { realAdapter: true });
+  const view = await open();
+  assert.equal(bridge.capabilities.editText, true);
+  assert.equal(bridge.capabilities.editFlag, true);
+  let { snapshot: current } = await bridge.execute({ type: 'read' });
+  const itemId = current.items[1].id;
+  const originalTitle = current.items[0].title;
+  for (const [field, value] of [['title', '随行验证 · 修改标题'], ['notes', '随行验证 · 备注第一行\n第二行 <b>原文</b>'], ['flagged', true]]) {
+    const item = current.items.find(candidate => candidate.id === itemId);
+    const change = field === 'flagged'
+      ? { type: 'setFlagged', flagged: value, expectedFlagged: item.flagged }
+      : { type: 'setText', field, value };
+    const command = { ...change, pageId: current.pageId, listId: item.listId, id: item.id, fingerprint: item.fingerprint, expectedCompleted: item.completed };
+    const result = await bridge.execute(command);
+    assert.equal(result.code, 'WEB_STATE_OBSERVED');
+    assert.equal(result.cloudConfirmed, false);
+    assert.equal(result.snapshot.items.find(candidate => candidate.id === itemId)[field], value);
+    current = result.snapshot;
+  }
+  assert.equal(current.items[0].title, originalTitle);
+  assert.equal(view.window.fixtureTextSaves, 2);
+  assert.equal(view.window.fixtureFlagSaves, 1);
+  assert.equal(view.window.fixtureClicks, 0);
+  assert.equal(view.scripts.length, 4);
+});
+
+test('Android 拒绝不完整的文字和旗标命令，保留待核对前的写入保护', async t => {
+  const { bridge, open } = setup(t);
+  const view = await open();
+  const note = { ...targetCommand, type: 'setText', field: 'notes', value: '' };
+  const flag = { ...targetCommand, type: 'setFlagged', expectedFlagged: false, flagged: true };
+  for (const command of [{ ...note, field: 'schedule' }, { ...note, value: '验'.repeat(2001) }, { ...note, field: 'title', value: '甲\n乙' }, { ...flag, expectedFlagged: 'false' }]) {
+    assert.equal((await bridge.execute(command)).code, 'INVALID_COMMAND');
+  }
+  for (const command of [note, flag]) assert.equal((await bridge.execute(command)).code, 'READ_REQUIRED');
+  assert.equal(view.scripts.length, 0);
+});
+
+test('Android 文字与旗标的异常、过大或清单错位回执一律要求重新核对', async t => {
+  const state = setup(t);
+  const view = await state.open();
+  const note = { ...targetCommand, type: 'setText', field: 'notes', value: '随行验证' };
+  const flag = { ...targetCommand, type: 'setFlagged', expectedFlagged: false, flagged: true };
+  const attempts = [
+    [note, call => call.reject(new Error('合成页面执行异常'))],
+    [flag, call => call.resolve({ ...readResult(), snapshot: { ...snapshot(), items: [{ title: '验'.repeat(14000) }] } })],
+    [note, call => call.resolve({ ...readResult(), snapshot: { ...snapshot(), activeListId: 'other-list' } })]
+  ];
+  for (const [command, reply] of attempts) {
+    await state.read(view);
+    const write = state.bridge.execute(command);
+    await tick();
+    reply(view.calls.at(-1));
+    const result = await write;
+    assert.equal(result.code, 'UNCERTAIN_WRITE');
+    assert.equal(result.cloudConfirmed, false);
+    assert.equal((await state.bridge.execute(command)).code, 'READ_REQUIRED');
+  }
+  assert.equal(view.scripts.length, 6);
 });
 
 test('写入期间切换区域、重载或另发命令都不关闭当前窗口', async t => {
