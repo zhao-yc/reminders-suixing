@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { projectLoadedItems } from '../apps/uni-app/lib/list-views.js';
+import { groupLoadedDateView, projectLoadedItems } from '../apps/uni-app/lib/list-views.js';
 
 const none={date:null,time:null,timeZone:null};
 const item=(id,date=null,extra={})=>({id,title:id,notes:'',completed:false,level:1,flagged:false,schedule:date?{date,time:null,timeZone:null}:none,...extra});
@@ -63,4 +63,33 @@ test('不支持的时区既不计入今天，也不把格式合法但不可解�
   const invalid=item('未知时区','2030-01-15',{schedule:{date:'2030-01-15',time:'12:00',timeZone:'Unknown/Zone'}});
   const result=projectLoadedItems([invalid],{...options,view:'scheduled'});
   assert.deepEqual(ids(result),[]);assert.equal(result.counts.scheduled,0);assert.equal(result.unknownDates,1);assert.equal(result.unknownToday,1);
+});
+
+test('今天按逾期、全天、上午、下午和今晚显示，日期不同的子事项仍留在原主项下',()=>{
+  const timed=(id,time,extra={})=>item(id,null,{schedule:{date:options.today,time,timeZone:options.timeZone},...extra});
+  const items=Object.freeze([
+    timed('今晚','18:00'),item('全天',options.today),timed('下午','12:00'),
+    item('只读主项'),timed('上午子项','11:59',{level:2}),timed('今晚子项','22:30',{level:2}),
+    item('逾期','2030-01-14'),item('未知',null,{schedule:null})
+  ]);
+  const selection={...options,view:'today'};
+  const projection=projectLoadedItems(items,selection);
+  const display=groupLoadedDateView(projection,selection);
+  assert.deepEqual(ids(display),['逾期','全天','只读主项','上午子项','今晚子项','下午','今晚']);
+  assert.deepEqual([...display.headings],[['逾期','逾期'],['全天','全天'],['只读主项','上午'],['下午','下午'],['今晚','今晚']]);
+  assert.deepEqual([...projection.contextIds],['只读主项']);
+  assert.equal(projection.matchCount,6);
+  assert.equal(display.items[2],items[3]);
+});
+
+test('计划按日期分组，日期倒序保留分组内顺序，旧时区指定时间单列',()=>{
+  const tomorrow='2030-01-16';
+  const items=[item('明天一',tomorrow),item('今天',options.today),item('明天二',tomorrow),
+    item('旧时区',null,{schedule:{date:options.today,time:'23:55',timeZone:'America/New_York'}})];
+  const selection={...options,tomorrow,view:'scheduled'};
+  const projection=projectLoadedItems(items,selection);
+  const forward=groupLoadedDateView(projection,selection);
+  assert.deepEqual(ids(forward),['今天','明天一','明天二','旧时区']);
+  assert.deepEqual([...forward.headings],[['今天','今天'],['明天一','明天'],['旧时区','时区待核对']]);
+  assert.deepEqual(ids(groupLoadedDateView(projection,{...selection,descending:true})),['明天一','明天二','今天','旧时区']);
 });

@@ -9,7 +9,8 @@ const testList = {id:'notification', title:'随行验证 · Windows 通知实测
 test('通知实测的云端写入命令按可能已提交处理', () => {
   for (const action of ['create-notification-test-list', 'create-notification-test-item', 'schedule-notification-test-item',
     'reschedule-notification-test-item', 'delete-notification-test-item', 'delete-notification-test-list']) assert.equal(isWriteTestCommand(action), true);
-  for (const action of ['read-notification-test', 'check-notification-test-readiness', 'check-notification-test-cleanup', 'arm-notification-test',
+  for (const action of ['read-notification-test', 'check-notification-test-readiness', 'check-notification-test-cleanup',
+    'verify-notification-test-date-sections', 'arm-notification-test',
     'poll-notification-test', 'stop-notification-test'])
     assert.equal(isWriteTestCommand(action), false);
 });

@@ -12,7 +12,7 @@ const NOTIFICATION_TEST_WRITES = new Set([
 ]);
 const NOTIFICATION_TEST_COMMANDS = new Set([
   ...NOTIFICATION_TEST_WRITES, 'read-notification-test', 'check-notification-test-readiness', 'check-notification-test-cleanup',
-  'arm-notification-test', 'poll-notification-test', 'stop-notification-test'
+  'verify-notification-test-date-sections', 'arm-notification-test', 'poll-notification-test', 'stop-notification-test'
 ]);
 const pause = () => new Promise(resolve => setTimeout(resolve, 150));
 const success = (code, evidence) => ({ok:true, code, ...evidence});
@@ -36,6 +36,39 @@ async function setTestNotificationPreference(enabled) {
     return true;
   }
   return false;
+}
+
+/** 只切换本地视图。正式网页读回和写入序号由调用方核对。 */
+async function inspectTestDateSections(expected) {
+  const tab = name => document.querySelector('.view-tab[data-status="'+name+'"]');
+  const scope = () => {
+    const list = document.querySelector('.list-content');
+    return list?.dataset.pageId === expected.pageId && list.dataset.listId === expected.listId &&
+      !document.querySelector('.inline-editor,.flag-filter[aria-pressed="true"]') &&
+      !document.querySelector('.toolbar-search input')?.value;
+  };
+  const ready = name => scope() && tab(name) && !tab(name).hasAttribute('disabled');
+  if (!ready('pending') || tab('pending').getAttribute('aria-pressed') !== 'true') return false;
+  async function select(name,label) {
+    if (!ready(name)) return false;
+    tab(name).click();
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 70));
+      if (!scope()) return false;
+      const rows = document.querySelectorAll('.reminder-row[data-record-id]');
+      const headers = document.querySelectorAll('.date-section-heading[role="heading"]');
+      if (tab(name).getAttribute('aria-pressed') === 'true' && rows.length === 1 && rows[0].dataset.recordId === expected.id &&
+          headers.length === (label ? 1 : 0) && (!label || headers[0].textContent.trim() === label)) return true;
+    }
+    return false;
+  }
+  let verified;
+  try {
+    verified = await select('today',expected.todayLabel) && await select('scheduled','今天');
+  } finally {
+    if (!await select('pending',null)) verified = false;
+  }
+  return verified === true;
 }
 
 /** 只在显式验证模式运行。云端写入走本地正式编辑器，每次等回执并定向读取。 */
@@ -137,6 +170,25 @@ function createNotificationLiveCheck({controller, ui, notifications, sendSnapsho
     }
     const item = {...scope, id:target.id, title:TEST_ITEM, completed:false};
     const binding = {...scope, id:target.id, fingerprint:target.fingerprint, expectedCompleted:false};
+    if (command === 'verify-notification-test-date-sections') {
+      const now = new Date();
+      const today = [now.getFullYear(), now.getMonth()+1, now.getDate()].map(value => String(value).padStart(2,'0')).join('-');
+      const date = target.schedule;
+      if (!date?.time || date.date !== today || date.timeZone !== Intl.DateTimeFormat().resolvedOptions().timeZone)
+        return failed('TEST_NOTIFICATION_SCHEDULE_CHANGED');
+      const hour = Number(date.time.slice(0,2));
+      const todayLabel = hour < 12 ? '上午' : hour < 18 ? '下午' : '今晚';
+      const sequence = controller.lastWriteOutcome()?.sequence;
+      sendSnapshot(current);
+      await pause();
+      const observed = await click(inspectTestDateSections,{...scope, id:target.id, todayLabel});
+      const after = await read({type:'readList', ...scope});
+      const same = after.ok && after.snapshot.items.length === 1 && after.snapshot.items[0].fingerprint === target.fingerprint;
+      const noWrites = controller.lastWriteOutcome()?.sequence === sequence;
+      return observed && same && noWrites
+        ? success('TEST_DATE_SECTIONS_OBSERVED',{todayLabel, scheduledLabel:'今天', unchanged:true, noWrites:true})
+        : failed('TEST_DATE_SECTIONS_UNCONFIRMED');
+    }
     if (command === 'check-notification-test-cleanup') {
       const preview = await read({type:'getDeleteInfo', ...binding});
       const failureStages = {
