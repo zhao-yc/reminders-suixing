@@ -3,6 +3,7 @@ import { REGIONS, isApplePage } from './origins.js';
 import { REPLY_PREFIX, MAX_PAYLOAD, isNativeWrite, normalizeCommand, parseNativeReply, nativeCommandScript } from './native-protocol.js';
 
 const failure = (code, message) => ({ ok: false, code, message });
+const deferAutoRead = () => ({ ...failure('AUTO_READ_DEFERRED', '官方页面可见性尚未确认，自动更新暂缓。'), reason: 'window-hidden' });
 
 /** Android 专用容器：远程网页无 5+ 权限，每个回执绑定到创建它的窗口与单次请求。 */
 export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 }) {
@@ -18,6 +19,10 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
     try { return isApplePage(view.getURL()); } catch { return false; }
   }
 
+  function isHidden(view) {
+    try { return view.isVisible() === false; } catch { return false; }
+  }
+
   function settle(current, result) {
     if (pending !== current) return;
     pending = null;
@@ -30,7 +35,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
         ? { ...failure('UNCERTAIN_WRITE', '当前清单已变化，请在官方页面核对修改结果，不要重复提交。'), cloudConfirmed: false }
         : failure('STALE_VIEW', '当前清单已变化，请重新读取并选择清单。');
     }
-    needsRead = !result.ok || type === 'readLists' || !result.snapshot?.activeListId;
+    if (result.code !== 'AUTO_READ_DEFERRED') needsRead = !result.ok || type === 'readLists' || !result.snapshot?.activeListId;
     current.resolve(result);
   }
 
@@ -56,7 +61,8 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
       try {
         const result = parseNativeReply(payload, current.id);
         if (!result) return;
-        settle(current, current.write ? { ...result, cloudConfirmed: false } : result);
+        if (current.command.background && !isHidden(view)) settle(current, deferAutoRead());
+        else settle(current, current.write ? { ...result, cloudConfirmed: false } : result);
       } catch { interrupt('INVALID_REPLY', '页面回执不可读取，请重新读取。'); }
     });
     view.addEventListener('loaded', () => {
@@ -111,11 +117,13 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
     if (!command) return failure('INVALID_COMMAND', '不支持或不完整的操作。');
     const blocked = unavailable(region, true);
     if (blocked) return blocked;
+    if (command.background && (!webview || activeRegion !== region)) return failure('PAGE_NOT_READY', '自动更新需要已打开的官方页面。');
     let view;
     try { view = ensure(region); } catch { return failure('BRIDGE_ERROR', '官方页面暂时无法打开，请稍后重试。'); }
+    if (command.background && !isHidden(view)) return deferAutoRead();
     if (!ready || !official(view)) return failure('PAGE_NOT_READY', '请先打开官方页面，完成登录并等待页面载入。');
     const write = isNativeWrite(command.type);
-    if (needsRead && (write || command.type === 'getSchedule' || command.type === 'showCompleted')) return failure('READ_REQUIRED', '请先刷新，核对当前页面后再操作。');
+    if (needsRead && (write || command.background || command.type === 'getSchedule' || command.type === 'showCompleted')) return failure('READ_REQUIRED', '请先刷新，核对当前页面后再操作。');
     return new Promise(resolve => {
       const id = Date.now().toString(36) + '-' + (++counter);
       const current = { id, view, resolve, write, command };
@@ -131,7 +139,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
   }
 
   return {
-    platform: 'Android', capabilities: { reconnect: true, editText: true, editFlag: true, editSchedule: true, openNewItem: true, createItem: true, showCompleted: true }, execute,
+    platform: 'Android', capabilities: { reconnect: true, editText: true, editFlag: true, editSchedule: true, openNewItem: true, createItem: true, showCompleted: true, loadedListRefresh: true }, execute,
     connectionState() {
       const network = runtime.networkinfo;
       const type = network?.getCurrentType();

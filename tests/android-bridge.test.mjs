@@ -21,7 +21,7 @@ function setup(t, options = {}) {
   const runtime = { networkinfo: options.networkinfo, webview: { create(url, id, styles) {
     const listeners = new Map();
     const view = {
-      id, styles, scripts: [], calls: [], replies: [], loads: [], closed: 0, shown: 0, hidden: 0, reloads: 0,
+      id, styles, scripts: [], calls: [], replies: [], loads: [], closed: 0, shown: 0, hidden: 0, reloads: 0, visible: false,
       emit(event) { for (const listener of listeners.get(event) || []) listener(); },
       addEventListener(event, callback) { listeners.set(event, [...(listeners.get(event) || []), callback]); },
       overrideUrlLoading(policy, callback) {
@@ -31,7 +31,8 @@ function setup(t, options = {}) {
       getURL() { return this.url; },
       loadURL(value) { this.loads.push(value); this.url = value; this.emit('loading'); },
       close() { this.closed++; this.emit('close'); },
-      show() { this.shown++; }, hide() { this.hidden++; },
+      show() { this.shown++; this.visible = true; }, hide() { this.hidden++; this.visible = false; },
+      isVisible() { return this.visible; },
       reload() { this.reloads++; this.emit('loading'); },
       evalJS(script) {
         this.scripts.push(script);
@@ -245,6 +246,57 @@ test('Android 已完成视图只接受当前清单的回执，并保留重新读
   view.calls.at(-1).resolve({ ...readResult(), snapshot: { ...snapshot(), activeListId: 'other-list' } });
   assert.equal((await expanded).code, 'STALE_VIEW');
   assert.equal((await state.bridge.execute(writeCommand())).code, 'READ_REQUIRED');
+  assert.equal(view.scripts.length, 2);
+});
+
+test('Android 自动更新只在官方窗口隐藏且没有官方草稿时读取指定清单', async t => {
+  const { bridge, open } = setup(t, { realAdapter: true, timeoutMs: 5000 });
+  assert.equal(bridge.capabilities.loadedListRefresh, true);
+  const view = await open();
+  const { snapshot: before } = await bridge.execute({ type: 'read' });
+  const command = { type: 'readList', pageId: before.pageId, listId: before.activeListId, background: true };
+  assert.equal((await bridge.execute(command)).code, 'AUTO_READ_DEFERRED');
+  assert.equal(view.scripts.length, 1);
+  view.styles.titleNView.buttons[0].onclick();
+  const draft = view.window.document.createElement('div');
+  draft.setAttribute('role', 'dialog');
+  view.window.document.body.append(draft);
+  const deferred = await bridge.execute(command);
+  assert.equal(deferred.code, 'AUTO_READ_DEFERRED');
+  assert.equal(deferred.reason, 'open-panel');
+  assert.equal(draft.isConnected, true);
+  draft.remove();
+  const result = await bridge.execute(command);
+  assert.equal(result.code, 'READY');
+  assert.equal(result.snapshot.activeListId, before.activeListId);
+  assert.equal(view.window.fixtureClicks, 0);
+  assert.equal(view.loads.length, 1);
+});
+
+test('Android 自动更新不创建窗口，窗口重新可见时舍弃迟到快照', async t => {
+  const state = setup(t);
+  const command = { type: 'readList', pageId: snapshot().pageId, listId: snapshot().activeListId, background: true };
+  assert.equal((await state.bridge.execute(command)).code, 'PAGE_NOT_READY');
+  assert.equal(state.views.length, 0);
+  const view = await state.open();
+  await state.read(view);
+  view.hide();
+  assert.equal((await state.bridge.execute(command, 'global')).code, 'PAGE_NOT_READY');
+  assert.equal((await state.bridge.execute({ ...command, background: 'true' })).code, 'INVALID_COMMAND');
+  const pending = state.bridge.execute(command);
+  await tick();
+  assert.equal(view.calls.at(-1).command.background, true);
+  view.show();
+  view.calls.at(-1).resolve(readResult());
+  const result = await pending;
+  assert.equal(result.code, 'AUTO_READ_DEFERRED');
+  assert.equal(result.snapshot, undefined);
+  assert.equal(state.views.length, 1);
+  assert.equal(view.loads.length, 1);
+  view.hide();
+  view.emit('loading');
+  view.emit('loaded');
+  assert.equal((await state.bridge.execute(command)).code, 'READ_REQUIRED');
   assert.equal(view.scripts.length, 2);
 });
 

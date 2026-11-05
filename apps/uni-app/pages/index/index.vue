@@ -705,14 +705,28 @@ watch(()=>[region.value,live.value,busy.value,!!editing.value,isDemo.value,netwo
   bridge.notificationsContext({region:region.value,ready:live.value && !isDemo.value && !networkNeedsRead.value && !networkOffline.value && !listSelectionRequired.value,
     busy:busy.value,editing:!!editing.value,pageId:snapshot.value?.pageId || '',listId:snapshot.value?.activeListId || '',readGeneration:explicitReadGeneration.value}).catch(()=>{});
 },{immediate:true});
-// #ifdef H5
+// #ifdef H5 || APP-PLUS
 let loadedListMonitor;
+let loadedListVisibilityRevision = 0;
 const checkLoadedList=()=>loadedListMonitor?.check();
+// #ifdef APP-PLUS
+let loadedListForeground = true;
+const showLoadedListApp = () => { loadedListForeground = true; checkLoadedList(); };
+const hideLoadedListApp = () => { loadedListForeground = false; loadedListVisibilityRevision++; };
+// #endif
+function loadedListVisible() {
+  // #ifdef H5
+  return document.visibilityState==='visible';
+  // #endif
+  // #ifdef APP-PLUS
+  return loadedListForeground && !sidebarOpen.value;
+  // #endif
+}
 onMounted(()=>{
   if(!canAutoRead)return;
   loadedListMonitor=monitorLoadedList({
-    state:()=>({enabled:autoReadEnabled.value,visible:document.visibilityState==='visible',busy:busy.value,editing:!!editing.value || sortMenuOpen.value || notificationsPanelOpen.value,
-      recovery:networkOffline.value || networkNeedsRead.value || listSelectionRequired.value,live:live.value,demo:isDemo.value,region:region.value,revision:networkRevision,snapshot:snapshot.value}),
+    state:()=>({enabled:autoReadEnabled.value,visible:loadedListVisible(),busy:busy.value,editing:!!editing.value || sortMenuOpen.value || notificationsPanelOpen.value,
+      recovery:networkOffline.value || networkNeedsRead.value || listSelectionRequired.value,live:live.value,demo:isDemo.value,region:region.value,revision:networkRevision+loadedListVisibilityRevision,snapshot:snapshot.value}),
     read:(command,currentRegion)=>bridge.execute(command,currentRegion),
     started:()=>{autoReading.value=true;busy.value=true;},
     finished:()=>{autoReading.value=false;busy.value=false;},
@@ -720,9 +734,25 @@ onMounted(()=>{
     received:result=>{snapshot.value=result.snapshot;},
     failed:result=>accept(result)
   });
+  // #ifdef H5
   window.addEventListener('focus',checkLoadedList);document.addEventListener('visibilitychange',checkLoadedList);
+  // #endif
+  // #ifdef APP-PLUS
+  uni.onAppShow(showLoadedListApp);uni.onAppHide(hideLoadedListApp);
+  // #endif
 });
-onUnmounted(()=>{loadedListMonitor?.stop();window.removeEventListener('focus',checkLoadedList);document.removeEventListener('visibilitychange',checkLoadedList);});
+onUnmounted(()=>{
+  if(!loadedListMonitor)return;
+  loadedListMonitor.stop();
+  // #ifdef H5
+  window.removeEventListener('focus',checkLoadedList);document.removeEventListener('visibilitychange',checkLoadedList);
+  // #endif
+  // #ifdef APP-PLUS
+  uni.offAppShow(showLoadedListApp);uni.offAppHide(hideLoadedListApp);
+  // #endif
+});
+// #endif
+// #ifdef H5
 const networkLost=()=>updateConnection('offline'),networkAvailable=()=>updateConnection('available');
 onMounted(()=>{window.addEventListener('offline',networkLost);window.addEventListener('online',networkAvailable);if(window.navigator.onLine===false)networkLost();});
 onUnmounted(()=>{window.removeEventListener('offline',networkLost);window.removeEventListener('online',networkAvailable);});
