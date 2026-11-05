@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('suixingDesktop', {
   openSite: region => ipcRenderer.invoke('suixing:open-site', { region }),
   reloadSite: region => ipcRenderer.invoke('suixing:reload-site', { region }),
   reconnectSite: region => ipcRenderer.invoke('suixing:reconnect-site', { region }),
+  connectionState: region => ipcRenderer.invoke('suixing:connection-state', { region }),
   onSnapshot: callback => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('suixing:snapshot', listener);

@@ -6,7 +6,7 @@ test('正式 IPC 仅接受本地主窗口主框架和固定区域，其他来源
   const handlers=new Map();
   const ipcMain={handle:(name,handler)=>handlers.set(name,handler),removeHandler:name=>handlers.delete(name)};
   const frame={};const contents={mainFrame:frame};const window={webContents:contents};const calls=[];
-  const controller={execute:(...args)=>calls.push(['execute',...args]),openSite:(...args)=>calls.push(['openSite',...args]),reloadSite:(...args)=>calls.push(['reloadSite',...args]),reconnectSite:(...args)=>calls.push(['reconnectSite',...args])};
+  const controller={execute:(...args)=>calls.push(['execute',...args]),openSite:(...args)=>calls.push(['openSite',...args]),reloadSite:(...args)=>calls.push(['reloadSite',...args]),reconnectSite:(...args)=>calls.push(['reconnectSite',...args]),connectionState:(...args)=>calls.push(['connectionState',...args])};
   const stop=installDesktopIPC({ipcMain,controller,getMainWindow:()=>window});
   for(const handler of handlers.values()) {
     for(const [event,args] of [
@@ -22,5 +22,7 @@ test('正式 IPC 仅接受本地主窗口主框架和固定区域，其他来源
   assert.deepEqual(calls,[['execute',command,'cn']]);
   await handlers.get('suixing:reconnect-site')({sender:contents,senderFrame:frame},{region:'global'});
   assert.deepEqual(calls[1],['reconnectSite','global']);
+  await handlers.get('suixing:connection-state')({sender:contents,senderFrame:frame},{region:'cn'});
+  assert.deepEqual(calls[2],['connectionState','cn']);
   stop();assert.equal(handlers.size,0);
 });

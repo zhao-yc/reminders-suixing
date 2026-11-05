@@ -458,6 +458,57 @@ async function runSmoke({ frontendURL, root }) {
       if(normalSnapshot.snapshot?.items.some(item=>item.title===normalTitle))break;
     }
     assert.equal(normalSnapshot.snapshot?.items.filter(item=>item.title===normalTitle).length,1);
+    const beforeOffline=normalSnapshot.snapshot;
+    normalUI.webContents.send('suixing:snapshot',{region:'cn',result:normalSnapshot});
+    await new Promise(resolve=>setTimeout(resolve,120));
+    const offlineTarget=normalSnapshot.snapshot.items.find(item=>item.title===normalTitle);
+    await normalController.window().webContents.executeJavaScript('Object.defineProperty(navigator,"onLine",{get:()=>undefined,configurable:true})');
+    try {
+      assert.equal((await normalController.execute({type:'read'},'cn')).code,'PAGE_NOT_READY');
+      const unknownWrite=await normalController.execute({type:'setCompleted',pageId:beforeOffline.pageId,listId:offlineTarget.listId,id:offlineTarget.id,fingerprint:offlineTarget.fingerprint,expectedCompleted:offlineTarget.completed,completed:!offlineTarget.completed},'cn');
+      assert.equal(unknownWrite.code,'CONNECTION_UNAVAILABLE');assert.equal(unknownWrite.dispatched,false);
+      assert.equal((await normalController.reconnectSite('cn')).code,'PAGE_NOT_READY');
+    } finally {await normalController.window().webContents.executeJavaScript('delete navigator.onLine');}
+    await normalUI.webContents.executeJavaScript('([...document.querySelectorAll(".reminder-row")].find(row=>row.dataset.recordId==='+JSON.stringify(offlineTarget.id)+')).querySelector(".edit-title-button").click()');
+    assert.equal(await normalUI.webContents.executeJavaScript('new Promise(resolve=>{const deadline=Date.now()+3000;const timer=setInterval(()=>{const input=document.querySelector(".inline-editor input");if(input){clearInterval(timer);Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,"随行验证 · 离线草稿");input.dispatchEvent(new Event("input",{bubbles:true}));resolve(true)}else if(Date.now()>deadline){clearInterval(timer);resolve(false)}},20)})'),true);
+    const offlineCountsScript='(()=>{const w=document.querySelector("iframe").contentWindow;return {text:w.fixtureTextSaves,completed:w.fixtureClicks,dates:w.fixtureScheduleSaveClicks,created:w.fixtureCreationClicks}})()';
+    const beforeOfflineCounts=await normalController.window().webContents.executeJavaScript(offlineCountsScript);
+    const offlineServerPort=server.address().port;let offlineNavigations=0;
+    const offlineNavigated=()=>offlineNavigations++;
+    normalController.window().webContents.on('did-navigate',offlineNavigated);
+    try {
+      server.closeIdleConnections();await new Promise(resolve=>server.close(resolve));
+      console.log('离线流程：合成服务已停止。');
+      let state;
+      for(let attempt=0;attempt<20;attempt++){state=await normalController.connectionState('cn',true);if(['offline','unavailable'].includes(state.state))break;await new Promise(resolve=>setTimeout(resolve,100));}
+      assert.ok(['offline','unavailable'].includes(state.state),'会话模拟断网未被识别：'+state.state);
+      console.log('离线流程：连接状态为 '+state.state+'。');
+      assert.equal(await normalUI.webContents.executeJavaScript('new Promise(resolve=>{const deadline=Date.now()+4000;const timer=setInterval(()=>{if(["offline","unavailable"].includes(document.querySelector(".network-notice")?.dataset.state)){clearInterval(timer);resolve(true)}else if(Date.now()>deadline){clearInterval(timer);resolve(false)}},50)})'),true);
+      console.log('离线流程：界面已显示不可用。');
+      const cached=await normalUI.webContents.executeJavaScript('({live:document.querySelector(".list-content")?.dataset.live,pageId:document.querySelector(".list-content")?.dataset.pageId,draft:document.querySelector(".inline-editor input")?.value ?? null,blocked:document.querySelector(".save-edit")?.hasAttribute("disabled") ?? false,recovery:!!document.querySelector(".edit-recovery")})');
+      assert.deepEqual(cached,{live:'false',pageId:beforeOffline.pageId,draft:'随行验证 · 离线草稿',blocked:true,recovery:true});
+      console.log('离线流程：缓存与草稿保持只读。');
+      const denied=await normalController.execute({type:'setCompleted',pageId:beforeOffline.pageId,listId:offlineTarget.listId,id:offlineTarget.id,fingerprint:offlineTarget.fingerprint,expectedCompleted:offlineTarget.completed,completed:!offlineTarget.completed},'cn');
+      assert.ok(['OFFLINE','CONNECTION_UNAVAILABLE'].includes(denied.code));assert.equal(denied.dispatched,false);
+      console.log('离线流程：写入已被拒绝。');
+      assert.ok(['OFFLINE','CONNECTION_UNAVAILABLE'].includes((await normalController.reconnectSite('cn')).code));assert.equal(offlineNavigations,0);
+      console.log('离线流程：重连未导航。');
+      assert.deepEqual(await normalController.window().webContents.executeJavaScript(offlineCountsScript),beforeOfflineCounts);
+      normalUI.show();normalUI.focus();normalUI.webContents.focus();
+      await normalUI.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
+      fs.writeFileSync(path.join(root,'.local/offline-desktop-preview.png'),(await normalUI.webContents.capturePage()).toPNG());
+    } finally {if(!server.listening)await new Promise(resolve=>server.listen(offlineServerPort,'127.0.0.1',resolve));normalController.window().webContents.removeListener('did-navigate',offlineNavigated);}
+    assert.equal((await normalController.connectionState('cn',true)).state,'available');
+    console.log('离线流程：服务已恢复。');
+    assert.equal(await normalUI.webContents.executeJavaScript('new Promise(resolve=>{const deadline=Date.now()+4000;const timer=setInterval(()=>{if(document.querySelector(".network-notice")?.dataset.state==="read-required"){clearInterval(timer);resolve(true)}else if(Date.now()>deadline){clearInterval(timer);resolve(false)}},50)})'),true);
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'false');
+    assert.deepEqual(await normalController.window().webContents.executeJavaScript(offlineCountsScript),beforeOfflineCounts);
+    assert.equal(await normalUI.webContents.executeJavaScript('(()=>{const end=document.querySelector(".end-blocked-edit"),refresh=document.querySelector(".refresh-button");if(!end || !refresh)return false;end.click();refresh.click();return true;})()'),true);
+    assert.equal(await normalUI.webContents.executeJavaScript('new Promise(resolve=>{const deadline=Date.now()+5000;const timer=setInterval(()=>{if(document.querySelector(".list-content")?.dataset.live==="true" && !document.querySelector(".network-notice")){clearInterval(timer);resolve(true)}else if(Date.now()>deadline){clearInterval(timer);resolve(false)}},50)})'),true);
+    normalSnapshot=await normalController.execute({type:'read'},'cn');
+    assert.notEqual(normalSnapshot.snapshot.pageId,beforeOffline.pageId);assert.equal(normalSnapshot.snapshot.items.filter(item=>item.title===normalTitle).length,1);
+    assert.deepEqual(await normalController.window().webContents.executeJavaScript(offlineCountsScript),beforeOfflineCounts);
+    console.log('合成服务停止时联网标志仍为真，公开资源检查拒绝写入/导航、保留显示及本地草稿；恢复不重放、显式刷新换新句柄后恢复通过。');
     const beforeReconnect=normalSnapshot.snapshot;
     normalUI.webContents.send('suixing:snapshot',{region:'cn',result:normalSnapshot});
     await new Promise(resolve=>setTimeout(resolve,100));normalUI.show();normalUI.focus();normalUI.webContents.focus();
@@ -718,9 +769,12 @@ async function runSmoke({ frontendURL, root }) {
     report.checks.push('排序下拉框 Tab 聚焦、回车展开、方向键选择和 Esc 取消');
     report.checks.push('旗标空格操作、正式 IPC 单次保存、移除及本地筛选');
     report.checks.push('普通模式重新连接、同名清单只读保护与新页面句柄');
+    report.checks.push('服务不可达时保留草稿、禁止写入与导航，恢复后手动刷新且不重放');
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });
     fs.writeFileSync(path.join(root, '.local/desktop-smoke.json'), JSON.stringify(report, null, 2));
     console.log('桌面合成验证通过：' + report.checks.join('、'));
+  } catch(error) {
+    console.error(error.stack || error.message);throw error;
   } finally {
     stopIPC?.();
     ui?.destroy();

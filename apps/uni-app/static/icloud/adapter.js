@@ -1,7 +1,8 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.12') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.13') return;
+  if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   var listHandles = new WeakMap();
@@ -13,6 +14,17 @@
   var listRequests = new Set();
   var hierarchyRequests = new Set();
   var detailScheduleReads = new Map();
+  var connectionEpoch = 0;
+  var operationEpoch = 0;
+  function lostConnection() {
+    connectionEpoch++;
+    pageId='page-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
+    lastSnapshot=null;detailScheduleReads.clear();
+  }
+  root.addEventListener('offline',lostConnection);
+  function assertConnected() {
+    if (root.navigator.onLine===false || inFlight && operationEpoch!==connectionEpoch) throw new Error('SUIXING_OFFLINE');
+  }
   var creationStage = 'preflight';
   var creationDiagnosticSequence = 0;
 
@@ -43,6 +55,7 @@
   }
 
   function application() {
+    assertConnected();
     return documents().find(function (doc) {
       return doc.querySelector('[role="tree"] .rm-list-menu-item') ||
         doc.querySelector('[role="treegrid"] .reminder-item') ||
@@ -269,12 +282,15 @@
   /** 只等待状态变化，不在超时后重复点击任何写入按钮。 */
   function until(predicate, timeout) {
     var deadline = Date.now() + timeout;
-    return new Promise(function (resolve) {
+    return new Promise(function (resolve,reject) {
       function poll() {
-        var value = predicate();
-        if (value) return resolve(value);
-        if (Date.now() >= deadline) return resolve(null);
-        root.setTimeout(poll, 80);
+        try {
+          assertConnected();
+          var value = predicate();
+          if (value) return resolve(value);
+          if (Date.now() >= deadline) return resolve(null);
+          root.setTimeout(poll, 80);
+        } catch(error) { reject(error); }
       }
       poll();
     });
@@ -288,11 +304,13 @@
 
   /** iCloud 的控件使用按下／抬起事件处理手势，完整派发一次指针序列，不能仅调用 click()。 */
   function activate(button) {
+    assertConnected();
     var view = button.ownerDocument.defaultView;
     var rect = button.getBoundingClientRect();
     var base = { bubbles: true, cancelable: true, view: view, detail: 1, button: 0,
       clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
     ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (type) {
+      assertConnected();
       var Constructor = type.indexOf('pointer') === 0 ? view.PointerEvent : view.MouseEvent;
       if (Constructor) button.dispatchEvent(new Constructor(type, Object.assign({}, base, {
         buttons: type.endsWith('down') ? 1 : 0, pointerId: 1, pointerType: 'mouse', isPrimary: true
@@ -422,6 +440,7 @@
 
   /** 已有字段单次编辑后离开；新事项保留官方自动保存流程。取消或异常绝不改用另一种写法。 */
   async function replaceEditorText(doc, editor, value, settleInitialInput, reportStage) {
+    assertConnected();
     editor.focus();
     var selection = doc.defaultView.getSelection();
     var range = doc.createRange();
@@ -435,6 +454,7 @@
     editor.addEventListener('blur', onBlur, true);
     editor.addEventListener('focusout', onFocusOut, true);
     try {
+      assertConnected();
       // Chromium 的 execCommand 不产生 beforeinput；网页富文本需要先准备当前选区。
       if (!editor.dispatchEvent(new doc.defaultView.InputEvent('beforeinput', {
         bubbles: true, cancelable: true, composed: true,
@@ -443,18 +463,23 @@
       var instruction = textInstruction(value);
       // 多行 insertText 会拆成多次 input；仅包含转义文字和换行的片段可一次替换完整范围。
       if (reportStage) reportStage('input-command');
+      assertConnected();
       var inserted = doc.execCommand(instruction.command, false, instruction.value);
       if (inserted) {
         if (reportStage) reportStage('input-accepted');
         // 新记录的文字保存由官方 input 回调排队；让该任务执行，随后继续交给官方自动保存。
         if (settleInitialInput) await new Promise(function (resolve) { root.setTimeout(resolve, 0); });
+        assertConnected();
         if (reportStage) reportStage('input-settled');
         if (!editor.isConnected) { if (reportStage) reportStage('editor-detached'); return false; }
         if (settleInitialInput) { if (reportStage) reportStage('awaiting-autosave'); return true; }
         if (reportStage) reportStage('leaving-editor');
+        assertConnected();
         editor.blur();
+        assertConnected();
         if (!blurSeen && !focusOutSeen) {
           editor.dispatchEvent(new doc.defaultView.FocusEvent('blur', { bubbles: false, view: doc.defaultView, relatedTarget: doc.body }));
+          assertConnected();
           editor.dispatchEvent(new doc.defaultView.FocusEvent('focusout', { bubbles: true, view: doc.defaultView, relatedTarget: doc.body }));
         }
         if (reportStage) reportStage('editor-left');
@@ -543,6 +568,7 @@
     var beforeIds = new Set(beforeRows.map(function (row) { return row.id; }));
     creationRequests.add(command.requestId);
     setCreationStage('waiting-draft');
+    assertConnected();
     submitButton.click();
     var draft = await until(function () {
       var selected = listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
@@ -784,11 +810,13 @@
   }
 
   async function fillScheduleSegment(details, time, name, number, endpoint) {
+    assertConnected();
     var fields = scheduleSegments(details.panel,time);
     var node = fields && fields[name];
     if (!node || node.getAttribute('aria-disabled') === 'true' || node.getAttribute('aria-readonly') === 'true' || node.getAttribute('contenteditable') !== 'true') return false;
     if (Number(node.getAttribute('aria-valuenow')) === number) return true;
     node.focus();
+    assertConnected();
     if (endpoint) {
       node.dispatchEvent(new node.ownerDocument.defaultView.KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:endpoint}));
     } else {
@@ -949,16 +977,20 @@
 
   /** 名称只经标准输入控件替换一次；不读取或调用网页内部表单状态。 */
   function fillListName(panel,value) {
+    assertConnected();
     var inputs=panel.querySelectorAll('.name-textfield input[type="text"],.name-textfield input:not([type]),input.name-textfield[type="text"]');
     var input=inputs.length===1 && inputs[0];
     if(!input || input.disabled || input.readOnly || input.getAttribute('aria-disabled')==='true' || input.maxLength>=0 && value.length>input.maxLength) return false;
     var view=input.ownerDocument.defaultView,previous=input.value;
     input.focus();input.setSelectionRange(0,previous.length);
+    assertConnected();
     var before=new view.InputEvent('beforeinput',{bubbles:true,cancelable:true,composed:true,inputType:'insertText',data:value});
     input.dispatchEvent(before);
     if(input.value===value) return true;
     if(before.defaultPrevented || input.value!==previous) return false;
+    assertConnected();
     Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype,'value').set.call(input,value);
+    assertConnected();
     input.dispatchEvent(new view.InputEvent('input',{bubbles:true,composed:true,inputType:'insertText',data:value}));
     return input.isConnected && input.value===value;
   }
@@ -1168,9 +1200,10 @@
       return unchanged() && selected.length===1 && selected[0]===row && context.doc.activeElement===row;
     }
     function key(node,name) {
+      assertConnected();
       node.dispatchEvent(new context.doc.defaultView.KeyboardEvent('keydown',{key:name,bubbles:true,cancelable:true,ctrlKey:false,metaKey:false,shiftKey:false,altKey:false,repeat:false}));
     }
-    scope.grid.focus();key(scope.grid,'Home');
+    assertConnected();scope.grid.focus();key(scope.grid,'Home');
     if(!await until(function(){return single(scope.rows[0]);},900)) return {error:result(false,'DELETE_UNAVAILABLE','无法确认官方页面单选，请在官方页面核对。')};
     for(var index=1;index<=scope.index;index++) {
       key(scope.rows[index-1],'ArrowDown');
@@ -1199,6 +1232,7 @@
     var remaining=prepared.scope.rows.filter(function(row){return row!==context.row;}).map(function(row){var item=readItem(row,command.listId);return item && item.fingerprint;});
     if(remaining.some(function(item){return !item;})) return result(false,'DELETE_UNAVAILABLE','其他行尚未就绪，请在官方页面核对。');
     deletionRequests.add(command.requestId);lastSnapshot=null;
+    assertConnected();
     context.row.dispatchEvent(new context.doc.defaultView.KeyboardEvent('keydown',{key:'Backspace',bubbles:true,cancelable:true,ctrlKey:false,metaKey:false,shiftKey:false,altKey:false,repeat:false}));
     var absent=await until(function(){return !context.doc.getElementById(command.id);},1800);
     var refreshed=read();
@@ -1262,8 +1296,8 @@
       if(!latest || latest.fingerprint!==scope.fingerprint)return {error:result(false,'STALE_VIEW','事项层级已变化，请重新核对。')};
     }
     function single(row){var selected=scope.entries.filter(function(entry){return entry.row.getAttribute('aria-selected')==='true';});return selected.length===1 && selected[0].row===row && context.doc.activeElement===row;}
-    function key(row,name){row.dispatchEvent(new context.doc.defaultView.KeyboardEvent('keydown',{key:name,bubbles:true,cancelable:true,ctrlKey:false,metaKey:false,shiftKey:false,altKey:false,repeat:false}));}
-    scope.grid.focus();key(scope.grid,'Home');
+    function key(row,name){assertConnected();row.dispatchEvent(new context.doc.defaultView.KeyboardEvent('keydown',{key:name,bubbles:true,cancelable:true,ctrlKey:false,metaKey:false,shiftKey:false,altKey:false,repeat:false}));}
+    assertConnected();scope.grid.focus();key(scope.grid,'Home');
     if(!await until(function(){return single(scope.entries[0].row);},900))return {error:result(false,'SUBTASK_UNAVAILABLE','无法核对官方单选，请在官方页面调整。')};
     var index=scope.entries.findIndex(function(entry){return entry.item.id===command.id;});
     for(var position=1;position<=index;position++){
@@ -1291,6 +1325,7 @@
     if(prepared.scope.fingerprint!==command.expectedHierarchyFingerprint || !prepared.single())return result(false,'STALE_VIEW','确认后层级或内容已变化，请重新读取。');
     hierarchyRequests.add(command.requestId);lastSnapshot=null;
     var mac=/mac/i.test(root.navigator.platform || '');
+    assertConnected();
     prepared.context.row.dispatchEvent(new prepared.context.doc.defaultView.KeyboardEvent('keydown',{key:command.direction==='indent'?']':'[',bubbles:true,cancelable:true,ctrlKey:!mac,metaKey:mac,shiftKey:false,altKey:false,repeat:false}));
     var observed=await until(function(){
       var refreshed=read();if(!refreshed.ok || refreshed.snapshot.pageId!==command.pageId || refreshed.snapshot.activeListId!==command.listId)return false;
@@ -1303,12 +1338,17 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.12',
+    version: '0.3.13',
+    dispose:function(){root.removeEventListener('offline',lostConnection);},
+    invalidateConnection:lostConnection,
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');
       if (!command || !['read','readLists','readList', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance','getSubtaskInfo','setSubtask', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
+      var writing=['setCompleted','setText','createItem','setSchedule','setFlagged','deleteItem','createList','renameList','deleteList','setListAppearance','setSubtask'].includes(command.type);
+      if(root.navigator.onLine===false){lostConnection();return result(false,'OFFLINE','网络已断开，保留上次读取内容；恢复连接后请刷新。',{dispatched:false,cloudConfirmed:false});}
       inFlight = true;
+      operationEpoch=connectionEpoch;
       if (command.type === 'createItem') { creationDiagnosticSequence = root.__suixingDiagnosticWriteSequence; setCreationStage('preflight'); }
       try {
         if (command.type === 'read') return read();
@@ -1331,6 +1371,7 @@
         return await setCompleted(command);
       } catch (_) {
         lastSnapshot = null;
+        if(_?.message==='SUIXING_OFFLINE') return result(false,writing?'UNCERTAIN_WRITE':'OFFLINE',writing?'网络中断，修改结果尚未确认；请联网后读取核对，不要重复提交。':'网络已断开，恢复连接后请刷新。',{cloudConfirmed:false,dispatched:writing?undefined:false});
         return result(false, ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList','deleteList','setListAppearance','setSubtask'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
       } finally { inFlight = false; }
     }

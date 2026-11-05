@@ -33,12 +33,13 @@
         <view class="toolbar-actions">
           <picker :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || !!editing" @change="changeRegion"><view class="region-picker">{{ region === 'cn' ? '中国大陆' : '其他地区' }}⌄</view></picker>
           <button class="quiet-button" :disabled="busy || (!!editing && !editing.blocked)" @click="connect">{{ snapshot && !isDemo ? '官方页面' : '登录 iCloud' }}</button>
-          <button v-if="snapshot && !isDemo && bridge.capabilities?.reconnect" class="quiet-button reconnect-button" role="button" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing" title="重新打开官方页面并读取清单，复用现有会话" @click="reconnectClient">重新连接</button>
+          <button v-if="snapshot && !isDemo && bridge.capabilities?.reconnect" class="quiet-button reconnect-button" role="button" :tabindex="busy || editing || networkOffline ? -1 : 0" :disabled="busy || !!editing || networkOffline" title="重新打开官方页面并读取清单，复用现有会话" @click="reconnectClient">重新连接</button>
           <button class="primary-button refresh-button" :disabled="busy || (!!editing && !editing.blocked)" @click="refresh">{{ busy ? '处理中…' : '刷新' }}</button>
         </view>
       </view>
+      <view v-if="!isDemo && (networkOffline || networkNeedsRead)" class="notice network-notice" :class="{ error: networkOffline }" :data-state="networkOffline ? networkReason : 'read-required'" role="status"><text>{{ networkOffline ? networkReason === 'offline' ? '网络已断开，当前内容仅供查看；联网后请刷新核对。' : '暂时无法连接 iCloud，当前内容仅供查看；连接恢复后请刷新核对。' : '检测到网络可用，请刷新核对后继续编辑。' }}</text></view>
       <view v-if="notice" class="notice" :data-code="noticeCode" :data-reconnect-stage="noticeStage" :class="{ error: noticeError }" role="status"><text>{{ notice }}</text></view>
-      <view v-if="editing?.blocked" class="edit-recovery"><text>请先核对修改结果。</text><button @click="endEdit">结束本次编辑</button></view>
+      <view v-if="editing?.blocked" class="edit-recovery"><text>{{ editing.offline ? '草稿保留在当前窗口；请联网后先刷新核对。' : '请先核对修改结果。' }}</text><button class="end-blocked-edit" role="button" :disabled="busy" @click="endEdit">结束本次编辑</button></view>
       <view v-if="!snapshot" class="welcome">
         <view class="welcome-art"><view class="welcome-line"><text>✓</text><view></view></view><view class="welcome-line"><text>○</text><view></view></view><view class="welcome-line"><text>○</text><view></view></view></view>
         <text class="welcome-kicker">熟悉的提醒，新的随行方式</text>
@@ -122,6 +123,7 @@ import { validSchedule, localDateString } from '../../lib/schedule.js';
 import { SORT_OPTIONS, readSortPreference, saveSortPreference, sortLoadedItems } from '../../lib/list-sort.js';
 import { reconnectLoadedList } from '../../lib/reconnect.js';
 import { listIconURL, appearanceColorLabel } from '../../lib/list-appearance.js';
+import { monitorConnection, connectionResult } from '../../lib/connection.js';
 // #ifdef APP-HARMONY
 import HarmonyICloudHost from '../../components/HarmonyICloudHost.vue';
 import { onBackPress } from '@dcloudio/uni-app';
@@ -148,6 +150,10 @@ const busy = ref(false);
 const live = ref(false);
 const listSelectionRequired = ref(false);
 const isDemo = ref(false);
+const networkOffline = ref(false);
+const networkReason = ref('offline');
+const networkNeedsRead = ref(false);
+let networkRevision = 0;
 const editing = ref(null);
 const canEdit = computed(() => isDemo.value || bridge.capabilities?.editText === true);
 const canEditSchedule = computed(() => isDemo.value || bridge.capabilities?.editSchedule === true);
@@ -157,13 +163,13 @@ const canEditHierarchy = computed(() => !isDemo.value && bridge.capabilities?.ed
 const canManageLists = computed(() => !isDemo.value && bridge.capabilities?.manageLists === true);
 const canDeleteList = computed(() => !isDemo.value && bridge.capabilities?.deleteList === true);
 const canEditListAppearance = computed(() => !isDemo.value && bridge.capabilities?.listAppearance === true);
-const canCreateFirstList = computed(() => canManageLists.value && snapshot.value?.emptyAccount === true && snapshot.value.lists.length === 0);
+const canCreateFirstList = computed(() => canManageLists.value && !networkOffline.value && !networkNeedsRead.value && snapshot.value?.emptyAccount === true && snapshot.value.lists.length === 0);
 const canCreate = computed(() => isDemo.value || bridge.capabilities?.openNewItem === true);
 const notice = ref('');
 const noticeError = ref(false);
 const noticeCode = ref('');
 const noticeStage = ref('');
-const accountConnected = computed(() => !isDemo.value && !noticeError.value && !!snapshot.value && (live.value || !snapshot.value.activeListId));
+const accountConnected = computed(() => !isDemo.value && !networkOffline.value && !networkNeedsRead.value && !noticeError.value && !!snapshot.value && (live.value || !snapshot.value.activeListId));
 const sidebarOpen = ref(false);
 const tab = ref('pending');
 const flagOnly = ref(false);
@@ -178,13 +184,16 @@ const visibleItems = computed(() => sortLoadedItems(snapshot.value?.items || [],
 const formattedTime = computed(() => snapshot.value ? '读取于 ' + new Date(snapshot.value.capturedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '');
 
 /** 只在成功取得新快照时允许写入；失败后保留展示，但将旧内容设为只读。 */
-function accept(result) {
+function accept(result,readRecovery=false) {
+  if(result.code==='OFFLINE')updateConnection('offline');
+  if(result.code==='CONNECTION_UNAVAILABLE')updateConnection('unavailable');
   noticeCode.value = result.code || '';
   noticeStage.value = ['home','reminders','opening','waiting-navigation','selecting-list','waiting-selected'].includes(result.reconnectStage)?result.reconnectStage:'';
   if (result.ok && result.snapshot) {
+    if(readRecovery){networkOffline.value=false;networkNeedsRead.value=false;}
     snapshot.value = result.snapshot;
     if(result.needsListSelection) listSelectionRequired.value=true;
-    live.value = !listSelectionRequired.value;
+    live.value = !listSelectionRequired.value && !networkOffline.value && !networkNeedsRead.value;
     isDemo.value = false;
   } else if (!result.ok) {
     live.value = false;
@@ -196,7 +205,8 @@ function accept(result) {
 async function run(command) {
   if (busy.value) return;
   busy.value = true;
-  try { const result = await bridge.execute(command, region.value); accept(result); return result; }
+  const revision=networkRevision;
+  try { const result = connectionResult(await bridge.execute(command, region.value),command.type,revision!==networkRevision); accept(result,['read','readLists','readList','selectList'].includes(command.type) && revision===networkRevision); return result; }
   catch (_) { live.value = false; notice.value = '连接暂时不可用，请重新打开官方页面核对。'; noticeCode.value='CONNECTION_FAILED'; noticeError.value = true; return { ok: false, code: 'CONNECTION_FAILED' }; }
   finally { busy.value = false; }
 }
@@ -221,11 +231,12 @@ async function refresh() {
 }
 
 async function reconnectClient() {
-  if(busy.value || editing.value || isDemo.value || !bridge.capabilities?.reconnect) return;
+  if(busy.value || editing.value || isDemo.value || networkOffline.value || !bridge.capabilities?.reconnect) return;
+  const revision=networkRevision;
   const previous={title:snapshot.value?.activeListTitle,pageId:snapshot.value?.pageId};
   live.value=false;busy.value=true;notice.value='正在重新连接 iCloud…';noticeCode.value='RECONNECTING';noticeError.value=false;
   let result;
-  try {result=await reconnectLoadedList(bridge,region.value,previous);accept(result);}
+  try {result=await reconnectLoadedList(bridge,region.value,previous);accept(result,revision===networkRevision);}
   finally {busy.value=false;}
   if(result?.ok && !listSelectionRequired.value && tab.value==='completed') await selectTab('completed');
 }
@@ -255,7 +266,7 @@ async function selectList(list) {
   const result = await run({ type: 'selectList', listId: list.id, pageId: snapshot.value.pageId });
   if(result?.ok) {
     const wasRequired=listSelectionRequired.value;
-    listSelectionRequired.value=false;live.value=true;
+    listSelectionRequired.value=false;live.value=!networkOffline.value && !networkNeedsRead.value;
     if(wasRequired && result.code==='READY') {notice.value='';noticeError.value=false;}
   }
   if (result?.ok && tab.value === 'completed') await selectTab('completed');
@@ -282,7 +293,7 @@ async function startDelete(item) {
   let target=item;
   if(!isDemo.value) {
     const result=await run({type:'getDeleteInfo',pageId:snapshot.value.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed});
-    if(!result?.ok || !result.deleteReady) return;
+    if(!result?.ok || !live.value || !result.deleteReady) return;
     target=snapshot.value.items.find(candidate=>candidate.id===item.id);
     if(!target) return;
   }
@@ -305,7 +316,7 @@ async function startSubtask(item) {
   if(!canEditHierarchy.value || !live.value || busy.value || editing.value || item.disabled || !item.hierarchyReadable)return;
   const binding={pageId:snapshot.value.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed,direction:item.level===1?'indent':'outdent'};
   const result=await run({type:'getSubtaskInfo',...binding});
-  if(result?.ok && result.subtask){
+  if(result?.ok && live.value && result.subtask){
     editing.value={field:'subtask',...binding,...result.subtask,title:item.title,requestId:'subtask-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2),blocked:false};
     // #ifdef H5
     nextTick(()=>document.querySelector('.cancel-subtask')?.focus());
@@ -325,7 +336,7 @@ async function startListAppearance() {
   const list=snapshot.value.lists.find(list=>list.id===snapshot.value.activeListId);if(!list?.fingerprint)return;
   const binding={pageId:snapshot.value.pageId,listId:list.id,expectedListFingerprint:list.fingerprint};
   const result=await run({type:'getListAppearance',...binding});
-  if(result?.ok && result.appearance){
+  if(result?.ok && live.value && result.appearance){
     editing.value={field:'list-appearance',...binding,...result.appearance,title:list.title,requestId:'appearance-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2),blocked:false};
     sidebarOpen.value=false;
     // #ifdef H5
@@ -354,7 +365,7 @@ function startListEdit(operation) {
 async function saveListEdit(current) {
   if((!live.value && !(current.listOperation==='create' && canCreateFirstList.value)) || !current.value.trim() || current.value.length>100 || /[\r\n]/.test(current.value)) return;
   const result=await run({type:current.listOperation==='create'?'createList':'renameList',pageId:current.pageId,listId:current.listId,expectedListFingerprint:current.expectedListFingerprint,value:current.value.trim(),requestId:current.requestId});
-  if(result?.ok) {editing.value=null;if(current.listOperation==='create'){listSelectionRequired.value=false;live.value=true;tab.value='pending';search.value='';flagOnly.value=false;}}
+  if(result?.ok) {editing.value=null;if(current.listOperation==='create'){listSelectionRequired.value=false;live.value=!networkOffline.value && !networkNeedsRead.value;tab.value='pending';search.value='';flagOnly.value=false;}}
   else current.blocked=true;
 }
 
@@ -442,7 +453,7 @@ async function startScheduleEdit(item) {
   let dateFingerprint=item.scheduleFingerprint;
   if (!isDemo.value) {
     const result=await run({type:'getSchedule',pageId:snapshot.value.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed});
-    if (!result?.ok || !validSchedule(result.schedule)) return;
+    if (!result?.ok || !live.value || !validSchedule(result.schedule)) return;
     value=result.schedule;zone=result.editorTimeZone;dateFingerprint=result.scheduleFingerprint;
     target=snapshot.value.items.find(candidate=>candidate.id===item.id);
     if (!target) return;
@@ -615,6 +626,23 @@ onUnmounted(() => document.removeEventListener('focusout', sortFocusout, true));
 // #endif
 
 // 验证客户端仍通过相同的快照入口更新界面，不把诊断读取伪装成示例数据。
+function updateConnection(state) {
+  if(state==='offline' || state==='unavailable') {
+    if(!networkOffline.value)networkRevision++;
+    networkOffline.value=true;networkReason.value=state;networkNeedsRead.value=true;
+    if(!isDemo.value){live.value=false;if(editing.value){editing.value.blocked=true;editing.value.offline=true;}}
+  } else if(state==='available' && networkOffline.value) {
+    networkOffline.value=false;
+  }
+}
+let stopConnectionMonitor;
+onMounted(()=>{stopConnectionMonitor=monitorConnection(bridge,()=>region.value,updateConnection);});
+onUnmounted(()=>stopConnectionMonitor?.());
+// #ifdef H5
+const networkLost=()=>updateConnection('offline'),networkAvailable=()=>updateConnection('available');
+onMounted(()=>{window.addEventListener('offline',networkLost);window.addEventListener('online',networkAvailable);if(window.navigator.onLine===false)networkLost();});
+onUnmounted(()=>{window.removeEventListener('offline',networkLost);window.removeEventListener('online',networkAvailable);});
+// #endif
 const stopSnapshotListener = bridge.onSnapshot?.(payload => {
   if (payload.region === region.value) accept(payload.result);
 });

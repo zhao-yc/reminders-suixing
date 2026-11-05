@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { BrowserWindow, session } = require('electron');
+const { BrowserWindow, session, net } = require('electron');
 const { allowedURL, allowStorage, browserUserAgent, validCommand } = require('./policy.cjs');
 const { inspectFrame, diagnosticRoute, tracePublicExceptions } = require('./page-diagnostics.cjs');
 const { inspectTestEditor, inspectNewTestList } = require('./editor-diagnostics.cjs');
@@ -8,6 +8,7 @@ const { inspectTestDetails } = require('./date-diagnostics.cjs');
 const { inspectTestListDelete } = require('./list-delete-diagnostics.cjs');
 const { summarizeWriteOutcome, parseCreationStage, applyCreationStage } = require('./operation-diagnostics.cjs');
 const { reopenOfficial } = require('./site-navigation.cjs');
+const { readConnectionStatus,probePublicConnection } = require('./connection.cjs');
 
 const ROOT = path.resolve(__dirname, '../..');
 const SOURCE = fs.readFileSync(path.join(ROOT, 'apps/uni-app/static/icloud/adapter.js'), 'utf8');
@@ -23,6 +24,7 @@ function createController(options = {}) {
   let lastWriteOutcome = null;
   let lastReconnectOutcome = null;
   let reconnectSequence = 0;
+  let connectionCache=null,connectionFailures=0,connectionSuspended=false;
   const trace = [];
   const fixtureURL = options.fixtureURL;
   const canNavigate = value => fixtureURL ? new URL(value).origin === new URL(fixtureURL).origin : allowedURL(value);
@@ -75,6 +77,7 @@ function createController(options = {}) {
     if (site && !site.isDestroyed() && region === activeRegion) return site;
     if (site && !site.isDestroyed()) { closing = true; site.destroy(); closing = false; }
     activeRegion = region;
+    connectionCache=null;connectionFailures=0;connectionSuspended=false;
     const partition = fixtureURL ? 'suixing-smoke' : 'persist:suixing-icloud-' + region;
     const isolated = session.fromPartition(partition);
     isolated.setUserAgent(browserUserAgent(process.versions.chrome), 'zh-CN,zh,en-US,en');
@@ -117,6 +120,26 @@ function createController(options = {}) {
     return site;
   }
 
+  async function connectionState(region='cn',force=false) {
+    if(!['cn','global'].includes(region))return {ok:false,code:'INVALID_REQUEST'};
+    const frames=site && !site.isDestroyed() && activeRegion===region?site.webContents.mainFrame.framesInSubtree:[];
+    const target=frames.find(frame=>/\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url)) || frames[0];
+    const frame=target && canNavigate(target.url)?target:null;
+    const state=await readConnectionStatus(()=>net.isOnline(),frame,{probe:async()=>{
+      if(!force && connectionCache?.region===region && Date.now()<connectionCache.expires)return connectionCache.reachable;
+      const reachable=(await probePublicConnection(frame,new URL('/favicon.ico',fixtureURL || ENTRY[region]).href))===true;
+      connectionFailures=reachable?0:Math.min(connectionFailures+1,5);
+      connectionCache={region,reachable,expires:Date.now()+(reachable?15000:Math.min(30000,1000*2**connectionFailures))};
+      return reachable;
+    }});
+    if(state.state==='offline')connectionCache=null;
+    if(['offline','unavailable'].includes(state.state) && !connectionSuspended && frame) {
+      connectionSuspended=true;
+      try {await frame.executeJavaScript('window.__suixingAdapter?.invalidateConnection?.()');}catch{}
+    } else if(state.state==='available')connectionSuspended=false;
+    return state;
+  }
+
   async function execute(command, region = 'cn') {
     if (!validCommand(command)) return { ok: false, code: 'INVALID_COMMAND', message: '不支持的操作参数。' };
     if (busy) return { ok: false, code: 'BUSY', message: '上一项操作尚未结束。' };
@@ -134,6 +157,13 @@ function createController(options = {}) {
     };
     let timer;
     try {
+      const network=await connectionState(region,write || ['read','readLists','readList','selectList'].includes(command.type));
+      if(network.state==='offline' || network.state==='unavailable')return finish({ok:false,code:network.state==='offline'?'OFFLINE':'CONNECTION_UNAVAILABLE',message:'连接暂时不可用，保留上次读取内容；恢复后请刷新。',dispatched:false,cloudConfirmed:false});
+      if(write && network.state!=='available')return finish({ok:false,code:'CONNECTION_UNAVAILABLE',message:'暂不能确认连接，请先读取核对。',dispatched:false,cloudConfirmed:false});
+      if(network.state!=='available') {
+        if(!site || site.isDestroyed() || activeRegion!==region)ensure(region);
+        return finish({ok:false,code:'PAGE_NOT_READY',message:'官方页面或连接尚未就绪，请稍后重新读取。',dispatched:false,cloudConfirmed:false});
+      }
       const window = ensure(region);
       const frames = window.webContents.mainFrame.framesInSubtree;
       const target = frames.find(frame => /\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url)) || window.webContents.mainFrame;
@@ -152,13 +182,18 @@ function createController(options = {}) {
   async function reconnectSite(region='cn') {
     if(!['cn','global'].includes(region)) return {ok:false,code:'INVALID_REQUEST',message:'服务区域无效。'};
     if(busy) return {ok:false,code:'BUSY',message:'请等待当前操作结束后再重新连接。'};
-    const window=ensure(region);busy=true;const sequence=++reconnectSequence;lastReconnectOutcome={sequence,ok:false,code:'IN_FLIGHT',attempts:[]};
-    try {const result=await reopenOfficial(window.webContents,fixtureURL || ENTRY[region]);lastReconnectOutcome={sequence,ok:result.ok,code:result.code,attempts:result.attempts || []};return result;}
+    busy=true;const sequence=++reconnectSequence;lastReconnectOutcome={sequence,ok:false,code:'IN_FLIGHT',attempts:[]};
+    try {
+      const network=await connectionState(region,true);
+      const result=network.state!=='available'?{ok:false,code:network.state==='offline'?'OFFLINE':network.state==='unavailable'?'CONNECTION_UNAVAILABLE':'PAGE_NOT_READY',message:'连接尚未就绪，请稍后读取再重新连接。'}:await reopenOfficial(ensure(region).webContents,fixtureURL || ENTRY[region]);
+      lastReconnectOutcome={sequence,ok:result.ok,code:result.code,attempts:result.attempts || []};return result;
+    }
     finally {busy=false;}
   }
 
   return {
     execute,
+    connectionState,
     adapterVersion() {return SOURCE.match(/version:\s*'(\d+\.\d+\.\d+)'/)?.[1] || 'unknown';},
     reconnectSite,
     lastWriteOutcome() { return lastWriteOutcome ? {...lastWriteOutcome} : null; },
