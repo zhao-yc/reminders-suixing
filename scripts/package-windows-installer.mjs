@@ -6,6 +6,7 @@ import {spawn} from 'node:child_process';
 import {parseArgs} from 'node:util';
 import {createHash} from 'node:crypto';
 import {payloadManifest,verifyCriticalFiles} from './windows-payload.mjs';
+import {verifyWindowsIcon,windowsIconPath} from './windows-icon.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),require=createRequire(import.meta.url);
 const {APP_ID,APP_NAME}=require('../apps/desktop/identity.cjs');
@@ -31,7 +32,7 @@ const config={appId:APP_ID,productName:APP_NAME,executableName:'提醒事项随�
   directories:{app:path.join(payload,'resources/app'),output,buildResources:path.join(root,'build/windows')},
   extraMetadata:{description:'提醒事项·随行 Windows 测试客户端',author:'提醒事项·随行贡献者'},
   extraFiles:[{from:path.join(root,'LICENSE'),to:'项目许可证.txt'},{from:path.join(payload,'使用说明.txt'),to:'使用说明.txt'}],
-  win:{target:[{target:'nsis',arch:['x64']}],signExecutable:false,signAndEditExecutable:false},
+  win:{target:[{target:'nsis',arch:['x64']}],icon:fileURLToPath(windowsIconPath),signExecutable:false},
   nsis:{oneClick:true,perMachine:false,runAfterFinish:false,createDesktopShortcut:false,createStartMenuShortcut:true,shortcutName:'提醒事项·随行',deleteAppDataOnUninstall:false,differentialPackage:false,packElevateHelper:false,installerLanguages:['zh_CN'],include,artifactName:'reminders-suixing-'+metadata.version+'-setup-x64.exe'}};
 const configFile=path.join(output,'electron-builder.json');await fs.writeFile(configFile,JSON.stringify(config,null,2));
 const env={...process.env,ELECTRON_BUILDER_CACHE:path.join(root,'.local/electron-builder-cache'),CSC_IDENTITY_AUTO_DISCOVERY:'false'};
@@ -41,6 +42,8 @@ if(JSON.stringify(before)!==JSON.stringify(await payloadManifest(payload)))throw
 const unpacked=path.join(output,'win-unpacked'),manifest=await payloadManifest(unpacked),critical=await verifyCriticalFiles(root,unpacked);
 await fs.writeFile(path.join(output,'payload-manifest.json'),JSON.stringify({version:metadata.version,criticalFiles:critical,files:manifest},null,2));
 const installer=path.join(output,'reminders-suixing-'+metadata.version+'-setup-x64.exe'),content=await fs.readFile(installer);
-const receipt={version:metadata.version,bytes:content.length,sha256:createHash('sha256').update(content).digest('hex'),files:manifest.length,criticalFiles:critical,unsigned:true};
+const iconFrames=await verifyWindowsIcon(path.join(unpacked,'提醒事项随行.exe'));
+const installerIconFrames=await verifyWindowsIcon(installer);
+const receipt={version:metadata.version,bytes:content.length,sha256:createHash('sha256').update(content).digest('hex'),files:manifest.length,criticalFiles:critical,iconFrames,installerIconFrames,unsigned:true};
 await fs.writeFile(path.join(output,'installer-receipt.json'),JSON.stringify(receipt,null,2));
 console.log(JSON.stringify(receipt));
