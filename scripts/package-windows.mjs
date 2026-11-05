@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const metadata=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));
 if (process.platform !== 'win32') throw new Error('便携包需在 Windows 环境生成。');
 const { values } = parseArgs({ options: { name: { type: 'string', default: 'windows-portable' } } });
 if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(values.name)) throw new Error('包目录名只能使用字母、数字、点、下划线或短横线。');
@@ -23,11 +24,11 @@ await fs.cp(path.dirname(require('electron')), destination, { recursive: true })
 await fs.rename(path.join(destination, 'electron.exe'), path.join(destination, '提醒事项随行.exe'));
 const appRoot = path.join(destination, 'resources', 'app');
 await fs.mkdir(appRoot, { recursive: true });
-await fs.writeFile(path.join(appRoot, 'package.json'), JSON.stringify({ name: 'reminders-suixing', version: '0.1.0', main: 'apps/desktop/main.cjs' }, null, 2));
+await fs.writeFile(path.join(appRoot, 'package.json'), JSON.stringify({ name: 'reminders-suixing', version: metadata.version, main: 'apps/desktop/main.cjs' }, null, 2));
 for (const relative of ['apps/desktop', 'apps/uni-app/static/icloud']) {
   await fs.cp(path.join(root, relative), path.join(appRoot, relative), { recursive: true });
 }
 await fs.cp(path.join(root, frontend), path.join(appRoot, frontend), { recursive: true });
 await fs.copyFile(path.join(root, 'LICENSE'), path.join(destination, '项目许可证.txt'));
-await fs.writeFile(path.join(destination, '使用说明.txt'), '提醒事项·随行 0.1.0 最小验证版\r\n运行“提醒事项随行.exe”，在 iCloud 官方页面自行登录，返回主界面刷新。\r\n尚未签名；不包含任何登录会话或个人数据。\r\n');
+await fs.writeFile(path.join(destination, '使用说明.txt'), '提醒事项·随行 '+metadata.version+' 最小验证版\r\n运行“提醒事项随行.exe”，在 iCloud 官方页面自行登录，返回主界面刷新。\r\n尚未签名；不包含任何登录会话或个人数据。\r\n');
 console.log('已生成 Windows 便携包：' + destination);

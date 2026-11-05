@@ -23,6 +23,8 @@ test('写入回执诊断不访问事项、参数和异常正文，阶段只接�
   const unknown=summarizeWriteOutcome('createItem',4,{code:'SYNTHETIC_PRIVATE',stage:'synthetic-private-title',message:'synthetic-private'});
   assert.equal(unknown.code,'OTHER');assert.equal(unknown.stage,'unknown');
   assert.doesNotMatch(JSON.stringify(unknown),/synthetic/i);
+  const dateConflict=summarizeWriteOutcome('setSchedule',5,{ok:false,code:'SCHEDULE_UNAVAILABLE',dispatched:false,cloudConfirmed:false});
+  assert.equal(dateConflict.code,'SCHEDULE_UNAVAILABLE');assert.equal(dateConflict.dispatched,false);assert.equal(dateConflict.ok,false);
 });
 
 test('挂起写入明确标记为进行中，不能当作已经保存；读取不生成写入回执', () => {

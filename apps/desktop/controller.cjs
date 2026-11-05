@@ -1,10 +1,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { BrowserWindow, session } = require('electron');
+const { BrowserWindow, session, net } = require('electron');
 const { allowedURL, allowStorage, browserUserAgent, validCommand } = require('./policy.cjs');
 const { inspectFrame, diagnosticRoute, tracePublicExceptions } = require('./page-diagnostics.cjs');
-const { inspectTestEditor } = require('./editor-diagnostics.cjs');
+const { inspectTestEditor, inspectNewTestList } = require('./editor-diagnostics.cjs');
+const { inspectTestDetails } = require('./date-diagnostics.cjs');
+const { inspectTestListDelete } = require('./list-delete-diagnostics.cjs');
 const { summarizeWriteOutcome, parseCreationStage, applyCreationStage } = require('./operation-diagnostics.cjs');
+const { reopenOfficial } = require('./site-navigation.cjs');
+const { readConnectionStatus,probePublicConnection } = require('./connection.cjs');
 
 const ROOT = path.resolve(__dirname, '../..');
 const SOURCE = fs.readFileSync(path.join(ROOT, 'apps/uni-app/static/icloud/adapter.js'), 'utf8');
@@ -18,6 +22,9 @@ function createController(options = {}) {
   let closing = false;
   let writeSequence = 0;
   let lastWriteOutcome = null;
+  let lastReconnectOutcome = null;
+  let reconnectSequence = 0;
+  let connectionCache=null,connectionFailures=0,connectionSuspended=false;
   const trace = [];
   const fixtureURL = options.fixtureURL;
   const canNavigate = value => fixtureURL ? new URL(value).origin === new URL(fixtureURL).origin : allowedURL(value);
@@ -70,6 +77,7 @@ function createController(options = {}) {
     if (site && !site.isDestroyed() && region === activeRegion) return site;
     if (site && !site.isDestroyed()) { closing = true; site.destroy(); closing = false; }
     activeRegion = region;
+    connectionCache=null;connectionFailures=0;connectionSuspended=false;
     const partition = fixtureURL ? 'suixing-smoke' : 'persist:suixing-icloud-' + region;
     const isolated = session.fromPartition(partition);
     isolated.setUserAgent(browserUserAgent(process.versions.chrome), 'zh-CN,zh,en-US,en');
@@ -112,11 +120,31 @@ function createController(options = {}) {
     return site;
   }
 
+  async function connectionState(region='cn',force=false) {
+    if(!['cn','global'].includes(region))return {ok:false,code:'INVALID_REQUEST'};
+    const frames=site && !site.isDestroyed() && activeRegion===region?site.webContents.mainFrame.framesInSubtree:[];
+    const target=frames.find(frame=>/\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url)) || frames[0];
+    const frame=target && canNavigate(target.url)?target:null;
+    const state=await readConnectionStatus(()=>net.isOnline(),frame,{probe:async()=>{
+      if(!force && connectionCache?.region===region && Date.now()<connectionCache.expires)return connectionCache.reachable;
+      const reachable=(await probePublicConnection(frame,new URL('/favicon.ico',fixtureURL || ENTRY[region]).href))===true;
+      connectionFailures=reachable?0:Math.min(connectionFailures+1,5);
+      connectionCache={region,reachable,expires:Date.now()+(reachable?15000:Math.min(30000,1000*2**connectionFailures))};
+      return reachable;
+    }});
+    if(state.state==='offline')connectionCache=null;
+    if(['offline','unavailable'].includes(state.state) && !connectionSuspended && frame) {
+      connectionSuspended=true;
+      try {await frame.executeJavaScript('window.__suixingAdapter?.invalidateConnection?.()');}catch{}
+    } else if(state.state==='available')connectionSuspended=false;
+    return state;
+  }
+
   async function execute(command, region = 'cn') {
     if (!validCommand(command)) return { ok: false, code: 'INVALID_COMMAND', message: '不支持的操作参数。' };
     if (busy) return { ok: false, code: 'BUSY', message: '上一项操作尚未结束。' };
     busy = true;
-    const write = ['setCompleted', 'setText', 'createItem'].includes(command.type);
+    const write = ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList','deleteList','setListAppearance','setSubtask'].includes(command.type);
     const sequence = write && options.diagnostics ? ++writeSequence : 0;
     if (sequence) lastWriteOutcome = summarizeWriteOutcome(command.type, sequence, null, true);
     const finish = result => {
@@ -129,6 +157,13 @@ function createController(options = {}) {
     };
     let timer;
     try {
+      const network=await connectionState(region,write || ['read','readLists','readList','selectList'].includes(command.type));
+      if(network.state==='offline' || network.state==='unavailable')return finish({ok:false,code:network.state==='offline'?'OFFLINE':'CONNECTION_UNAVAILABLE',message:'连接暂时不可用，保留上次读取内容；恢复后请刷新。',dispatched:false,cloudConfirmed:false});
+      if(write && network.state!=='available')return finish({ok:false,code:'CONNECTION_UNAVAILABLE',message:'暂不能确认连接，请先读取核对。',dispatched:false,cloudConfirmed:false});
+      if(network.state!=='available') {
+        if(!site || site.isDestroyed() || activeRegion!==region)ensure(region);
+        return finish({ok:false,code:'PAGE_NOT_READY',message:'官方页面或连接尚未就绪，请稍后重新读取。',dispatched:false,cloudConfirmed:false});
+      }
       const window = ensure(region);
       const frames = window.webContents.mainFrame.framesInSubtree;
       const target = frames.find(frame => /\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url)) || window.webContents.mainFrame;
@@ -144,8 +179,23 @@ function createController(options = {}) {
     } finally { clearTimeout(timer); busy = false; }
   }
 
+  async function reconnectSite(region='cn') {
+    if(!['cn','global'].includes(region)) return {ok:false,code:'INVALID_REQUEST',message:'服务区域无效。'};
+    if(busy) return {ok:false,code:'BUSY',message:'请等待当前操作结束后再重新连接。'};
+    busy=true;const sequence=++reconnectSequence;lastReconnectOutcome={sequence,ok:false,code:'IN_FLIGHT',attempts:[]};
+    try {
+      const network=await connectionState(region,true);
+      const result=network.state!=='available'?{ok:false,code:network.state==='offline'?'OFFLINE':network.state==='unavailable'?'CONNECTION_UNAVAILABLE':'PAGE_NOT_READY',message:'连接尚未就绪，请稍后读取再重新连接。'}:await reopenOfficial(ensure(region).webContents,fixtureURL || ENTRY[region]);
+      lastReconnectOutcome={sequence,ok:result.ok,code:result.code,attempts:result.attempts || []};return result;
+    }
+    finally {busy=false;}
+  }
+
   return {
     execute,
+    connectionState,
+    adapterVersion() {return SOURCE.match(/version:\s*'(\d+\.\d+\.\d+)'/)?.[1] || 'unknown';},
+    reconnectSite,
     lastWriteOutcome() { return lastWriteOutcome ? {...lastWriteOutcome} : null; },
     async inspectTestEditor() {
       if (!options.diagnostics) return { ok: false, code: 'DIAGNOSTICS_DISABLED' };
@@ -154,9 +204,40 @@ function createController(options = {}) {
       if (!frame) return { ok: false, code: 'PAGE_NOT_READY' };
       return inspectTestEditor(frame);
     },
+    async inspectNewTestList() {
+      if(!options.diagnostics) return {ok:false,code:'DIAGNOSTICS_DISABLED'};
+      if(busy || !site || site.isDestroyed()) return {ok:false,code:'PAGE_NOT_READY'};
+      const frame=site.webContents.mainFrame.framesInSubtree.find(frame=>/\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url));
+      if(!frame) return {ok:false,code:'PAGE_NOT_READY'};
+      busy=true;try {return await inspectNewTestList(frame);}finally{busy=false;}
+    },
+    async inspectTestListDelete() {
+      if(!options.diagnostics) return {ok:false,code:'DIAGNOSTICS_DISABLED'};
+      if(busy || !site || site.isDestroyed()) return {ok:false,code:'PAGE_NOT_READY'};
+      const frame=site.webContents.mainFrame.framesInSubtree.find(frame=>/\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url));
+      if(!frame)return {ok:false,code:'PAGE_NOT_READY'};
+      busy=true;try{return await inspectTestListDelete(frame);}finally{busy=false;}
+    },
+    async inspectTestDetails(action) {
+      if (!options.diagnostics) return {ok:false,code:'DIAGNOSTICS_DISABLED'};
+      if (!site || site.isDestroyed()) return {ok:false,code:'PAGE_NOT_READY'};
+      const frame=site.webContents.mainFrame.framesInSubtree.find(frame=>/\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url));
+      if (!frame) return {ok:false,code:'PAGE_NOT_READY'};
+      return inspectTestDetails(frame,action);
+    },
     openSite(region = 'cn') {
       if (busy && region !== activeRegion) return { ok: false, code: 'BUSY', message: '请等待当前操作结束后再切换区域。' };
       ensure(region).show(); return { ok: true };
+    },
+    /** 仅受限验收：通过公开页面导航核对刷新，不调用网页内部同步服务。 */
+    async inspectSiteConnection(action) {
+      if (!options.diagnostics) return {ok:false,code:'DIAGNOSTICS_DISABLED'};
+      if (!['show','hide','reopen'].includes(action)) return {ok:false,code:'INVALID_DIAGNOSTIC_ACTION'};
+      if (busy) return {ok:false,code:'BUSY'};
+      const window=ensure('cn');
+      if (action==='show') {window.show();window.focus();return {ok:true,code:'SITE_SHOWN'};}
+      if (action==='hide') {window.hide();return {ok:true,code:'SITE_HIDDEN'};}
+      return reconnectSite('cn');
     },
     reloadSite(region = 'cn') {
       if (busy) return { ok: false, code: 'BUSY', message: '请等待当前操作结束后再重载。' };
@@ -186,7 +267,7 @@ function createController(options = {}) {
     },
     /** 只检查公开页面结构及固定错误文案，诊断结果不包含账户或提醒事项内容。 */
     async diagnostics() {
-      if (!site || site.isDestroyed()) return { opened: false, trace, lastWriteOutcome };
+      if (!site || site.isDestroyed()) return { opened: false, trace, lastWriteOutcome,lastReconnectOutcome };
       const frames = [];
       const available = site.webContents.mainFrame.framesInSubtree;
       for (const frame of available.slice(0, 12)) {
@@ -194,7 +275,7 @@ function createController(options = {}) {
         entry.state = await inspectFrame(frame);
         frames.push(entry);
       }
-      return { opened: true, frames, framesTruncated: available.length > frames.length, trace, lastWriteOutcome };
+      return { opened: true, frames, framesTruncated: available.length > frames.length, trace, lastWriteOutcome,lastReconnectOutcome };
     },
     dispose() { closing = true; if (site && !site.isDestroyed()) site.destroy(); }
   };

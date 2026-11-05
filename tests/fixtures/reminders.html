@@ -5,12 +5,21 @@
   <div role="treeitem" class="rm-list-menu-item" aria-selected="false" data-list="two"><button class="inline-editable-label">验证清单</button></div>
 </div>
 <button class="rm-new-reminder" role="button" aria-label="新增提醒事项">新增</button>
+<button class="new-list-button" role="button">添加列表</button>
 <button class="list-detail-button" role="button" aria-label="编辑提醒事项列表">菜单</button>
-<div class="fixture-list-menu" role="menu" hidden><button role="menuitem"></button></div>
-<div role="treegrid" aria-label="提醒列表"></div>
+<div class="fixture-list-menu" role="menu" hidden><button role="menuitem"></button><button role="menuitem" data-action="info">显示列表信息</button><button role="menuitem" data-action="delete-list">删除列表</button></div>
+<div role="treegrid" aria-label="提醒列表" tabindex="0"></div>
 <script>
 // 该页面只包含合成数据，用来验证重复标题、完成回执和列表切换，绝不访问 Apple。
 window.fixtureClicks = 0;
+window.fixtureDeleteKeys = 0;
+window.fixtureDeletionCount = 0;
+window.fixtureListSaves = 0;
+window.fixtureListInputs = 0;
+window.fixtureListCancels = 0;
+window.fixtureListDeleteMenus = 0;
+window.fixtureListDeleteCommits = 0;
+window.fixtureListDeleteCancels = 0;
 window.fixtureDisableUpdates = false;
 window.fixtureRequiresPointerDown = false;
 window.fixturePointerDown = false;
@@ -28,6 +37,16 @@ window.fixtureCreationAutosaves = 0;
 window.fixtureHideCompleted = false;
 window.fixtureCompletedMenuClicks = 0;
 window.fixtureCompletedActionClicks = 0;
+window.fixtureScheduleSaves = 0;
+window.fixtureFlagSaves = 0;
+window.fixtureFlagToggleClicks = 0;
+window.fixtureFlagRejectToggle = false;
+window.fixtureScheduleSaveClicks = 0;
+window.fixtureScheduleCancels = 0;
+window.fixtureScheduleInputs = [];
+window.fixtureScheduleRejectInput = false;
+window.fixtureScheduleDisableSave = false;
+window.fixtureScheduleUse12Hour = false;
 // JSDOM 不实现浏览器编辑命令；真实 Electron 保留并验证其原生实现。
 if (!document.execCommand) document.execCommand = function (command, _ui, value) {
   if (!['insertText', 'insertHTML'].includes(command) || !document.activeElement?.isContentEditable && document.activeElement?.getAttribute('contenteditable') !== 'true') return false;
@@ -38,15 +57,30 @@ if (!document.execCommand) document.execCommand = function (command, _ui, value)
 };
 function renderFixture(list) {
   const complete = sessionStorage.getItem('fixture-complete') === 'true';
-  const titles = (list === 'two' ? ['随行验证 · 第二个同名清单'] : ['随行验证 · 同名事项', '随行验证 · 同名事项']).map((title,index)=>({title,id:'reminder-item-fixture-' + list + '-' + index}));
-  const records = titles.concat(JSON.parse(sessionStorage.getItem('fixture-created-' + list) || '[]'));
+  const titles = (list === 'two' ? ['随行验证 · 第二个同名清单'] : list==='one'?['随行验证 · 同名事项', '随行验证 · 同名事项']:[]).map((title,index)=>({title,id:'reminder-item-fixture-' + list + '-' + index}));
+  const deleted=JSON.parse(sessionStorage.getItem('fixture-deleted') || '[]');
+  const records = titles.concat(JSON.parse(sessionStorage.getItem('fixture-created-' + list) || '[]')).filter(record=>!deleted.includes(record.id));
+  document.querySelector('[role="treegrid"]').setAttribute('aria-rowcount',String(records.length));
   document.querySelector('[role="treegrid"]').innerHTML = records.map(({title,id}, index) =>
-    '<div class="reminder-item" id="' + id + '" role="row" aria-level="1" aria-setsize="' + records.length + '">' +
+    '<div class="reminder-item" id="' + id + '" role="row" aria-level="1" aria-posinset="'+(index+1)+'" aria-selected="false" tabindex="-1" aria-setsize="' + records.length + '">' +
     '<button class="mark-completed" data-completed="' + (index === 0 && complete) + '" aria-label="切换完成状态"></button>' +
-    '<div class="title"><div role="textbox" contenteditable="true">' + title + '</div></div>' +
-    '<div class="notes"><div role="textbox" contenteditable="true"></div></div><div class="metadata">2026/11/04<span aria-hidden="true">重复无障碍文字</span></div></div>'
+    '<div role="gridcell">' + (index===1?'<span class="priority" data-priority-level="1"><span aria-hidden="true">!!!</span></span>':'') + '</div><div class="title" role="gridcell"><div role="textbox" contenteditable="true">' + title + '</div></div>' +
+    '<div class="notes"><div role="textbox" contenteditable="true"></div></div><div class="flag-container" role="gridcell"></div><div class="metadata">2026/11/04<span aria-hidden="true">重复无障碍文字</span></div><button class="info" data-edit-open="false" aria-haspopup="dialog">详情</button></div>'
   ).join('');
   if (window.fixtureHideCompleted) document.querySelectorAll('.mark-completed[data-completed="true"]').forEach(button => button.closest('.reminder-item').remove());
+  document.querySelectorAll('.reminder-item').forEach(row => {
+    if (sessionStorage.getItem('fixture-flag-'+row.id)==='true') row.querySelector('.flag-container').innerHTML='<div class="flag" aria-label="合成旗标"></div>';
+    const schedule=JSON.parse(sessionStorage.getItem('fixture-schedule-'+row.id) || '{"date":null,"time":null,"timeZone":null}');
+    let due=null;
+    if (schedule.date) {const civil=schedule.date.split('-').map(Number),clock=(schedule.time || '00:00').split(':').map(Number);const local=new Date(0);local.setFullYear(civil[0],civil[1]-1,civil[2]);local.setHours(clock[0],clock[1],0,0);due=local.getTime();}
+    const record={pk:row.id.slice('reminder-item-'.length),DueDate:due,AllDay:!!schedule.date && schedule.time===null,TimeZone:schedule.date?schedule.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone:null};
+    // 模拟官方 DOM 行的直接子组件绑定；不模拟或访问任何账户根状态。
+    Object.defineProperty(row,'__reactProps$fixture',{value:{children:{props:{item:record}}},configurable:true,writable:true});
+    if (schedule.date) {const element=document.createElement('span');element.className='due-date';element.textContent=record.AllDay?new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'numeric',day:'numeric',timeZone:'UTC'}).format(new Date(due)):schedule.date+' '+schedule.time;row.querySelector('.metadata').append(element);}
+    if (window.fixtureScheduleOmitLoadedDate) {delete record.DueDate;delete record.TimeZone;}
+    row.querySelector('.info').addEventListener('click',()=>openFixtureSchedule(row));
+  });
+  applyFixtureHierarchy();
   document.querySelectorAll('.title [role="textbox"], .notes [role="textbox"]').forEach(editor => {
     const field = editor.closest('.title') ? 'title' : 'notes';
     const key = 'fixture-text-' + editor.closest('.reminder-item').id + '-' + field;
@@ -90,6 +124,69 @@ function renderFixture(list) {
     sessionStorage.setItem('fixture-complete', String(next));
   }); });
 }
+function openFixtureSchedule(row) {
+  if (document.querySelector('.details-popover')) return;
+  const opener=row.querySelector('.info');opener.setAttribute('data-edit-open','true');
+  const key='fixture-schedule-'+row.id;
+  let state=JSON.parse(sessionStorage.getItem(key) || '{"date":null,"time":null,"timeZone":null}');
+  const initialSchedule=JSON.stringify(state),initialFlag=sessionStorage.getItem('fixture-flag-'+row.id)==='true';let flagged=initialFlag;
+  const popup=document.createElement('div');popup.className='details-popover';
+  popup.innerHTML='<div class="reminder-item-details"><div class="content-title"><div class="title"><div role="textbox"></div></div></div><button class="flag-edit-button"></button><div class="reminder-edit-date"><div id="atDate" role="switch" aria-checked="false" tabindex="0"></div><div class="fixture-date-fields"></div></div><button class="secondary">取消</button><button class="primary">存储</button></div>';
+  const flagButton=popup.querySelector('.flag-edit-button');flagButton.setAttribute('aria-pressed',String(flagged));
+  flagButton.addEventListener('click',()=>{window.fixtureFlagToggleClicks++;if(window.fixtureFlagRejectToggle)return;flagged=!flagged;flagButton.setAttribute('aria-pressed',String(flagged));});
+  popup.querySelector('.content-title [role="textbox"]').textContent=row.querySelector('.title [role="textbox"]').textContent;
+  const dateSwitch=popup.querySelector('#atDate');
+  function close() {popup.remove();opener.setAttribute('data-edit-open','false');}
+  function daysInMonth(year,month) {return [31,year%4===0 && (year%100!==0 || year%400===0)?29:28,31,30,31,30,31,31,30,31,30,31][month-1];}
+  function renderFields() {
+    dateSwitch.setAttribute('aria-checked',String(state.date!==null));
+    const area=popup.querySelector('.fixture-date-fields');area.innerHTML='';
+    if (!state.date) return;
+    area.innerHTML='<div class="date-time-container"><div class="date-field"></div><div class="time-picker"><div id="editTime" role="checkbox" tabindex="0"></div><div class="field"></div></div></div>';
+    const parts=state.date.split('-').map(Number);
+    function segment(parent,name,value,min,max,time) {
+      const node=document.createElement('div');node.setAttribute('role','spinbutton');node.setAttribute('contenteditable','true');node.setAttribute('aria-valuenow',String(value));node.setAttribute('aria-valuemin',String(min));node.setAttribute('aria-valuemax',String(max));node.setAttribute('aria-label',name);
+      if (time && !state.time) node.setAttribute('aria-disabled','true');
+      node.textContent=String(value);parent.append(node);
+      node.addEventListener('beforeinput',event=>{
+        event.preventDefault();window.fixtureScheduleInputs.push((time?'time-':'date-')+name);
+        if (window.fixtureScheduleRejectInput) return;
+        const number=Number(event.data);if (!Number.isInteger(number) || number<min || number>max) return;
+        if (!time) {
+          parts[{year:0,month:1,day:2}[name]]=number;
+          parts[2]=Math.min(parts[2],daysInMonth(parts[0],parts[1]));
+          state.date=parts.map((value,index)=>String(value).padStart(index===0?4:2,'0')).join('-');
+        } else {
+          const clock=state.time.split(':').map(Number);
+          if (name==='minute') clock[1]=number;
+          else clock[0]=window.fixtureScheduleUse12Hour?number%12+(clock[0]>=12?12:0):number;
+          state.time=clock.map(value=>String(value).padStart(2,'0')).join(':');
+        }
+        renderFields();
+      });
+      if (name==='period') node.addEventListener('keydown',event=>{
+        if (!['Home','End'].includes(event.key)) return;event.preventDefault();window.fixtureScheduleInputs.push('time-period');
+        const clock=state.time.split(':').map(Number);clock[0]=clock[0]%12+(event.key==='End'?12:0);state.time=clock.map(value=>String(value).padStart(2,'0')).join(':');renderFields();
+      });
+    }
+    const dateField=area.querySelector('.date-field');
+    segment(dateField,'year',parts[0],1,9999,false);segment(dateField,'month',parts[1],1,12,false);segment(dateField,'day',parts[2],1,daysInMonth(parts[0],parts[1]),false);
+    const timeSwitch=area.querySelector('#editTime');timeSwitch.setAttribute('aria-checked',String(state.time!==null));
+    timeSwitch.addEventListener('click',()=>{state.time=state.time===null?'09:00':null;state.timeZone=state.time===null?null:Intl.DateTimeFormat().resolvedOptions().timeZone;renderFields();});
+    const clock=(state.time || '00:00').split(':').map(Number),field=area.querySelector('.time-picker .field');
+    segment(field,'hour',window.fixtureScheduleUse12Hour?clock[0]%12 || 12:clock[0],window.fixtureScheduleUse12Hour?1:0,window.fixtureScheduleUse12Hour?12:23,true);segment(field,'minute',clock[1],0,59,true);
+    if (window.fixtureScheduleUse12Hour) segment(field,'period',clock[0]>=12?12:0,0,12,true);
+  }
+  dateSwitch.addEventListener('click',()=>{state.date=state.date===null?'2026-11-04':null;if (state.date===null) {state.time=null;state.timeZone=null;}renderFields();});
+  popup.querySelector('.secondary').addEventListener('click',()=>{window.fixtureScheduleCancels++;close();});
+  popup.querySelector('.primary').addEventListener('click',()=>{
+    window.fixtureScheduleSaveClicks++;if (window.fixtureScheduleDisableSave) return;
+    if (JSON.stringify(state)!==initialSchedule) {sessionStorage.setItem(key,JSON.stringify(state));window.fixtureScheduleSaves++;}
+    if (flagged!==initialFlag) {sessionStorage.setItem('fixture-flag-'+row.id,String(flagged));window.fixtureFlagSaves++;}
+    close();renderFixture(document.querySelector('[role="treeitem"][aria-selected="true"]').dataset.list);
+  });
+  renderFields();document.body.append(popup);
+}
 document.querySelector('.rm-new-reminder').addEventListener('click', () => {
   window.fixtureCreationClicks++;
   if (window.fixtureNavigateOnCreate) { location.href='/gone'; return; }
@@ -121,9 +218,120 @@ document.querySelector('.fixture-list-menu [role="menuitem"]').addEventListener(
   document.querySelector('.fixture-list-menu').hidden = true;
   renderFixture(document.querySelector('[role="treeitem"][aria-selected="true"]').dataset.list);
 });
+
+const fixtureAppearanceColors=['rgb(22, 135, 255)','rgb(255, 59, 48)','rgb(52, 199, 89)'];
+const fixtureAppearanceIcons=['<path d="M10 10H54V54H10Z"></path>','<circle cx="32" cy="32" r="20" fill-rule="evenodd"></circle>','<defs><path id="123-synthetic-original" d="M12 12L52 32L12 52Z"></path></defs><mask id="123-synthetic-mask" fill="#fff"><use xlink:href="#123-synthetic-original"></use></mask><path d="M0 0H64V64H0Z" mask="url(#123-synthetic-mask)" fill-rule="evenodd"></path>'];
+function fixtureIcon(index=0) {return '<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">'+fixtureAppearanceIcons[index]+'</svg>';}
+function applyFixtureAppearance(node,color,index) {
+  node.querySelector('.reminder-list-icon')?.remove();const span=document.createElement('span');span.innerHTML=fixtureIcon(index);const svg=span.firstChild;svg.classList.add('reminder-list-icon');svg.style.backgroundColor=color;node.prepend(svg);
+}
+function appendFixtureList(record) {
+  const node=document.createElement('div');node.setAttribute('role','treeitem');node.className='rm-list-menu-item';node.dataset.list=record.key;node.setAttribute('aria-selected','false');
+  node.innerHTML='<span class="reminder-list-icon"></span><button class="inline-editable-label"></button>';
+  node.querySelector('.inline-editable-label').textContent=record.title;applyFixtureAppearance(node,record.color || '#1687ff',record.icon || 0);
+  let tree=document.querySelector('[role="tree"]');if(!tree){tree=document.createElement('div');tree.setAttribute('role','tree');tree.setAttribute('aria-label','提醒事项列表');document.body.prepend(tree);}
+  tree.append(node);return node;
+}
+function selectFixtureList(node) {
+  document.querySelectorAll('[role="treeitem"]').forEach(other=>other.setAttribute('aria-selected',String(other===node)));renderFixture(node.dataset.list);
+}
+function openFixtureList(creating) {
+  if(document.querySelector('.reminder-list-detail,.details-popover'))return;
+  const selected=document.querySelector('[role="treeitem"][aria-selected="true"]'),old=selected?.querySelector('.inline-editable-label').textContent || '';
+  if(!creating && !selected)return;
+  let value=creating?'':old;
+  const panel=document.createElement('div');panel.className='reminder-list-detail';
+  panel.innerHTML='<div class="name-textfield"><input type="text"></div><div class="color-picker"></div><div class="badge-emblem-picker"></div><button class="done-button">完成</button><button class="cancel-button">取消</button>';
+  const input=panel.querySelector('input'),done=panel.querySelector('.done-button');input.value=value;done.disabled=!value.trim();
+  let color=creating?fixtureAppearanceColors[0]:selected.querySelector('.reminder-list-icon').style.backgroundColor,icon=creating?0:Number(sessionStorage.getItem('fixture-list-icon-'+selected.dataset.list) || 0);
+  function choices() {
+    for(const [kind,values,current] of [['color-picker',fixtureAppearanceColors,color],['badge-emblem-picker',fixtureAppearanceIcons,icon]]) {
+      const root=panel.querySelector('.'+kind);root.innerHTML='';
+      values.forEach((value,index)=>{const button=document.createElement('button');button.className='picker-grid-item';button.classList.toggle('is-selected',kind==='color-picker'?value===current:index===current);
+        if(kind==='color-picker')button.style.backgroundColor=value;else button.innerHTML=fixtureIcon(index);
+        button.addEventListener('click',()=>{window.fixtureAppearanceClicks=(window.fixtureAppearanceClicks || 0)+1;if(window.fixtureAppearanceReject)return;if(kind==='color-picker')color=value;else icon=index;choices();});root.append(button);});
+    }
+  }choices();if(window.fixtureAfterAppearanceOpen)window.fixtureAfterAppearanceOpen(panel);
+  input.addEventListener('beforeinput',event=>{if(window.fixtureListRejectInput)event.preventDefault();});
+  input.addEventListener('input',()=>{window.fixtureListInputs++;value=input.value;done.disabled=!value.trim();});
+  panel.querySelector('.cancel-button').addEventListener('click',()=>{window.fixtureListCancels++;panel.remove();});
+  done.addEventListener('click',()=>{
+    window.fixtureListSaves++;if(window.fixtureListRejectDone)return;
+    const records=JSON.parse(sessionStorage.getItem('fixture-lists') || '[]');
+    if(creating) {
+      const record={key:'list-created-'+Date.now()+'-'+records.length,title:value,color,icon};records.push(record);sessionStorage.setItem('fixture-lists',JSON.stringify(records));
+      document.querySelector('.no-lists-note')?.remove();
+      const node=appendFixtureList(record);node.addEventListener('click',()=>selectFixtureList(node));selectFixtureList(node);
+    } else {
+      selected.querySelector('.inline-editable-label').textContent=value;sessionStorage.setItem('fixture-list-name-'+selected.dataset.list,value);
+      applyFixtureAppearance(selected,color,icon);sessionStorage.setItem('fixture-list-color-'+selected.dataset.list,color);sessionStorage.setItem('fixture-list-icon-'+selected.dataset.list,String(icon));
+      const record=records.find(record=>record.key===selected.dataset.list);if(record){record.title=value;record.color=color;record.icon=icon;sessionStorage.setItem('fixture-lists',JSON.stringify(records));}
+    }
+    panel.remove();if(window.fixtureAfterListSave)window.fixtureAfterListSave();
+  });document.body.append(panel);
+}
+document.querySelector('.new-list-button').addEventListener('click',()=>openFixtureList(true));
+document.querySelector('.fixture-list-menu [data-action="info"]').addEventListener('click',()=>{document.querySelector('.fixture-list-menu').hidden=true;openFixtureList(false);});
+document.querySelector('.fixture-list-menu [data-action="delete-list"]').addEventListener('click',()=>{
+  document.querySelector('.fixture-list-menu').hidden=true;window.fixtureListDeleteMenus++;
+  const selected=document.querySelector('[role="treeitem"][aria-selected="true"]');if(!selected)return;
+  const panel=document.createElement('div');panel.className='for-ui-alert';panel.setAttribute('role','alertdialog');
+  panel.innerHTML='<ui-alert-content><h1 class="title"></h1><p class="description">此操作将删除列表中的所有提醒事项。</p></ui-alert-content><ui-alert-footer><button role="button" class="secondary fixture-cancel">取消</button><button role="button" class="primary destructive">删除</button><div aria-hidden="true"><button role="button">取消</button><button role="button" class="destructive">删除</button></div></ui-alert-footer>';
+  panel.querySelector('h1').textContent=(window.fixtureListShared?'删除共享列表“':'删除列表“')+selected.querySelector('.inline-editable-label').textContent+'”？';
+  panel.querySelector('.fixture-cancel').addEventListener('click',()=>{window.fixtureListDeleteCancels++;panel.remove();});
+  panel.querySelector('ui-alert-footer > .destructive').addEventListener('click',()=>{
+    window.fixtureListDeleteCommits++;if(window.fixtureListDeleteReject)return;
+    const key=selected.dataset.list,deleted=JSON.parse(sessionStorage.getItem('fixture-deleted-lists') || '[]');deleted.push(key);sessionStorage.setItem('fixture-deleted-lists',JSON.stringify(deleted));
+    sessionStorage.setItem('fixture-lists',JSON.stringify(JSON.parse(sessionStorage.getItem('fixture-lists') || '[]').filter(record=>record.key!==key)));selected.remove();panel.remove();
+    const next=document.querySelector('[role="treeitem"]');
+    if(next)selectFixtureList(next);else {document.querySelector('[role="treegrid"]').innerHTML='';document.querySelector('[role="treegrid"]').setAttribute('aria-rowcount','0');const note=document.createElement('div');note.className='no-lists-note';document.body.append(note);}
+    if(window.fixtureAfterListDelete)window.fixtureAfterListDelete();
+  });document.body.append(panel);
+});
+for(const record of JSON.parse(sessionStorage.getItem('fixture-lists') || '[]'))appendFixtureList(record);
+for(const key of JSON.parse(sessionStorage.getItem('fixture-deleted-lists') || '[]')){const node=[...document.querySelectorAll('[role="treeitem"]')].find(node=>node.dataset.list===key);node?.remove();}
+document.querySelectorAll('[role="treeitem"]').forEach(node=>{const name=sessionStorage.getItem('fixture-list-name-'+node.dataset.list);if(name!==null)node.querySelector('.inline-editable-label').textContent=name;});
+document.querySelectorAll('[role="treeitem"]').forEach(node=>applyFixtureAppearance(node,sessionStorage.getItem('fixture-list-color-'+node.dataset.list) || node.querySelector('.reminder-list-icon')?.style.backgroundColor || '#1687ff',Number(sessionStorage.getItem('fixture-list-icon-'+node.dataset.list) || 0)));
 document.querySelectorAll('[role="treeitem"]').forEach(node => node.addEventListener('click', () => {
   document.querySelectorAll('[role="treeitem"]').forEach(other => other.setAttribute('aria-selected', String(other === node)));
   renderFixture(node.dataset.list);
 }));
-renderFixture('one');
+function applyFixtureHierarchy() {
+  const parents=JSON.parse(sessionStorage.getItem('fixture-parents') || '{}'),rows=[...document.querySelectorAll('.reminder-item[role="row"]')];
+  const groups=new Map();for(const row of rows){const parent=parents[row.id] || null;groups.has(parent)?groups.get(parent).push(row):groups.set(parent,[row]);}
+  for(const row of rows){const parent=parents[row.id] || null,siblings=groups.get(parent);row.setAttribute('aria-level',parent?'2':'1');row.setAttribute('aria-posinset',String(siblings.indexOf(row)+1));row.setAttribute('aria-setsize',String(siblings.length));if(groups.has(row.id))row.setAttribute('aria-expanded','true');else row.removeAttribute('aria-expanded');}
+}
+
+document.querySelector('[role="treegrid"]').addEventListener('keydown',event=>{
+  if(['[',']'].includes(event.key) && (event.ctrlKey || event.metaKey)) {
+    window.fixtureSubtaskKeys=(window.fixtureSubtaskKeys || 0)+1;event.preventDefault();if(window.fixtureRejectSubtask)return;
+    const rows=[...event.currentTarget.querySelectorAll('.reminder-item')],selected=rows.filter(row=>row.getAttribute('aria-selected')==='true');if(selected.length!==1)return;
+    const target=selected[0],index=rows.indexOf(target),parents=JSON.parse(sessionStorage.getItem('fixture-parents') || '{}');
+    if(event.key===']'){if(parents[target.id])return;let previous;for(let i=index-1;i>=0;i--){if(!parents[rows[i].id]){previous=rows[i];break;}}if(!previous)return;parents[target.id]=previous.id;}
+    else {const old=parents[target.id];if(!old)return;delete parents[target.id];for(let i=index+1;i<rows.length && parents[rows[i].id]===old;i++)parents[rows[i].id]=target.id;}
+    sessionStorage.setItem('fixture-parents',JSON.stringify(parents));applyFixtureHierarchy();if(window.fixtureAfterSubtask)window.fixtureAfterSubtask();return;
+  }
+
+  if(event.target.closest('[contenteditable]') || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  const grid=event.currentTarget,rows=[...grid.querySelectorAll('.reminder-item')];
+  if(['Home','ArrowDown'].includes(event.key)) {
+    if(window.fixtureIgnoreSelection) return;
+    const index=event.key==='Home'?0:Math.min(rows.length-1,rows.findIndex(row=>row===document.activeElement)+1),target=rows[index];
+    if(!target)return;
+    rows.forEach(row=>{if(!window.fixturePreserveMultiSelection || row===target)row.setAttribute('aria-selected',String(row===target));});
+    target.focus();if(window.fixtureFocusEditor)target.querySelector('[role="textbox"]').focus();event.preventDefault();
+  } else if(event.key==='Backspace') {
+    window.fixtureDeleteKeys++;event.preventDefault();
+    if(window.fixtureRejectDeletion)return;
+    const selected=rows.filter(row=>row.getAttribute('aria-selected')==='true');
+    const deleted=JSON.parse(sessionStorage.getItem('fixture-deleted') || '[]');
+    selected.forEach(row=>{deleted.push(row.id);row.remove();window.fixtureDeletionCount++;});
+    sessionStorage.setItem('fixture-deleted',JSON.stringify(deleted));
+    const remaining=[...grid.querySelectorAll('.reminder-item')];grid.setAttribute('aria-rowcount',String(remaining.length));
+    remaining.forEach((row,index)=>{row.setAttribute('aria-posinset',String(index+1));row.setAttribute('aria-setsize',String(remaining.length));});
+    if(window.fixtureAfterDelete)window.fixtureAfterDelete();
+  }
+});
+const initialList=document.querySelector('[role="treeitem"][aria-selected="true"]') || document.querySelector('[role="treeitem"]');
+if(initialList)selectFixtureList(initialList);else {const note=document.createElement('div');note.className='no-lists-note';document.body.append(note);document.querySelector('[role="treegrid"]').setAttribute('aria-rowcount','0');}
 </script></body></html>

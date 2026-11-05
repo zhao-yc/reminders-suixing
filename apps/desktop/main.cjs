@@ -62,7 +62,7 @@ app.whenReady().then(async () => {
   if (liveCheck) {
     const { installLiveCheck } = require('./live-check.cjs');
     stopLiveCheck = installLiveCheck({ controller, ui: mainWindow, directory: path.join(ROOT, '.local'),
-      environment:{packaged:app.isPackaged,profileKind:app.isPackaged?'system-default':'project-local'},
+      environment:{packaged:app.isPackaged,profileKind:app.isPackaged?'system-default':'project-local',appVersion:app.getVersion()},
       sendSnapshot: result => mainWindow.webContents.send('suixing:snapshot', { region: 'cn', result }), quit: () => app.quit() });
     console.log('开发验证通道已就绪，命令信箱位于已忽略的 .local 目录。');
   }
