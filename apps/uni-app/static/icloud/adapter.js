@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.16') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.17') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -16,7 +16,20 @@
   var detailScheduleReads = new Map();
   var connectionEpoch = 0;
   var operationEpoch = 0;
+  var settledCreation = null;
+  function clearSettledCreation() {
+    if(settledCreation) ['beforeinput','input','compositionstart'].forEach(function(type){settledCreation.row.removeEventListener(type,clearSettledCreation,true);});
+    settledCreation=null;
+  }
+  function rememberSettledCreation(doc,id,title,listId) {
+    clearSettledCreation();
+    var row=doc.getElementById(id),editor=row && row.querySelector('.title [role="textbox"]');
+    if(!row || !editor || doc.activeElement!==editor || text(editor)!==title)return;
+    settledCreation={row:row,editor:editor,id:id,title:title,listId:listId,epoch:connectionEpoch};
+    ['beforeinput','input','compositionstart'].forEach(function(type){row.addEventListener(type,clearSettledCreation,true);});
+  }
   function lostConnection() {
+    clearSettledCreation();
     connectionEpoch++;
     pageId='page-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
     lastSnapshot=null;detailScheduleReads.clear();
@@ -158,9 +171,13 @@
     // 自动读取不碰官方编辑草稿或弹层，也不通过失焦结束编辑。
     if(command.background===true) {
       var focused=doc.activeElement;
-      var editing=focused && focused.closest('[contenteditable="true"],input,textarea');
-      var panels=Array.from(doc.querySelectorAll('.reminder-list-detail,.details-popover,[role="dialog"],[role="alertdialog"],[role="menu"],[data-edit="true"]')).some(visibleControl);
-      if(editing || panels)return result(false,'AUTO_READ_DEFERRED','正在官方页面编辑，自动更新暂缓。');
+      // 新增成功后保留官方输入焦点；只放行本次已观察且未再次输入的同一字段。
+      var known=settledCreation && settledCreation.epoch===connectionEpoch && settledCreation.listId===command.listId && settledCreation.row.isConnected && settledCreation.editor.isConnected &&
+        doc.getElementById(settledCreation.id)===settledCreation.row && focused===settledCreation.editor && text(focused)===settledCreation.title;
+      var editing=focused && focused.closest('[contenteditable="true"],input,textarea') && !known;
+      var panels=Array.from(doc.querySelectorAll('.reminder-list-detail,.details-popover,[role="dialog"],[role="alertdialog"],[role="menu"]')).some(visibleControl);
+      var markers=Array.from(doc.querySelectorAll('[data-edit="true"]')).some(function(node){return visibleControl(node) && !(known && (node===settledCreation.row || settledCreation.row.contains(node) && node.contains(settledCreation.editor)));});
+      if(editing || panels || markers)return result(false,'AUTO_READ_DEFERRED','正在官方页面编辑，自动更新暂缓。');
     }
     return read();
   }
@@ -608,6 +625,7 @@
     if (!observed) return result(false, 'UNCERTAIN_WRITE', '新增结果尚未确认，请先读取核对，不要重复创建。', { dispatched: true, cloudConfirmed: false, stage: creationStage });
     setCreationStage('observed');
     var refreshed = read();
+    if(refreshed.ok && refreshed.snapshot)rememberSettledCreation(doc,id,command.title.trim(),command.listId);
     return result(true, 'WEB_STATE_OBSERVED', '新事项已在网页中出现；云端保存仍需核对。', { dispatched: true, cloudConfirmed: false, stage: creationStage, snapshot: refreshed.snapshot || null });
   }
 
@@ -1361,14 +1379,15 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.16',
-    dispose:function(){root.removeEventListener('offline',lostConnection);},
+    version: '0.3.17',
+    dispose:function(){clearSettledCreation();root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
     execute: async function (command) {
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');
       if (!command || !['read','readLists','readList', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance','getSubtaskInfo','setSubtask', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
       var writing=['setCompleted','setText','createItem','setSchedule','setFlagged','deleteItem','createList','renameList','deleteList','setListAppearance','setSubtask'].includes(command.type);
+      if(writing)clearSettledCreation();
       if(root.navigator.onLine===false){lostConnection();return result(false,'OFFLINE','网络已断开，保留上次读取内容；恢复连接后请刷新。',{dispatched:false,cloudConfirmed:false});}
       inFlight = true;
       operationEpoch=connectionEpoch;

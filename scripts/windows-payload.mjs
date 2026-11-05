@@ -31,6 +31,8 @@ export async function payloadManifest(directory) {
 /** 安装产物中的关键代码必须与当前源文件和 HBuilderX 产物逐字一致。 */
 export async function verifyCriticalFiles(root,directory) {
   const code=(await fs.readdir(path.join(root,'apps/desktop'))).filter(name=>name.endsWith('.cjs')).map(name=>'apps/desktop/'+name);
+  const assets='apps/desktop/assets';
+  if(await fs.stat(path.join(root,assets)).catch(()=>null))code.push(...(await payloadManifest(path.join(root,assets))).map(file=>assets+'/'+file.path));
   code.push('apps/uni-app/static/icloud/adapter.js');
   const frontend='apps/uni-app/unpackage/dist/build/web';
   const web=await payloadManifest(path.join(root,frontend));
