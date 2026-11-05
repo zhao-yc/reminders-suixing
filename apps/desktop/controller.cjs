@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { setTimeout: delay } = require('node:timers/promises');
 const { BrowserWindow, session, net } = require('electron');
 const { allowedURL, allowStorage, browserUserAgent, validCommand } = require('./policy.cjs');
 const { inspectFrame, diagnosticRoute, tracePublicExceptions } = require('./page-diagnostics.cjs');
@@ -28,7 +29,11 @@ function createController(options = {}) {
   let connectionCache=null,connectionFailures=0,connectionSuspended=false;
   const trace = [];
   const fixtureURL = options.fixtureURL;
-  const canNavigate = value => fixtureURL ? new URL(value).origin === new URL(fixtureURL).origin : allowedURL(value);
+  const fixtureOrigin = fixtureURL ? new URL(fixtureURL).origin : null;
+  const canNavigate = value => {
+    if (!fixtureOrigin) return allowedURL(value);
+    try {return new URL(value).origin === fixtureOrigin;} catch {return false;}
+  };
 
   /** 诊断仅保留公开路由和错误类型；不访问请求体、认证头、Cookie 或输入框的值。 */
   function route(value) {
@@ -162,28 +167,52 @@ function createController(options = {}) {
       }
       return result;
     };
-    let timer;
-    try {
-      const network=await connectionState(region,write || ['read','readLists','readList','selectList'].includes(command.type));
-      if(network.state==='offline' || network.state==='unavailable')return finish({ok:false,code:network.state==='offline'?'OFFLINE':'CONNECTION_UNAVAILABLE',message:'连接暂时不可用，保留上次读取内容；恢复后请刷新。',dispatched:false,cloudConfirmed:false});
-      if(write && network.state!=='available')return finish({ok:false,code:'CONNECTION_UNAVAILABLE',message:'暂不能确认连接，请先读取核对。',dispatched:false,cloudConfirmed:false});
+    const mayWait = command.type === 'read' || command.type === 'readLists';
+    const pageNotReady = {ok:false,code:'PAGE_NOT_READY',message:'官方页面或连接尚未就绪，请稍后重新读取。',dispatched:false,cloudConfirmed:false};
+    let pendingPage = false;
+    async function attempt(force, deadline = Infinity) {
+      pendingPage = false;
+      const network=await connectionState(region,force);
+      if(network.state==='offline' || network.state==='unavailable')return {ok:false,code:network.state==='offline'?'OFFLINE':'CONNECTION_UNAVAILABLE',message:'连接暂时不可用，保留上次读取内容；恢复后请刷新。',dispatched:false,cloudConfirmed:false};
+      if(write && network.state!=='available')return {ok:false,code:'CONNECTION_UNAVAILABLE',message:'暂不能确认连接，请先读取核对。',dispatched:false,cloudConfirmed:false};
+      if(performance.now()>=deadline)return pageNotReady;
       if(network.state!=='available') {
         if(!site || site.isDestroyed() || activeRegion!==region)ensure(region);
-        return finish({ok:false,code:'PAGE_NOT_READY',message:'官方页面或连接尚未就绪，请稍后重新读取。',dispatched:false,cloudConfirmed:false});
+        pendingPage=site.webContents.isLoading();
+        return pageNotReady;
       }
       const window = ensure(region);
       const frames = window.webContents.mainFrame.framesInSubtree;
       const target = frames.find(frame => /\/applications\/reminders2\//.test(frame.url) && allowedURL(frame.url)) || window.webContents.mainFrame;
-      if (!canNavigate(target.url)) return finish({ ok: false, code: 'PAGE_NOT_READY', message: '官方页面正在载入，请稍后读取。' });
+      if (!canNavigate(target.url)) {
+        pendingPage=window.webContents.isLoading();
+        return pageNotReady;
+      }
       const phaseDiagnostics=options.diagnostics && command.type === 'createItem' ? '\nwindow.__suixingDiagnosticPhases=true;window.__suixingDiagnosticWriteSequence=' + sequence + ';' : '';
       const operation = target.executeJavaScript(SOURCE + phaseDiagnostics + '\nwindow.__suixingAdapter.execute(' + JSON.stringify(command) + ');', true);
+      let timer;
       const timeout = new Promise(resolve => {
-        timer = setTimeout(() => resolve({ ok: false, code: write ? 'UNCERTAIN_WRITE' : 'BRIDGE_TIMEOUT', message: '页面响应超时，请打开官方页面核对。', cloudConfirmed: false }), 18000);
+        timer = setTimeout(() => resolve({ ok: false, code: write ? 'UNCERTAIN_WRITE' : 'BRIDGE_TIMEOUT', message: '页面响应超时，请打开官方页面核对。', cloudConfirmed: false }), Math.min(18000,Math.max(1,deadline-performance.now())));
       });
-      return finish(await Promise.race([operation, timeout]));
+      try {
+        const reply=await Promise.race([operation,timeout]);
+        pendingPage=['PAGE_NOT_READY','LIST_LOADING'].includes(reply?.code);
+        return reply;
+      } finally {clearTimeout(timer);}
+    }
+    try {
+      let reply=await attempt(write || mayWait || ['readList','selectList'].includes(command.type));
+      // 前台刷新可等待官方页面就绪。后台读、带页面绑定的命令和写入仍只执行一次。
+      const deadline=performance.now()+7000;
+      while(mayWait && pendingPage && performance.now()+250<deadline) {
+        await delay(250);
+        if(performance.now()>=deadline)break;
+        reply=await attempt(false,deadline);
+      }
+      return finish(reply);
     } catch {
       return finish({ ok: false, code: write ? 'UNCERTAIN_WRITE' : 'PAGE_NOT_READY', message: '请在官方页面完成登录，等待清单显示后重新读取。', cloudConfirmed: false });
-    } finally { clearTimeout(timer); busy = false; }
+    } finally { busy = false; }
   }
 
   async function reconnectSite(region='cn') {
