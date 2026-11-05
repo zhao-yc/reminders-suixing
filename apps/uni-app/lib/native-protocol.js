@@ -1,9 +1,11 @@
+import { validSchedule } from './schedule.js';
+
 /** 原生容器之间共用的数据协议；此模块不提供网页可调用的原生 API。 */
 export const REPLY_PREFIX = 'suixingbridge://reply?payload=';
 export const MAX_PAYLOAD = 110000;
 
 export function isNativeWrite(type) {
-  return type === 'setCompleted' || type === 'setText' || type === 'setFlagged' || type === 'createItem';
+  return ['setCompleted', 'setText', 'setFlagged', 'createItem', 'setSchedule'].includes(type);
 }
 
 export function normalizeCommand(command, { scopedReads = false, itemWrites = false } = {}) {
@@ -14,7 +16,7 @@ export function normalizeCommand(command, { scopedReads = false, itemWrites = fa
   if (!bounded(command.pageId, 150) || !bounded(command.listId, 150)) return null;
   const result = { type, pageId: command.pageId, listId: command.listId };
   if (type === 'selectList' || (scopedReads && type === 'readList')) return result;
-  if (!isNativeWrite(type) || (type !== 'setCompleted' && !itemWrites)) return null;
+  if ((!isNativeWrite(type) && type !== 'getSchedule') || (type !== 'setCompleted' && !itemWrites)) return null;
   if (type === 'createItem') {
     const { title, requestId } = command;
     if (!bounded(title, 1000) || !title.trim() || /[\r\n]/.test(title) ||
@@ -24,6 +26,12 @@ export function normalizeCommand(command, { scopedReads = false, itemWrites = fa
   const { id, fingerprint, expectedCompleted } = command;
   if (!bounded(id, 1024) || !bounded(fingerprint, 16000) || typeof expectedCompleted !== 'boolean') return null;
   const target = { ...result, id, fingerprint, expectedCompleted };
+  if (type === 'getSchedule') return target;
+  if (type === 'setSchedule') {
+    const { expectedSchedule, expectedScheduleFingerprint, value } = command;
+    if (!validSchedule(expectedSchedule) || !bounded(expectedScheduleFingerprint, 200) || !validSchedule(value)) return null;
+    return { ...target, expectedSchedule: { ...expectedSchedule }, expectedScheduleFingerprint, value: { ...value } };
+  }
   if (type === 'setCompleted') return typeof command.completed === 'boolean' ? { ...target, completed: command.completed } : null;
   if (type === 'setFlagged') {
     const { flagged, expectedFlagged } = command;

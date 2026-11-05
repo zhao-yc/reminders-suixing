@@ -146,6 +146,71 @@ test('Android 未读取或新增参数有误时不派发，新增回执中断后
   assert.equal(view.scripts.length, 2);
 });
 
+test('Android 设置全天、指定时间和清除日期时各保存一次，详情来源也遵循清除顺序', async t => {
+  const { bridge, open } = setup(t, { realAdapter: true, timeoutMs: 5000 });
+  const view = await open();
+  assert.equal(bridge.capabilities.editSchedule, true);
+  let { snapshot: current } = await bridge.execute({ type: 'read' });
+  const id = current.items[1].id;
+  const otherId = current.items[0].id;
+  const zone = view.window.Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const empty = { date: null, time: null, timeZone: null };
+  const allDay = { date: '2030-01-15', time: null, timeZone: null };
+  const timed = { ...allDay, time: '14:35', timeZone: zone };
+  const switches = [];
+  let lastChange;
+  for (const value of [allDay, timed, empty]) {
+    if (value === empty) {
+      view.window.fixtureScheduleOmitLoadedDate = true;
+      view.window.renderFixture('one');
+      ({ snapshot: current } = await bridge.execute({ type: 'read' }));
+      view.window.document.addEventListener('click', event => {
+        if (['editTime', 'atDate'].includes(event.target.id)) switches.push(event.target.id);
+      }, true);
+    }
+    const item = current.items.find(candidate => candidate.id === id);
+    const target = { pageId: current.pageId, listId: item.listId, id, fingerprint: item.fingerprint, expectedCompleted: item.completed };
+    const before = await bridge.execute({ type: 'getSchedule', ...target });
+    assert.equal(before.code, 'READY');
+    if (value === empty) {
+      assert.equal(before.scheduleSource, 'official-details');
+      assert.deepEqual(before.schedule, timed);
+    }
+    lastChange = { type: 'setSchedule', ...target, expectedSchedule: before.schedule,
+      expectedScheduleFingerprint: before.scheduleFingerprint, value };
+    const result = await bridge.execute(lastChange);
+    assert.equal(result.code, 'WEB_STATE_OBSERVED');
+    assert.equal(result.cloudConfirmed, false);
+    current = result.snapshot;
+    assert.deepEqual(JSON.parse(view.window.sessionStorage.getItem('fixture-schedule-' + id)), value);
+  }
+  assert.deepEqual(switches, ['editTime', 'atDate']);
+  assert.equal((await bridge.execute(lastChange)).code, 'STALE_VIEW');
+  assert.equal(view.window.fixtureScheduleSaveClicks, 3);
+  assert.equal(view.window.sessionStorage.getItem('fixture-schedule-' + otherId), null);
+});
+
+test('Android 日期命令校验真实日期和指纹，失去保存回执时要求重新读取', async t => {
+  const state = setup(t);
+  const view = await state.open();
+  const empty = { date: null, time: null, timeZone: null };
+  const read = { ...targetCommand, type: 'getSchedule' };
+  const write = { ...targetCommand, type: 'setSchedule', expectedSchedule: empty,
+    expectedScheduleFingerprint: 'synthetic-date', value: { ...empty, date: '2030-01-15' } };
+  for (const patch of [{ expectedScheduleFingerprint: '' }, { value: { ...empty, date: '2030-02-29' } }, { expectedSchedule: { ...empty, time: '12:00' } }]) {
+    assert.equal((await state.bridge.execute({ ...write, ...patch })).code, 'INVALID_COMMAND');
+  }
+  for (const command of [read, write]) assert.equal((await state.bridge.execute(command)).code, 'READ_REQUIRED');
+  assert.equal(view.scripts.length, 0);
+  await state.read(view);
+  const saving = state.bridge.execute(write);
+  await tick();
+  view.calls.at(-1).reject(new Error('合成日期保存异常'));
+  assert.equal((await saving).code, 'UNCERTAIN_WRITE');
+  assert.equal((await state.bridge.execute(read)).code, 'READ_REQUIRED');
+  assert.equal(view.scripts.length, 2);
+});
+
 test('Android 拒绝不完整的文字和旗标命令，保留待核对前的写入保护', async t => {
   const { bridge, open } = setup(t);
   const view = await open();
