@@ -31,6 +31,33 @@ test('新增字段再次输入或开始输入法合成便撤销后台只读放�
   }
 });
 
+test('仅已确认的同一新增行日期保存可保留原标题的后台只读放行',async t=>{
+  const {execute,window}=setup(t),before=await execute({type:'read'}),created=await execute(creation(before.snapshot));
+  const editor=window.document.activeElement,row=editor.closest('.reminder-item');
+  row.setAttribute('data-edit','true');
+  window.fixtureReturnToTitleAfterSchedule=true;
+  const item=created.snapshot.items.find(candidate=>candidate.id===row.id);
+  const scope={pageId:created.snapshot.pageId,listId:item.listId};
+  const binding={...scope,id:item.id,fingerprint:item.fingerprint,expectedCompleted:false};
+  const schedule=await execute({type:'getSchedule',...binding});
+  const value={date:'2030-01-15',time:'14:35',timeZone:schedule.editorTimeZone};
+  const saved=await execute({type:'setSchedule',...binding,expectedSchedule:schedule.schedule,
+    expectedScheduleFingerprint:schedule.scheduleFingerprint,value});
+  assert.equal(saved.code,'WEB_STATE_OBSERVED');
+  assert.equal(window.document.activeElement,editor);
+  const background={type:'readList',...scope,background:true};
+  assert.equal((await execute(background)).code,'READY');
+  assert.equal(window.fixtureScheduleSaveClicks,1);
+  assert.equal(window.fixtureEarlyCreationBlurs,0);
+  const stale=await execute({type:'setSchedule',...binding,expectedSchedule:schedule.schedule,
+    expectedScheduleFingerprint:schedule.scheduleFingerprint,value});
+  assert.equal(stale.code,'STALE_VIEW');
+  const paused=await execute(background);
+  assert.equal(paused.code,'AUTO_READ_DEFERRED');
+  assert.equal(paused.reason,'focused-field');
+  assert.equal(window.fixtureScheduleSaveClicks,1);
+});
+
 test('新增字段不匹配及连接失效后不借用旧放行',async t=>{
   const {execute,window}=setup(t),before=await execute({type:'read'}),created=await execute(creation(before.snapshot));
   const editor=window.document.activeElement,command={type:'readList',pageId:created.snapshot.pageId,listId:created.snapshot.activeListId,background:true};

@@ -28,6 +28,30 @@ test('删除预检只形成唯一选区并取消详情，不提交任何事项�
   assert.equal(window.document.querySelector('.details-popover'),null);
 });
 
+test('单行清单的 Home 无响应时只点击一次官方行，仍需排他选区和行焦点',async t=>{
+  const {window,execute,row}=await setup(t);
+  const grid=row.closest('[role="treegrid"]');
+  grid.firstElementChild.remove();
+  grid.setAttribute('aria-rowcount','1');
+  row.setAttribute('aria-posinset','1');
+  row.setAttribute('aria-setsize','1');
+  window.fixtureIgnoreSelection=true;
+  let clicks=0;
+  row.addEventListener('click',event=>{
+    if(event.target!==row)return;
+    clicks++;
+    row.setAttribute('aria-selected','true');
+    row.focus();
+  });
+  const fresh=(await execute({type:'read'})).snapshot;
+  const preview=await execute(command(fresh,'getDeleteInfo',0));
+  assert.equal(preview.code,'DELETE_READY');
+  assert.equal(preview.dispatched,false);
+  assert.equal(clicks,1);
+  assert.equal(window.document.activeElement,row);
+  assert.equal(window.fixtureDeleteKeys,0);
+});
+
 test('同名事项仅删除确认的记录，Backspace 派发一次，其他字段保持，合成重载仍不存在',async t=>{
   const {window,execute,snapshot}=await setup(t);
   const result=await execute(command(snapshot));

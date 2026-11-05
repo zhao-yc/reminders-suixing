@@ -5,20 +5,19 @@ const {
 const BASE_LIST = '随行验证（2026-11-04）';
 const TEST_LIST = '随行验证 · Windows 通知实测';
 const TEST_ITEM = '随行验证 · Windows 到期通知实测';
-const NOTIFICATION_TEST_WRITES = new Map([
-  ['create-notification-test-list', 'createList'],
-  ['create-notification-test-item', 'createItem'],
-  ['schedule-notification-test-item', 'setSchedule'],
-  ['delete-notification-test-item', 'deleteItem'],
-  ['delete-notification-test-list', 'deleteList']
+const INITIAL_TEST_SCHEDULE = {date:'2026-11-05', time:'14:05', timeZone:'Asia/Shanghai'};
+const NOTIFICATION_TEST_WRITES = new Set([
+  'create-notification-test-list', 'create-notification-test-item', 'schedule-notification-test-item',
+  'reschedule-notification-test-item', 'delete-notification-test-item', 'delete-notification-test-list'
 ]);
 const NOTIFICATION_TEST_COMMANDS = new Set([
-  ...NOTIFICATION_TEST_WRITES.keys(), 'read-notification-test', 'check-notification-test-readiness',
+  ...NOTIFICATION_TEST_WRITES, 'read-notification-test', 'check-notification-test-readiness', 'check-notification-test-cleanup',
   'arm-notification-test', 'poll-notification-test', 'stop-notification-test'
 ]);
 const pause = () => new Promise(resolve => setTimeout(resolve, 150));
 const success = (code, evidence) => ({ok:true, code, ...evidence});
 const failed = code => ({ok:false, code});
+const sameSchedule = (actual, expected) => !!actual && ['date', 'time', 'timeZone'].every(key => actual[key] === expected[key]);
 
 async function setTestNotificationPreference(enabled) {
   const wait = () => new Promise(resolve => setTimeout(resolve, 100));
@@ -137,10 +136,26 @@ function createNotificationLiveCheck({controller, ui, notifications, sendSnapsho
       return failed('TEST_NOTIFICATION_ITEM_REQUIRED');
     }
     const item = {...scope, id:target.id, title:TEST_ITEM, completed:false};
+    const binding = {...scope, id:target.id, fingerprint:target.fingerprint, expectedCompleted:false};
+    if (command === 'check-notification-test-cleanup') {
+      const preview = await read({type:'getDeleteInfo', ...binding});
+      const failureStages = {
+        '事项已变化，请先刷新。':'initial-binding',
+        '事项或清单已变化，请重新核对。':'after-details',
+        '目标或选区已变化，请重新核对。':'after-selection',
+        '请在官方页面核对；当前仅支持已完整加载清单中的普通单项删除。':'initial-scope',
+        '请先关闭官方页面已有的编辑窗口，再刷新。':'open-details',
+        '重复事项或编辑状态尚未结束，请在官方页面删除。':'close-details',
+        '无法确认官方页面单选，请在官方页面核对。':'first-selection',
+        '选区已变化，请在官方页面核对。':'move-selection'
+      };
+      return {ok:preview.ok && preview.deleteReady === true, code:preview.code,
+        stage:preview.ok ? undefined : failureStages[preview.message] || 'unknown', dispatched:false};
+    }
     if (command === 'delete-notification-test-item') return write('deleteItem', deleteTestItem, item, current);
     if (command === 'arm-notification-test') {
       if (!scheduled || scheduled.id !== target.id || Date.now() + 30000 >= scheduled.deadline ||
-          Object.keys(scheduled.value).some(key => target.schedule?.[key] !== scheduled.value[key]) ||
+          !sameSchedule(target.schedule, scheduled.value) ||
           notifications.state().enabled || !notifications.state().supported || !ui.isVisible())
         return failed('TEST_NOTIFICATION_NOT_READY');
       observation = {shown:0, hiddenAtShow:true, checksAfterShow:0, sequence:controller.lastWriteOutcome()?.sequence,
@@ -149,9 +164,12 @@ function createNotificationLiveCheck({controller, ui, notifications, sendSnapsho
       ui.close();
       return success('TEST_NOTIFICATION_ARMED', {hidden:!ui.isVisible(), enabled:notifications.state().enabled});
     }
-    if (command !== 'schedule-notification-test-item') return failed('TEST_NOTIFICATION_SCOPE_REQUIRED');
-    const before = await read({type:'getSchedule', ...scope, id:target.id, fingerprint:target.fingerprint, expectedCompleted:false});
-    if (!before.ok || before.schedule?.date !== null || before.schedule.time !== null) return failed('TEST_NOTIFICATION_SCHEDULE_NOT_EMPTY');
+    const rescheduling = command === 'reschedule-notification-test-item';
+    if (command !== 'schedule-notification-test-item' && !rescheduling) return failed('TEST_NOTIFICATION_SCOPE_REQUIRED');
+    const expected = rescheduling ? INITIAL_TEST_SCHEDULE : {date:null, time:null, timeZone:null};
+    if (rescheduling && !sameSchedule(target.schedule, expected)) return failed('TEST_NOTIFICATION_SCHEDULE_CHANGED');
+    const before = await read({type:'getSchedule', ...binding});
+    if (!before.ok || !sameSchedule(before.schedule, expected)) return failed('TEST_NOTIFICATION_SCHEDULE_CHANGED');
     const deadline = Math.floor(Date.now()/60000)*60000 + 3*60000;
     const formatter = new Intl.DateTimeFormat('en-CA-u-ca-gregory-nu-latn', {
       timeZone:before.editorTimeZone, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23'
@@ -163,9 +181,11 @@ function createNotificationLiveCheck({controller, ui, notifications, sendSnapsho
     if (!written.ok) return written;
     const after = await read({type:'readList', ...scope});
     const schedule = after.ok && after.snapshot.items.length === 1 && after.snapshot.items[0].id === target.id && after.snapshot.items[0].schedule;
-    if (!schedule || Object.keys(value).some(key => schedule[key] !== value[key])) return failed('TEST_NOTIFICATION_SCHEDULE_UNCONFIRMED');
+    if (!sameSchedule(schedule, value)) return failed('TEST_NOTIFICATION_SCHEDULE_UNCONFIRMED');
     scheduled = {deadline, value, id:target.id};
-    return {...written, schedule};
+    const background = await read({type:'readList', ...scope, background:true});
+    return {...written, schedule, backgroundAfterSave:background.code,
+      backgroundBlocker:['focused-field','open-panel','active-marker'].includes(background.reason) ? background.reason : undefined};
   }
   return {observe, run};
 }

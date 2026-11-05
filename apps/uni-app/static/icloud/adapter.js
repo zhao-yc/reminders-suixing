@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.17') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.19') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -177,7 +177,9 @@
       var editing=focused && focused.closest('[contenteditable="true"],input,textarea') && !known;
       var panels=Array.from(doc.querySelectorAll('.reminder-list-detail,.details-popover,[role="dialog"],[role="alertdialog"],[role="menu"]')).some(visibleControl);
       var markers=Array.from(doc.querySelectorAll('[data-edit="true"]')).some(function(node){return visibleControl(node) && !(known && (node===settledCreation.row || settledCreation.row.contains(node) && node.contains(settledCreation.editor)));});
-      if(editing || panels || markers)return result(false,'AUTO_READ_DEFERRED','正在官方页面编辑，自动更新暂缓。');
+      if(editing || panels || markers)return result(false,'AUTO_READ_DEFERRED','正在官方页面编辑，自动更新暂缓。',{
+        reason:editing?'focused-field':panels?'open-panel':'active-marker'
+      });
     }
     return read();
   }
@@ -1241,7 +1243,14 @@
       node.dispatchEvent(new context.doc.defaultView.KeyboardEvent('keydown',{key:name,bubbles:true,cancelable:true,ctrlKey:false,metaKey:false,shiftKey:false,altKey:false,repeat:false}));
     }
     assertConnected();scope.grid.focus();key(scope.grid,'Home');
-    if(!await until(function(){return single(scope.rows[0]);},900)) return {error:result(false,'DELETE_UNAVAILABLE','无法确认官方页面单选，请在官方页面核对。')};
+    var first=scope.rows[0];
+    var firstSelected=await until(function(){return single(first);},900);
+    // 只有一个已核对的行时，可按官方界面的单击行为选中它。仍须核对焦点与排他选区。
+    if(!firstSelected && scope.rows.length===1 && unchanged() && !context.doc.activeElement?.closest('[contenteditable="true"],input,textarea')) {
+      activate(first);
+      firstSelected=await until(function(){return single(first);},900);
+    }
+    if(!firstSelected) return {error:result(false,'DELETE_UNAVAILABLE','无法确认官方页面单选，请在官方页面核对。')};
     for(var index=1;index<=scope.index;index++) {
       key(scope.rows[index-1],'ArrowDown');
       if(!await until(function(){return single(scope.rows[index]);},900)) return {error:result(false,'DELETE_UNAVAILABLE','选区已变化，请在官方页面核对。')};
@@ -1379,7 +1388,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.17',
+    version: '0.3.19',
     dispose:function(){clearSettledCreation();root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
@@ -1387,7 +1396,11 @@
       if (inFlight) return result(false, 'BUSY', '上一项操作尚未结束。');
       if (!command || !['read','readLists','readList', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance','getSubtaskInfo','setSubtask', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return result(false, 'INVALID_COMMAND', '不支持的操作。');
       var writing=['setCompleted','setText','createItem','setSchedule','setFlagged','deleteItem','createList','renameList','deleteList','setListAppearance','setSubtask'].includes(command.type);
-      if(writing)clearSettledCreation();
+      // 日期确认会把官方焦点还给刚新增的标题。仅同一行的日期操作可保留原只读凭据。
+      var sameCreationSchedule=command.type==='setSchedule' && settledCreation && command.pageId===pageId &&
+        command.listId===settledCreation.listId && command.id===settledCreation.id;
+      var scheduleConfirmed=false;
+      if(writing && !sameCreationSchedule)clearSettledCreation();
       if(root.navigator.onLine===false){lostConnection();return result(false,'OFFLINE','网络已断开，保留上次读取内容；恢复连接后请刷新。',{dispatched:false,cloudConfirmed:false});}
       inFlight = true;
       operationEpoch=connectionEpoch;
@@ -1406,7 +1419,11 @@
         if (['createList','renameList'].includes(command.type)) return await changeList(command);
         if (command.type === 'deleteList') return await deleteList(command);
         if (['getListAppearance','setListAppearance'].includes(command.type))return await listAppearance(command,command.type==='setListAppearance');
-        if (command.type === 'setSchedule') return await setSchedule(command);
+        if (command.type === 'setSchedule') {
+          var savedSchedule=await setSchedule(command);
+          scheduleConfirmed=savedSchedule.ok && ['WEB_STATE_OBSERVED','UNCHANGED'].includes(savedSchedule.code);
+          return savedSchedule;
+        }
         if (command.type === 'setFlagged') return await setFlagged(command);
         if (command.type === 'setText') return await setText(command);
         if (command.type === 'createItem') return await createItem(command);
@@ -1415,7 +1432,10 @@
         lastSnapshot = null;
         if(_?.message==='SUIXING_OFFLINE') return result(false,writing?'UNCERTAIN_WRITE':'OFFLINE',writing?'网络中断，修改结果尚未确认；请联网后读取核对，不要重复提交。':'网络已断开，恢复连接后请刷新。',{cloudConfirmed:false,dispatched:writing?undefined:false});
         return result(false, ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList','deleteList','setListAppearance','setSubtask'].includes(command.type) ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED', '页面结构已变化，请在官方页面核对后重新读取。', { cloudConfirmed: false, stage: command.type === 'createItem' ? creationStage : undefined });
-      } finally { inFlight = false; }
+      } finally {
+        if(sameCreationSchedule && !scheduleConfirmed)clearSettledCreation();
+        inFlight = false;
+      }
     }
   };
 })(window);
