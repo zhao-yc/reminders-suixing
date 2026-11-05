@@ -232,6 +232,7 @@ async function runSmoke({ frontendURL, root }) {
     ui.setContentSize(1160,830);await new Promise(resolve=>setTimeout(resolve,100));
     ui.hide();
     const unchanged=await controller.execute({type:'read'},'cn');
+    assert.equal(unchanged.ok,true,'排序后的只读核对失败：'+unchanged.code);
     assert.deepEqual(unchanged.snapshot.items.map(item=>item.id),originalIds);
     const sortingWrites=await controller.window().webContents.executeJavaScript('(()=>{const w=document.querySelector("iframe").contentWindow;return {completion:w.fixtureClicks,date:w.fixtureScheduleSaveClicks,text:w.fixtureTextSaves}})()');
     assert.deepEqual(sortingWrites,{completion:0,date:0,text:0});

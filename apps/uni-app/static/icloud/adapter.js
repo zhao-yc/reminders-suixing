@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.14') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.15') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -831,9 +831,20 @@
     var dateSwitch = panel.querySelector('#atDate[role="switch"]');
     if (!dateSwitch || dateSwitch.getAttribute('aria-disabled') === 'true') return false;
     var enabled = value.date !== null;
+    if (!enabled && dateSwitch.getAttribute('aria-checked')==='true') {
+      var timeControls=panel.querySelectorAll('#editTime[role="checkbox"], #editTime[role="switch"]');
+      var clearingTime=timeControls.length===1 && timeControls[0];
+      if(!clearingTime || !['true','false'].includes(clearingTime.getAttribute('aria-checked')))return false;
+      // 先取消时间并等待官方控件确认，再关闭日期，避免把仍启用的时间留在隐藏草稿中。
+      if(clearingTime.getAttribute('aria-checked')==='true') {
+        if(clearingTime.disabled || clearingTime.getAttribute('aria-disabled')==='true')return false;
+        activate(clearingTime);
+        if(!await until(function(){var controls=panel.querySelectorAll('#editTime[role="checkbox"], #editTime[role="switch"]');var draft=readScheduleDetails(details);return controls.length===1 && controls[0].getAttribute('aria-checked')==='false' && draft && draft.date!==null && draft.time===null;},900))return false;
+      }
+    }
     if (dateSwitch.getAttribute('aria-checked') !== String(enabled)) activate(dateSwitch);
     if (!await until(function () { var current = panel.querySelector('#atDate[role="switch"]'); return current && current.getAttribute('aria-checked') === String(enabled); },900)) return false;
-    if (!enabled) return true;
+    if (!enabled) return sameSchedule(readScheduleDetails(details),value);
     if (!await until(function () { return scheduleSegments(panel,false); },900)) return false;
     var timeSwitch = panel.querySelector('#editTime[role="checkbox"], #editTime[role="switch"]');
     if (!timeSwitch || timeSwitch.getAttribute('aria-disabled') === 'true') return false;
@@ -1342,7 +1353,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.14',
+    version: '0.3.15',
     dispose:function(){root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */

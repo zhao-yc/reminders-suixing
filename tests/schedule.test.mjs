@@ -201,6 +201,29 @@ async function detailOnlyDate(t,time='14:35') {
   return {...state,snapshot:(await execute({type:'read'})).snapshot,value,id};
 }
 
+test('清除带时间日期先取消时间再关闭日期，只保存一次并复核；缺失字段来源同样适用',async t=>{
+  const {window,execute,snapshot}=await detailOnlyDate(t),read=await execute(command(snapshot)),events=[];
+  window.document.addEventListener('click',event=>{
+    if(event.target.id==='editTime')events.push('time');
+    if(event.target.id==='atDate') {
+      events.push('date');
+      if(window.document.querySelector('#editTime')?.getAttribute('aria-checked')==='true'){event.preventDefault();event.stopImmediatePropagation();}
+    }
+  },true);
+  const change=command(read.snapshot,'setSchedule',0,{expectedSchedule:read.schedule,expectedScheduleFingerprint:read.scheduleFingerprint,value:empty});
+  const result=await execute(change);
+  assert.equal(result.code,'WEB_STATE_OBSERVED');assert.deepEqual(events,['time','date']);assert.equal(window.fixtureScheduleSaveClicks,1);
+  assert.equal(JSON.parse(window.sessionStorage.getItem('fixture-schedule-'+snapshot.items[0].id)).date,null);assert.equal(window.document.querySelector('.details-popover'),null);
+});
+
+test('取消时间未确认时不关闭日期或存储，不把隐藏时间当作已经清除',async t=>{
+  const {window,execute,snapshot}=await detailOnlyDate(t),read=await execute(command(snapshot));let dates=0;
+  window.document.addEventListener('click',event=>{if(event.target.id==='editTime'){event.preventDefault();event.stopImmediatePropagation();}if(event.target.id==='atDate')dates++;},true);
+  const result=await execute(command(read.snapshot,'setSchedule',0,{expectedSchedule:read.schedule,expectedScheduleFingerprint:read.scheduleFingerprint,value:empty}));
+  assert.equal(result.code,'UNCERTAIN_WRITE');assert.equal(dates,0);assert.equal(window.fixtureScheduleSaveClicks,0);
+  assert.equal(JSON.parse(window.sessionStorage.getItem('fixture-schedule-'+snapshot.items[0].id)).time,'14:35');
+});
+
 test('时间戳缺失时只读同一事项的官方日期控件，取消后发放页面内读回凭据',async t=>{
   const {window,execute,snapshot,value}=await detailOnlyDate(t);
   assert.equal(snapshot.items[0].schedule,null);
