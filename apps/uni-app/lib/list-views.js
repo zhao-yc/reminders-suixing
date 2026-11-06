@@ -2,7 +2,8 @@ import { validSchedule, localDateString } from './schedule.js';
 
 export const VIEW_OPTIONS = [
   {value:'pending',label:'未完成'}, {value:'today',label:'今天'},
-  {value:'scheduled',label:'计划'}, {value:'completed',label:'已完成'}
+  {value:'scheduled',label:'计划'}, {value:'completed',label:'已完成'},
+  {value:'overdue',label:'逾期',desktopOnly:true}
 ];
 
 /** 只筛选当前快照；不从附注猜日期，不读取详情或其他清单。 */
@@ -22,11 +23,14 @@ export function projectLoadedItems(items,options={}) {
   // 指定时间来自读取时的本机时区；系统时区变化后不沿用旧日历日归类。
   const dayKnown=item=>valid(item) && (item.schedule.time===null || item.schedule.timeZone===zone);
   const dueToday=item=>dated(item) && dayKnown(item) && item.schedule.date<=today;
+  const overdue=item=>dueToday(item) && item.schedule.date<today;
   const pending=items.filter(item=>item.completed===false);
-  const counts={pending:pending.length,today:pending.filter(dueToday).length,scheduled:pending.filter(dated).length,completed:items.filter(item=>item.completed===true).length};
+  const counts={pending:pending.length,today:pending.filter(dueToday).length,scheduled:pending.filter(dated).length,
+    completed:items.filter(item=>item.completed===true).length,overdue:pending.filter(overdue).length,flagged:pending.filter(item=>item.flagged===true).length};
   const unknownDates=pending.filter(item=>!valid(item)).length;
   const unknownToday=pending.filter(item=>!dayKnown(item)).length;
-  const base=items.filter(item=>view==='completed'?item.completed===true:item.completed===false && (view==='today'?dueToday(item):view==='scheduled'?dated(item):true));
+  const matchesDate={today:dueToday,scheduled:dated,overdue};
+  const base=view==='completed' ? items.filter(item=>item.completed===true) : pending.filter(item=>matchesDate[view]?.(item) ?? true);
   const matches=new Set(base.filter(item=>(!options.flagOnly || item.flagged===true) && (!query || (item.title+' '+(item.notes || '')).toLocaleLowerCase().includes(query))).map(item=>item.id));
   const included=new Set(matches),ancestors=[];
   for(const item of items) {

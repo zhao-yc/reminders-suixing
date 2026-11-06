@@ -1,5 +1,5 @@
 <template>
-  <view class="app-shell">
+  <view class="app-shell" :class="{ 'desktop-layout': desktopWide }">
     <!-- #ifdef APP-HARMONY -->
     <HarmonyICloudHost :bridge="bridge" />
     <!-- #endif -->
@@ -9,32 +9,46 @@
         <view class="brand-icon"><view></view><view></view><view></view></view>
         <view><text class="brand-name">提醒事项·随行</text><text class="brand-caption">让每一件事，随身而行</text></view>
       </view>
-      <view class="account-card">
+      <view v-if="desktopWide && snapshot?.activeListId" class="desktop-view-grid" role="group" aria-label="当前清单已加载内容的视图">
+        <button v-for="card in desktopCards" :key="card.value" class="view-tab desktop-view-card" role="button" :data-status="card.value"
+          :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing" :class="{ active: tab === card.value }" :aria-pressed="String(activeDesktopCard === card.value)"
+          :aria-label="card.label + '，当前清单已加载 ' + viewProjection.counts[card.value] + ' 项' + (unknownForView(card.value) ? '，另有状态待核对' : '')"
+          @click="selectDesktopCard(card.value)">
+          <view class="desktop-card-top"><image class="desktop-icon" :src="'/static/desktop-icons/' + card.icon + '.svg'" mode="aspectFit" aria-hidden="true" />
+            <text class="desktop-card-count">{{ viewProjection.counts[card.value] }}{{ unknownForView(card.value) ? '+' : '' }}</text></view>
+          <text class="desktop-card-label">{{ card.label }}</text>
+        </button>
+      </view>
+      <view v-if="!desktopWide || !snapshot?.activeListId" class="account-card">
         <view class="account-dot" :class="{ connected: accountConnected }"></view>
         <view class="account-copy"><text class="account-title">{{ isDemo ? '界面示例' : accountConnected ? '已连接 iCloud' : snapshot ? '待读取核对' : '连接你的 iCloud' }}</text><text class="muted small">{{ isDemo ? '示例数据，不连接账户' : region === 'cn' ? '中国大陆账户' : '其他地区账户' }}</text></view>
       </view>
-      <view class="sidebar-section"><text>我的清单</text><text class="muted">{{ snapshot?.lists.length || 0 }}</text></view>
+      <view class="sidebar-section"><text>我的清单</text><text v-if="!desktopWide" class="muted">{{ snapshot?.lists.length || 0 }}</text>
+        <button v-if="desktopWide && snapshot && canManageLists" class="add-list-button desktop-add-list" role="button"
+          :tabindex="busy || editing || (!live && !canCreateFirstList) ? -1 : 0" :disabled="busy || !!editing || (!live && !canCreateFirstList)"
+          aria-label="新建清单" title="新建清单" @click="startListEdit('create')"><image class="desktop-icon" src="/static/desktop-icons/journal-plus.svg" mode="aspectFit" aria-hidden="true" /></button>
+      </view>
       <view v-if="!snapshot" class="sidebar-placeholder">连接后，你的清单会显示在这里。</view>
       <button v-for="list in snapshot?.lists || []" :key="list.id" class="list-button" :data-list-id="list.id" :class="{ selected: list.id === snapshot.activeListId }" :disabled="busy || !!editing" @click="selectList(list)">
-        <view class="list-symbol" :style="{ background: list.color }"><image v-if="listIconURL(list.icon)" class="list-glyph" :src="listIconURL(list.icon)" mode="aspectFit" aria-hidden="true" /><text v-else>≡</text></view><text class="list-name">{{ list.title }}</text>
+        <view class="list-symbol" :style="{ background: list.color }"><image v-if="listIconURL(list.icon)" class="list-glyph" :src="listIconURL(list.icon)" mode="aspectFit" aria-hidden="true" /><image v-else-if="desktopWide" class="desktop-icon" src="/static/desktop-icons/list-ul.svg" mode="aspectFit" aria-hidden="true" /><text v-else>≡</text></view><text class="list-name">{{ list.title }}</text>
         <text v-if="list.id === snapshot.activeListId" class="list-count">{{ incompleteCount }}</text>
       </button>
-      <button v-if="snapshot && canManageLists" class="add-list-button" role="button" :tabindex="busy || editing || (!live && !canCreateFirstList) ? -1 : 0" :disabled="busy || !!editing || (!live && !canCreateFirstList)" @click="startListEdit('create')">＋ 新建清单</button>
+      <button v-if="!desktopWide && snapshot && canManageLists" class="add-list-button" role="button" :tabindex="busy || editing || (!live && !canCreateFirstList) ? -1 : 0" :disabled="busy || !!editing || (!live && !canCreateFirstList)" @click="startListEdit('create')">＋ 新建清单</button>
       <view class="sidebar-footer"><button v-if="canNotify" class="notifications-settings-button" role="button" :aria-expanded="String(notificationsPanelOpen)" :disabled="busy || !!editing" @click="toggleNotificationPanel">系统通知{{ notificationState.enabled ? ' · 已开启' : '' }}</button><text class="footer-wordmark">随行 · 开源</text><text class="muted small">{{ bridge.platform }} · 最小验证版</text></view>
     </view>
     <view class="workspace">
       <view class="toolbar" :class="{ 'with-tools': !!snapshot }">
         <button class="mobile-menu" aria-label="显示清单" @click="sidebarOpen = true">☰</button>
         <text v-if="!snapshot" class="toolbar-label">你的清单，随时在身边</text>
-        <view v-if="snapshot" class="quick-tools">
-          <button v-if="canCreate" class="add-reminder-button" :disabled="busy || !!editing || (!live && !isDemo)" aria-label="新增提醒事项" title="新增提醒事项（Ctrl+N）" @click="startCreate"><text>＋</text></button>
-          <view class="toolbar-search"><view class="search-mark"></view><input v-model="search" :disabled="!!editing" :focus="searchFocused" class="search" placeholder="搜索当前清单" aria-label="搜索当前清单" @blur="searchFocused = false" /></view>
-        </view>
         <view class="toolbar-actions">
           <picker :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || !!editing" @change="changeRegion"><view class="region-picker">{{ region === 'cn' ? '中国大陆' : '其他地区' }}⌄</view></picker>
           <button class="quiet-button" :disabled="busy || (!!editing && !editing.blocked)" @click="connect">{{ snapshot && !isDemo ? '官方页面' : '登录 iCloud' }}</button>
           <button v-if="snapshot && !isDemo && bridge.capabilities?.reconnect" class="quiet-button reconnect-button" role="button" :tabindex="busy || editing || networkOffline ? -1 : 0" :disabled="busy || !!editing || networkOffline" title="重新打开官方页面并读取清单，复用现有会话" @click="reconnectClient">重新连接</button>
           <button class="primary-button refresh-button" :disabled="busy || (!!editing && !editing.blocked)" @click="refresh">{{ busy && !autoReading ? '处理中…' : '刷新' }}</button>
+        </view>
+        <view v-if="snapshot" class="quick-tools">
+          <button v-if="canCreate" class="add-reminder-button" :disabled="busy || !!editing || (!live && !isDemo)" aria-label="新增提醒事项" title="新增提醒事项（Ctrl+N）" @click="startCreate"><image v-if="desktopWide" class="desktop-icon" src="/static/desktop-icons/plus-lg.svg" mode="aspectFit" aria-hidden="true" /><text v-else>＋</text></button>
+          <view class="toolbar-search"><image v-if="desktopWide" class="desktop-icon" src="/static/desktop-icons/search.svg" mode="aspectFit" aria-hidden="true" /><view v-else class="search-mark"></view><input v-model="search" :disabled="!!editing" :focus="searchFocused" class="search" placeholder="搜索当前清单" aria-label="搜索当前清单" @blur="searchFocused = false" /></view>
         </view>
       </view>
       <view v-if="canNotify && notificationsPanelOpen" class="notification-panel" role="region" aria-label="系统通知设置">
@@ -57,37 +71,39 @@
         <button class="demo-link" :disabled="busy" @click="showDemo">先看看界面示例 →</button>
         <text class="welcome-footnote">登录在 iCloud 官方页面完成</text>
       </view>
-      <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-captured-at="snapshot.capturedAt" :data-live="String(live)">
-        <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title">{{ snapshot.activeListTitle || (snapshot.emptyAccount ? '还没有清单' : '选择清单') }}</text><text v-if="snapshot.activeListId" class="heading-count">{{ incompleteCount }}</text><button v-if="canManageLists && snapshot.activeListId" class="rename-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="重命名清单" title="重命名当前清单" @click="startListEdit('rename')">✎</button><button v-if="canEditListAppearance && snapshot.activeListId" class="list-appearance-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="清单颜色与图标" title="清单颜色与图标" @click="startListAppearance">◉</button><button v-if="canDeleteList && snapshot.activeListId" class="delete-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="删除清单" title="删除当前清单" @click="startListDeletion">⌫</button></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : !snapshot.activeListId ? '清单导航' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
+      <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-list-title="snapshot.activeListTitle" :data-captured-at="snapshot.capturedAt" :data-live="String(live)">
+        <view class="list-view-header">
+          <view class="list-heading"><view class="heading-main"><text class="eyebrow">{{ isDemo ? '界面示例' : desktopWide && snapshot.activeListId ? snapshot.activeListTitle + ' · 当前清单已加载' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title" role="heading" aria-level="1" :data-view="desktopWide ? activeDesktopCard : undefined">{{ (desktopWide && desktopViewTitle) || snapshot.activeListTitle || (snapshot.emptyAccount ? '还没有清单' : '选择清单') }}</text><text v-if="snapshot.activeListId && !desktopWide" class="heading-count">{{ incompleteCount }}</text><view class="list-heading-actions"><button v-if="canManageLists && snapshot.activeListId" class="rename-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="重命名清单" title="重命名当前清单" @click="startListEdit('rename')">✎</button><button v-if="canEditListAppearance && snapshot.activeListId" class="list-appearance-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="清单颜色与图标" title="清单颜色与图标" @click="startListAppearance">◉</button><button v-if="canDeleteList && snapshot.activeListId" class="delete-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="删除清单" title="删除当前清单" @click="startListDeletion">⌫</button></view></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : !snapshot.activeListId ? '清单导航' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
+          <view class="list-controls">
+            <view v-if="!desktopWide" class="tabs" role="group" aria-label="当前清单已加载内容的视图"><button v-for="option in mobileViewOptions" :key="option.value" class="view-tab" role="button" :data-status="option.value" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing" :aria-pressed="String(tab === option.value)" :aria-label="option.label + '，已确认 ' + viewProjection.counts[option.value] + ' 项' + (unknownForView(option.value) ? '，另有日期待核对' : '')" :class="{ active: tab === option.value }" @click="selectTab(option.value)">{{ option.label }} <text>{{ viewProjection.counts[option.value] }}{{ unknownForView(option.value) ? '+' : '' }}</text></button></view>
+            <view class="list-view-tools"><text class="current-scope">当前清单已加载</text>
+              <button class="flag-filter" role="button" :tabindex="busy || editing || !flagReadable ? -1 : 0" :disabled="busy || !!editing || !flagReadable" :aria-pressed="String(flagOnly)" :class="{ 'flag-active': flagOnly }" aria-label="只看当前清单已加载的旗标事项" @click="flagOnly = !flagOnly">⚑ {{ flaggedCount }}</button>
+              <!-- #ifdef H5 -->
+              <view class="sort-picker desktop-sort" :data-sort-mode="sortMode">
+                <view class="sort-picker-label" role="button" :tabindex="busy || editing ? -1 : 0" :aria-disabled="String(busy || !!editing)" aria-haspopup="menu" :aria-expanded="String(sortMenuOpen)" aria-controls="list-sort-menu" :aria-label="'显示排序：' + sortLabels[sortIndex]" @click="toggleSortMenu">{{ sortLabels[sortIndex] }} ⌄</view>
+                <view v-if="sortMenuOpen" id="list-sort-menu" class="sort-menu" role="menu" aria-label="当前清单显示排序">
+                  <view v-for="(option,index) in SORT_OPTIONS" :key="option.value" class="sort-option" :class="{ 'sort-option-focused': index === sortFocusIndex }" :data-sort-value="option.value" role="menuitemradio" :aria-checked="String(sortMode === option.value)" tabindex="-1" @focus="sortFocusIndex = index" @click="chooseSort(option.value)"><text class="sort-option-label">{{ option.label }}</text><text v-if="sortMode === option.value" aria-hidden="true">✓</text></view>
+                </view>
+              </view>
+              <!-- #endif -->
+              <!-- #ifndef H5 -->
+              <picker class="sort-picker" :range="sortLabels" :value="sortIndex" :disabled="busy || !!editing" @change="changeSort"><view class="sort-picker-label" role="button" :aria-label="'显示排序：' + sortLabels[sortIndex]">{{ sortLabels[sortIndex] }} ⌄</view></picker>
+              <!-- #endif -->
+            </view>
+          </view>
+        </view>
         <view v-if="editing?.field === 'list-delete'" class="inline-editor list-delete-confirmation" role="alertdialog" aria-label="确认删除清单"><text class="delete-title">删除清单“{{ editing.title }}”？</text><text>清单及其中的全部事项都会从 iCloud 和同步设备移除，包括当前尚未加载的内容。</text><text class="muted small">共享清单请在官方页面处理。</text><view class="editor-actions"><button class="confirm-list-delete" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '删除中…' : '确认删除清单' }}</button><button class="cancel-list-delete" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view></view>
         <view v-if="editing?.field === 'list-appearance'" class="inline-editor appearance-editor" role="group" aria-label="清单颜色与图标"><text class="editor-label">{{ editing.title }} · 颜色与图标</text><view class="appearance-colors" role="radiogroup" aria-label="清单颜色"><button v-for="(option,index) in editing.colors" :key="option.key" class="appearance-choice color-choice" :data-key="option.key" role="radio" :aria-checked="String(editing.color === option.key)" :aria-label="appearanceColorLabel(option.color,index)" :title="appearanceColorLabel(option.color,index)" :tabindex="busy || editing.blocked || editing.color !== option.key ? -1 : 0" :disabled="busy || editing.blocked" :style="{background:option.color}" @click="editing.color = option.key"><text v-if="editing.color === option.key">✓</text></button></view><scroll-view class="appearance-icons-scroll" scroll-y><view class="appearance-icons" role="radiogroup" aria-label="清单图标"><button v-for="(option,index) in editing.icons" :key="option.key" class="appearance-choice icon-choice" :data-key="option.key" :class="{'icon-choice-selected':editing.iconKey === option.key}" role="radio" :aria-checked="String(editing.iconKey === option.key)" :aria-label="'图标 '+(index+1)" :title="'图标 '+(index+1)" :tabindex="busy || editing.blocked || editing.iconKey !== option.key ? -1 : 0" :disabled="busy || editing.blocked" @click="editing.iconKey = option.key"><image class="appearance-glyph" :src="listIconURL(option.icon)" mode="aspectFit" aria-hidden="true" /></button></view></scroll-view><text class="muted small">保存后同步到使用此清单的设备。</text><view class="editor-actions"><button class="save-list-appearance" role="button" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '保存中…' : '保存外观' }}</button><button class="cancel-list-appearance" role="button" :disabled="busy" @click="endEdit">取消</button></view></view>
         <view v-if="editing?.listOperation" class="inline-editor list-editor" :data-operation="editing.listOperation"><text class="editor-label">{{ editing.listOperation === 'create' ? '新建清单' : '重命名清单' }}</text><input v-model="editing.value" class="edit-field list-name-input" :maxlength="100" :focus="true" :disabled="busy || editing.blocked" aria-label="清单名称" @confirm="confirmEdit" @keydown="editKeydown" /><text class="muted small">保存后可单独调整颜色与图标。</text><view class="editor-actions"><button class="save-edit save-list-edit" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '保存中…' : editing.listOperation === 'create' ? '创建清单' : '保存名称' }}</button><button class="cancel-list-edit" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view></view>
-        <view class="list-controls">
-          <view class="tabs" role="group" aria-label="当前清单已加载内容的视图"><button v-for="option in VIEW_OPTIONS" :key="option.value" class="view-tab" role="button" :data-status="option.value" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing" :aria-pressed="String(tab === option.value)" :aria-label="option.label + '，已确认 ' + viewProjection.counts[option.value] + ' 项' + (unknownForView(option.value) ? '，另有日期待核对' : '')" :class="{ active: tab === option.value }" @click="selectTab(option.value)">{{ option.label }} <text>{{ viewProjection.counts[option.value] }}{{ unknownForView(option.value) ? '+' : '' }}</text></button></view>
-          <view class="list-view-tools"><text class="current-scope">当前清单已加载</text>
-            <button class="flag-filter" role="button" :tabindex="busy || editing || !flagReadable ? -1 : 0" :disabled="busy || !!editing || !flagReadable" :aria-pressed="String(flagOnly)" :class="{ 'flag-active': flagOnly }" aria-label="只看当前清单已加载的旗标事项" @click="flagOnly = !flagOnly">⚑ {{ flaggedCount }}</button>
-            <!-- #ifdef H5 -->
-            <view class="sort-picker desktop-sort" :data-sort-mode="sortMode">
-              <view class="sort-picker-label" role="button" :tabindex="busy || editing ? -1 : 0" :aria-disabled="String(busy || !!editing)" aria-haspopup="menu" :aria-expanded="String(sortMenuOpen)" aria-controls="list-sort-menu" :aria-label="'显示排序：' + sortLabels[sortIndex]" @click="toggleSortMenu">{{ sortLabels[sortIndex] }} ⌄</view>
-              <view v-if="sortMenuOpen" id="list-sort-menu" class="sort-menu" role="menu" aria-label="当前清单显示排序">
-                <view v-for="(option,index) in SORT_OPTIONS" :key="option.value" class="sort-option" :class="{ 'sort-option-focused': index === sortFocusIndex }" :data-sort-value="option.value" role="menuitemradio" :aria-checked="String(sortMode === option.value)" tabindex="-1" @focus="sortFocusIndex = index" @click="chooseSort(option.value)"><text class="sort-option-label">{{ option.label }}</text><text v-if="sortMode === option.value" aria-hidden="true">✓</text></view>
-              </view>
-            </view>
-            <!-- #endif -->
-            <!-- #ifndef H5 -->
-            <picker class="sort-picker" :range="sortLabels" :value="sortIndex" :disabled="busy || !!editing" @change="changeSort"><view class="sort-picker-label" role="button" :aria-label="'显示排序：' + sortLabels[sortIndex]">{{ sortLabels[sortIndex] }} ⌄</view></picker>
-            <!-- #endif -->
-          </view>
-        </view>
-        <text v-if="tab === 'today' || tab === 'scheduled'" class="date-view-description" :data-view="tab" :data-matches="viewProjection.matchCount" :data-unknown="unknownForView(tab)">{{ tab === 'today' ? '今天与逾期' : '已安排日期' }} · 当前清单已加载 · {{ viewProjection.matchCount }} 项{{ unknownForView(tab) ? '；另有 ' + unknownForView(tab) + ' 项日期或时区待核对，未计入' : '' }}{{ viewContext.size ? '；灰色主事项仅供定位，不计入数量' : '' }}</text>
+        <text v-if="dateViewLabel" class="date-view-description" :data-view="tab" :data-matches="viewProjection.matchCount" :data-unknown="unknownForView(tab)">{{ dateViewLabel }} · 当前清单已加载 · {{ viewProjection.matchCount }} 项{{ unknownForView(tab) ? '；另有 ' + unknownForView(tab) + ' 项日期或时区待核对，未计入' : '' }}{{ viewContext.size ? '；灰色主事项仅供定位，不计入数量' : '' }}</text>
         <text v-if="sortMode !== 'manual'" class="sort-description">仅本地显示排序，子事项跟随主事项{{ sortMode.startsWith('date-') ? '；日期不可读的主事项列在末尾' : sortMode.startsWith('priority-') ? '；无优先级在后，不可读的主事项列在末尾' : '' }}</text>
         <text v-if="sortMode.startsWith('priority-')" class="sort-description">优先级仅查看，请在苹果设备上修改</text>
         <text v-if="flagOnly" class="sort-description">只显示当前清单已加载的旗标事项{{ unreadableFlags ? '；还有旗标状态不可读的事项，请在官方页面核对' : '' }}</text>
         <scroll-view class="items-scroll" scroll-y>
           <view v-if="editing?.creating" class="reminder-row new-reminder-row"><view class="draft-circle"></view><view class="inline-editor"><text class="editor-label">新提醒事项 · {{ snapshot.activeListTitle }}</text><input v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" placeholder="提醒我…" aria-label="新事项标题" @confirm="confirmEdit" @keydown="editKeydown" /><view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '添加中…' : '添加' }}</button><button :disabled="busy" @click="endEdit">取消</button></view></view></view>
-          <view v-if="!visibleItems.length && !editing?.creating" class="empty-list"><text class="empty-circle">✓</text><text>{{ !snapshot.activeListId ? snapshot.emptyAccount ? '还没有清单，先新建一份。' : '请选择一份清单继续。' : search ? '没有找到相关事项' : flagOnly ? '当前已加载内容中没有符合筛选的旗标事项' : tab === 'today' ? '当前已确认日期的已加载事项中，没有今天或逾期待办' : tab === 'scheduled' ? '当前已确认日期的已加载事项中，没有计划待办' : tab === 'completed' ? '这里会显示网页已加载的完成事项' : '这份清单暂时没有待办事项' }}</text><button v-if="canCreateFirstList" class="empty-add" :disabled="busy || !!editing" @click="startListEdit('create')">新建清单</button><button v-else-if="flagOnly" class="empty-add" @click="flagOnly = false">显示全部事项</button><button v-else-if="snapshot.activeListId && canCreate && tab === 'pending' && !search" class="empty-add" :disabled="busy || !!editing || (!live && !isDemo)" @click="startCreate">添加提醒事项</button></view>
+          <view v-if="!visibleItems.length && !editing?.creating" class="empty-list"><text class="empty-circle">✓</text><text>{{ emptyViewMessage }}</text><button v-if="canCreateFirstList" class="empty-add" :disabled="busy || !!editing" @click="startListEdit('create')">新建清单</button><button v-else-if="flagOnly" class="empty-add" @click="flagOnly = false">显示全部事项</button><button v-else-if="snapshot.activeListId && canCreate && tab === 'pending' && !search" class="empty-add" :disabled="busy || !!editing || (!live && !isDemo)" @click="startCreate">添加提醒事项</button></view>
           <template v-for="item in visibleItems" :key="item.id">
-          <view v-if="dateView.headings.has(item.id)" class="date-section-heading" role="heading" aria-level="2">{{ dateView.headings.get(item.id) }}</view>
+          <view v-if="dateView.headings.has(item.id)" class="date-section-heading" :class="{ 'leading-overdue': item === visibleItems[0] && dateView.headings.get(item.id) === '逾期' }" role="heading" aria-level="2">{{ dateView.headings.get(item.id) }}</view>
           <view class="reminder-row" :data-record-id="item.id" :data-priority="item.priority" :data-view-context="String(viewContext.has(item.id))" :class="{ completed: item.completed, 'is-subtask': item.level > 1, 'view-context': viewContext.has(item.id) }">
             <button class="completion-button" :class="{ checked: item.completed }" :disabled="busy || !!editing || (!live && !isDemo) || item.disabled || viewContext.has(item.id)" :aria-label="(viewContext.has(item.id) ? '所属主事项，仅供定位：' : item.completed ? '取消完成：' : '完成：') + item.title" @click="toggle(item)"><text v-if="item.completed">✓</text></button>
             <view class="reminder-copy">
@@ -111,7 +127,10 @@
               </view>
               <template v-else><view class="reminder-title-line"><text v-if="item.flagged" class="flag-mark" aria-label="已添加旗标">⚑</text><text v-if="priorityInfo(item.priority).mark" class="priority-mark" :aria-label="priorityInfo(item.priority).label" :title="priorityInfo(item.priority).label + '；请在苹果设备上修改'">{{ priorityInfo(item.priority).mark }}</text><text class="reminder-title" @dblclick="startEdit(item, 'title')">{{ item.title }}</text></view><text v-if="item.notes" class="reminder-notes" @dblclick="startEdit(item, 'notes')">{{ item.notes }}</text><text v-if="item.notesTruncated" class="reminder-metadata">备注较长，请在官方页面查看完整内容</text><text v-if="item.priority === null" class="reminder-metadata">优先级不可读</text></template>
               <text v-if="viewContext.has(item.id)" class="reminder-metadata">所属主事项 · 仅供定位</text>
-              <text v-if="item.metadata" class="reminder-metadata">{{ item.metadata }}</text>
+              <view v-if="item.metadata" class="reminder-metadata reminder-date-line">
+                <text v-if="desktopWide && desktopViewTitle" class="reminder-list-caption">{{ snapshot.activeListTitle }}</text>
+                <text :class="{ 'past-due': desktopWide && isPastDue(item) }">{{ item.metadata }}</text>
+              </view>
               <text v-if="item.metadataPartial" class="reminder-metadata">部分日期附注请在官方页面查看</text>
             </view>
             <view v-if="(canEdit || canEditSchedule || canEditFlag || canDelete || canEditHierarchy) && !editing && !viewContext.has(item.id)" class="row-actions"><button v-if="canEdit" class="edit-title-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑标题" @click="startEdit(item, 'title')">✎</button><button v-if="canEdit" class="edit-notes-button" :disabled="busy || (!live && !isDemo) || item.disabled || item.notesTruncated" aria-label="编辑备注" @click="startEdit(item, 'notes')">≡</button><button v-if="canEditSchedule" class="edit-schedule-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑日期与时间" @click="startScheduleEdit(item)">▦</button><button v-if="canEditFlag" class="flag-toggle-button" role="button" :tabindex="busy || item.disabled || typeof item.flagged !== 'boolean' ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled || typeof item.flagged !== 'boolean'" :aria-pressed="String(item.flagged === true)" :aria-label="item.flagged ? '移除旗标' : '添加旗标'" :class="{ 'flag-active': item.flagged }" @click="toggleFlag(item)">⚑</button><button v-if="canEditHierarchy" class="subtask-item-button" role="button" :tabindex="busy || item.disabled || !item.hierarchyReadable ? -1 : 0" :disabled="busy || !live || item.disabled || !item.hierarchyReadable" :aria-label="item.level > 1 ? '提升为顶层事项' : '设为上一主事项的子事项'" :title="item.level > 1 ? '提升为顶层事项' : '设为上一主事项的子事项'" @click="startSubtask(item)">{{ item.level > 1 ? '⇤' : '⇥' }}</button><button v-if="canDelete" class="delete-item-button" role="button" :tabindex="busy || item.disabled ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="删除事项" title="删除这一条事项" @click="startDelete(item)">⌫</button></view>
@@ -208,6 +227,28 @@ const accountConnected = computed(() => !isDemo.value && !networkOffline.value &
 const sidebarOpen = ref(false);
 const tab = ref('pending');
 const flagOnly = ref(false);
+const desktopWide = ref(false);
+const mobileViewOptions = VIEW_OPTIONS.filter(option => !option.desktopOnly);
+const desktopCards = [
+  { value:'today', label:'今天', icon:'calendar2-event' },
+  { value:'scheduled', label:'计划', icon:'calendar3' },
+  { value:'pending', label:'待办', icon:'inbox-fill' },
+  { value:'flagged', label:'旗标', icon:'flag-fill' },
+  { value:'overdue', label:'逾期', icon:'alarm' },
+  { value:'completed', label:'完成', icon:'check2' }
+];
+const activeDesktopCard = computed(() => tab.value === 'pending' && flagOnly.value ? 'flagged' : tab.value);
+const desktopViewTitle = computed(() => activeDesktopCard.value === 'pending' ? '' : desktopCards.find(card => card.value === activeDesktopCard.value)?.label);
+// #ifdef H5
+const desktopViewport = typeof window === 'undefined' ? null : window.matchMedia('(min-width:761px)');
+function updateDesktopWidth() {
+  desktopWide.value = desktopViewport?.matches === true;
+  if (!desktopWide.value && tab.value === 'overdue') tab.value = 'pending';
+}
+updateDesktopWidth();
+onMounted(() => desktopViewport?.addEventListener('change', updateDesktopWidth));
+onUnmounted(() => desktopViewport?.removeEventListener('change', updateDesktopWidth));
+// #endif
 const search = ref('');
 const searchFocused = ref(false);
 const incompleteCount = computed(() => snapshot.value?.items.filter(item => !item.completed).length || 0);
@@ -224,7 +265,28 @@ const viewProjection=computed(()=>projectLoadedItems(sortLoadedItems(snapshot.va
 const viewContext=computed(()=>viewProjection.value.contextIds);
 const dateView=computed(()=>groupLoadedDateView(viewProjection.value,{view:tab.value,...viewDates.value,descending:sortMode.value==='date-descending'}));
 const visibleItems=computed(()=>dateView.value.items);
-function unknownForView(view) {return view==='today'?viewProjection.value.unknownToday:view==='scheduled'?viewProjection.value.unknownDates:0;}
+const dateViewLabel = computed(() => ({ today:'今天与逾期', scheduled:'已安排日期', overdue:'早于今天' })[tab.value]);
+const emptyViewMessage = computed(() => {
+  if (!snapshot.value?.activeListId) return snapshot.value?.emptyAccount ? '还没有清单，先新建一份。' : '请选择一份清单继续。';
+  if (search.value) return '没有找到相关事项';
+  if (flagOnly.value) return '当前已加载内容中没有符合筛选的旗标事项';
+  return {
+    today:'当前已确认日期的已加载事项中，没有今天或逾期待办',
+    scheduled:'当前已确认日期的已加载事项中，没有计划待办',
+    overdue:'当前已确认日期的已加载事项中，没有逾期待办',
+    completed:'这里会显示网页已加载的完成事项'
+  }[tab.value] || '这份清单暂时没有待办事项';
+});
+function unknownForView(view) {
+  if (view === 'today' || view === 'overdue') return viewProjection.value.unknownToday;
+  if (view === 'scheduled') return viewProjection.value.unknownDates;
+  return view === 'flagged' && unreadableFlags.value;
+}
+function isPastDue(item) {
+  const schedule = item.schedule;
+  return !item.completed && validSchedule(schedule) && schedule.date !== null && schedule.date < viewDates.value.today &&
+    (schedule.time === null || schedule.timeZone === Intl.DateTimeFormat().resolvedOptions().timeZone);
+}
 let viewClockTimer;
 const updateViewClock=()=>{viewClock.value=Date.now();};
 onMounted(()=>{viewClockTimer=setInterval(updateViewClock,30000);});
@@ -304,6 +366,12 @@ async function selectTab(next) {
     return;
   }
   await run({ type: 'showCompleted', pageId: snapshot.value.pageId, listId: snapshot.value.activeListId });
+}
+
+function selectDesktopCard(view) {
+  if (busy.value || editing.value) return;
+  flagOnly.value = view === 'flagged';
+  return selectTab(flagOnly.value ? 'pending' : view);
 }
 
 async function selectList(list) {
@@ -790,4 +858,129 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 @media (max-width:760px) { .reminder-row { display:grid; grid-template-columns:22px minmax(0,1fr); column-gap:13px; row-gap:10px; }.reminder-row > .completion-button { grid-column:1; grid-row:1; align-self:start; }.reminder-row > .reminder-copy { grid-column:2; grid-row:1; min-width:0; }.reminder-row > .row-actions { grid-column:2; grid-row:2; justify-content:flex-start; opacity:1; flex-wrap:wrap; }.reminder-row > .subtask-tag { grid-column:2; grid-row:3; justify-self:start; }.row-actions button { padding:4px 6px; } }
 .list-controls { flex-wrap:wrap; gap:0 14px; }.tabs { gap:18px; flex-wrap:wrap; min-width:0; }.tabs button { white-space:nowrap; }.view-tab:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }.date-view-description { display:block; flex-shrink:0; color:#78899e; font-size:11px; line-height:1.7; margin:10px 0 0; }.view-context .reminder-title { color:#8795a6; }.view-context { background:#fafcff; }
 .date-section-heading { margin-top:14px; padding:7px 2px 5px; border-bottom:1px solid #e5ebf2; color:#53657b; font-size:13px; font-weight:600; }
+.list-heading-actions { display:flex; }
+.list-heading-actions:empty { display:none; }
+
+/* 桌面宽屏用双栏承载同一份清单和编辑流程。窄屏继续使用抽屉和视图标签。 */
+.desktop-layout {
+  --desktop-background:#1c1d1e;
+  --desktop-sidebar:#242628;
+  --desktop-surface:#303234;
+  --desktop-border:#3b3d40;
+  --desktop-text:#ebedef;
+  --desktop-muted:#a5a9ae;
+  --desktop-blue:#39a5ff;
+  --desktop-gutter:clamp(20px,2vw,34px);
+  color-scheme:dark;
+  background:var(--desktop-background);
+  color:var(--desktop-text);
+}
+.desktop-layout .sidebar {
+  width:clamp(248px,33.4vw,510px);
+  padding:12px clamp(12px,1.55vw,26px) 18px;
+  overflow-y:auto;
+  border-color:var(--desktop-border);
+  background:var(--desktop-sidebar);
+}
+.desktop-layout .sidebar > * { flex-shrink:0; }
+.desktop-layout .brand { min-height:46px; margin:0 4px 14px; }
+.desktop-layout .brand-icon { width:34px; height:36px; padding:7px; background:var(--desktop-surface); box-shadow:none; }
+.desktop-layout .brand-icon view::after { background:#74787f; }
+.desktop-layout .brand-name { font-size:15px; }
+.desktop-layout .brand-caption { display:none; }
+.desktop-layout .desktop-view-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-bottom:22px; }
+.desktop-layout .desktop-view-card {
+  min-height:clamp(64px,7.15vw,112px);
+  padding:clamp(9px,1.15vw,18px);
+  display:flex;
+  flex-direction:column;
+  justify-content:space-between;
+  gap:6px;
+  border-radius:clamp(12px,1.25vw,20px);
+  text-align:left;
+  line-height:1.15;
+  color:#fff;
+  background:var(--card-color);
+}
+.desktop-view-card[data-status='today'] { --card-color:#347bb7; }
+.desktop-view-card[data-status='scheduled'] { --card-color:#b75057; }
+.desktop-view-card[data-status='pending'] { --card-color:#4a4c4d; }
+.desktop-view-card[data-status='flagged'] { --card-color:#9e592c; }
+.desktop-view-card[data-status='overdue'] { --card-color:#a2476b; }
+.desktop-view-card[data-status='completed'] { --card-color:#5d6971; }
+.desktop-view-card[aria-pressed='true'] { box-shadow:0 0 0 3px #d1e9ff7d; }
+.desktop-view-card:hover:not([disabled]) { filter:brightness(1.11); }
+.desktop-card-top { display:flex; justify-content:space-between; align-items:center; gap:6px; }
+.desktop-icon { display:block; width:20px; height:20px; flex:none; filter:brightness(0) invert(1); }
+.desktop-view-card .desktop-icon { width:clamp(19px,2.1vw,32px); height:clamp(19px,2.1vw,32px); }
+.desktop-card-count { font-size:clamp(18px,2.1vw,33px); font-weight:700; font-variant-numeric:tabular-nums; }
+.desktop-card-label { font-size:clamp(14px,1.5vw,23px); font-weight:650; }
+.desktop-layout .sidebar-section { min-height:30px; align-items:center; margin-bottom:4px; padding:0 8px; color:var(--desktop-muted); letter-spacing:0; font-size:13px; }
+.desktop-layout .desktop-add-list { margin:0; padding:5px; border:0; background:var(--desktop-surface); border-radius:8px; }
+.desktop-layout .desktop-add-list .desktop-icon { width:17px; height:17px; }
+.desktop-layout .list-button { gap:11px; padding:7px 8px; margin-bottom:2px; }
+.desktop-layout .list-button.selected,.desktop-layout .list-button:hover:not([disabled]) { background:#3a3d41; }
+.desktop-layout .list-symbol { display:flex; align-items:center; justify-content:center; width:clamp(28px,2.9vw,45px); height:clamp(28px,2.9vw,45px); flex:none; border-radius:50%; }
+.desktop-layout .list-symbol .desktop-icon,.desktop-layout .list-glyph { width:56%; height:56%; }
+.desktop-layout .list-name { font-size:clamp(14px,1.5vw,22px); font-weight:550; }
+.desktop-layout .list-count { color:var(--desktop-muted); font-variant-numeric:tabular-nums; }
+.desktop-layout .sidebar-footer { gap:5px; padding:18px 8px 0; }
+.desktop-layout .toolbar { min-height:60px; height:auto; padding:10px var(--desktop-gutter); border:0; gap:8px 14px; flex-wrap:wrap; }
+.desktop-layout .toolbar-actions { gap:8px; flex-wrap:wrap; }
+.desktop-layout .quick-tools { flex:1 1 172px; justify-content:flex-end; gap:8px; }
+.desktop-layout .add-reminder-button,.desktop-layout .toolbar-search { height:42px; border-radius:24px; background:var(--desktop-surface); border:1px solid #505256; }
+.desktop-layout .add-reminder-button { width:42px; }
+.desktop-layout .add-reminder-button:hover,.desktop-layout .toolbar-search:focus-within { background:#3b3e42; border-color:#737a84; }
+.desktop-layout .toolbar-search { width:clamp(150px,26.8vw,435px); padding:0 14px; }
+.desktop-layout .toolbar-search .desktop-icon { width:16px; height:16px; opacity:.72; }
+.desktop-layout .toolbar-search .search { color:var(--desktop-text); font-size:14px; }
+.desktop-layout .toolbar-search .search::placeholder { color:var(--desktop-muted); }
+.desktop-layout .quiet-button,.desktop-layout .region-picker { color:var(--desktop-muted); font-size:11px; white-space:nowrap; }
+.desktop-layout .primary-button { padding:8px 12px; background:#225f95; }
+.desktop-layout .list-content { padding:7px var(--desktop-gutter) 0; }
+.desktop-layout .list-view-header { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:flex-end; gap:0 12px; flex-shrink:0; }
+.desktop-layout .list-heading { flex:1 1 250px; align-items:flex-start; gap:6px; min-width:0; margin:0; }
+.desktop-layout .list-heading .source-chip { margin:2px 0 0; white-space:nowrap; }
+.desktop-layout .heading-main { display:grid; grid-template-columns:minmax(0,max-content) auto; align-items:center; gap:3px 6px; }
+.desktop-layout .heading-main .eyebrow { grid-column:1; grid-row:1; margin:0; }
+.desktop-layout .heading-main .title-line { display:contents; }
+.desktop-layout .list-heading-actions { grid-column:2; grid-row:1; }
+.desktop-layout .list-view-tools { gap:8px; }
+.desktop-layout .list-view-tools .current-scope { display:none; }
+.desktop-layout .sort-picker-label { padding:6px 0; }
+.desktop-layout .date-view-description { order:1; margin:0; padding:3px 0; }
+.desktop-layout .title-line { gap:5px 9px; }
+.desktop-layout .list-title { grid-column:1 / -1; grid-row:2; font-size:clamp(36px,4.35vw,72px); font-weight:700; color:var(--desktop-blue); line-height:1.15; }
+.desktop-layout .list-title[data-view='scheduled'] { color:#ff9197; }
+.desktop-layout .list-title[data-view='flagged'] { color:#ffb678; }
+.desktop-layout .list-title[data-view='overdue'] { color:#ff86aa; }
+.desktop-layout .list-title[data-view='completed'] { color:#bec8cf; }
+.desktop-layout .list-controls { justify-content:flex-end; margin-left:auto; border:0; }
+.desktop-layout .reminder-row { padding:10px 2px; gap:13px; border-bottom-color:transparent; }
+.desktop-layout .completion-button,.desktop-layout .draft-circle { border-color:#73777b; }
+.desktop-layout .completion-button:not(.checked) { background:transparent; }
+.desktop-layout .completion-button.checked { border-color:#647c90; background:#647c90; }
+.desktop-layout .reminder-title { color:var(--desktop-text); font-size:clamp(15px,1.55vw,24px); line-height:1.4; }
+.desktop-layout .reminder-copy { gap:2px; }
+.desktop-layout .reminder-metadata { font-size:clamp(11px,1.2vw,17px); }
+.desktop-layout .reminder-date-line { display:flex; flex-wrap:wrap; gap:0 8px; }
+.desktop-layout .date-section-heading { margin:6px 0 0; padding:6px 0; border-top:1px solid #484b4e; border-bottom:0; color:var(--desktop-muted); }
+.desktop-layout .date-section-heading.leading-overdue { position:absolute; width:1px; height:1px; padding:0; margin:-1px; border:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.desktop-layout .list-footer { order:2; padding:10px 0 12px; border-color:var(--desktop-border); }
+.desktop-layout :is(.muted,.footer-wordmark,.sidebar-placeholder,.eyebrow,.source-chip,.current-scope,.date-view-description,.sort-description,
+  .sort-picker-label,.reminder-notes,.reminder-metadata,.subtask-tag,.list-footer,.auto-read-toggle,.flag-filter,.empty-list,.editor-label,
+  .schedule-toggle-row,.schedule-zone,.editor-actions button,.notifications-settings-button,.notification-state,.demo-link,.welcome-footnote,
+  .completed .reminder-title,.view-context .reminder-title) { color:var(--desktop-muted); }
+.desktop-layout .reminder-date-line .past-due { color:#ff777c; }
+.desktop-layout :is(.source-chip,.empty-circle,.reminder-row.is-subtask) { border-color:var(--desktop-border); }
+.desktop-layout :is(.account-card,.notice,.notification-panel,.list-editor,.list-delete-confirmation,.appearance-editor,.edit-field,.sort-menu,.new-reminder-row,.icon-choice,.welcome-art) {
+  background:var(--desktop-surface);
+  border-color:var(--desktop-border);
+  color:var(--desktop-text);
+}
+.desktop-layout .notice.error,.desktop-layout .edit-recovery { background:#3b282c; color:#ffb8bb; }
+.desktop-layout :is(.sort-option,.delete-title,.delete-confirmation,.notification-heading,.welcome-title) { color:var(--desktop-text); }
+.desktop-layout :is(.sort-option:hover,.sort-option-focused,.row-actions button:hover,.flag-filter.flag-active,.icon-choice-selected,.view-context) { background:#373d45; }
+.desktop-layout :is(.editor-actions .save-edit,.editor-actions .confirm-list-delete,.editor-actions .save-list-appearance) { color:#fff; }
+.desktop-layout :is(button,[role='button']):focus-visible { outline:2px solid #8ac9ff; outline-offset:2px; }
 </style>

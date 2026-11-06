@@ -147,15 +147,24 @@ async function runSmoke({ frontendURL, root }) {
       schedule:{date:calendarDay(0),time,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},metadata:time
     });
     const viewItems=[viewItem('view-root','随行验证 · 日期父项',null),viewItem('view-child','随行验证 · 日期子项',calendarDay(0),{level:2,flagged:true}),
-      timedViewItem('view-evening','随行验证 · 今晚事项','18:00'),viewItem('view-overdue','随行验证 · 逾期',calendarDay(-1)),
+      timedViewItem('view-evening','随行验证 · 今晚事项','18:00'),viewItem('view-overdue','随行验证 · 逾期',calendarDay(-1),{metadata:calendarDay(-1)}),
       timedViewItem('view-morning','随行验证 · 上午事项','09:30'),viewItem('view-future','随行验证 · 将来',calendarDay(1)),
       timedViewItem('view-afternoon','随行验证 · 下午事项','12:00'),viewItem('view-completed','随行验证 · 完成',calendarDay(0),{completed:true}),
       viewItem('view-unknown','随行验证 · 日期未知',null,{schedule:null,metadata:'今天（合成文案，不得用于猜测）'})];
-    const viewSnapshot={...sorting.snapshot,items:viewItems};
+    const viewSnapshot={...sorting.snapshot,items:viewItems,lists:[
+      {...sorting.snapshot.lists.find(list=>list.id===sorting.snapshot.activeListId),icon:null},
+      ...['项目','阅读','出行','购物','长期计划'].map((title,index)=>({
+        id:'preview-list-'+index,title,color:['#db584f','#6958ad','#1687ff','#398f76','#b9653e'][index]
+      }))
+    ]};
     ui.webContents.send('suixing:snapshot',{region:'cn',result:{ok:true,code:'READY',snapshot:viewSnapshot}});
     await new Promise(resolve=>setTimeout(resolve,80));
     const chooseView=async view=>{await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="'+view+'"]\').click()');await new Promise(resolve=>setTimeout(resolve,80));};
     const dateHeadings=()=>ui.webContents.executeJavaScript('[...document.querySelectorAll(".date-section-heading[role=heading]")].map(node=>node.textContent.trim())');
+    assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".desktop-view-card")].map(card=>card.dataset.status)'),['today','scheduled','pending','flagged','overdue','completed']);
+    await chooseView('flagged');assert.deepEqual(await displayedIds(),['view-root','view-child']);
+    await chooseView('overdue');assert.deepEqual(await displayedIds(),['view-overdue']);
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".list-title").textContent.trim()'),'逾期');
     await chooseView('today');
     assert.deepEqual(await displayedIds(),['view-overdue','view-root','view-child','view-morning','view-afternoon','view-evening']);
     assert.deepEqual(await dateHeadings(),['逾期','全天','上午','下午','今晚']);
@@ -176,6 +185,7 @@ async function runSmoke({ frontendURL, root }) {
     await new Promise(resolve=>setTimeout(resolve,300));
     assert.equal(await ui.webContents.executeJavaScript('document.documentElement.scrollWidth<=window.innerWidth+2'),true,'日期视图说明和四个入口在窄屏不得横向溢出');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".sidebar").getBoundingClientRect().right<=1'),true,'等待抽屉收起动画后再核对与截图');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".tabs .view-tab").length'),4);
     await ui.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
     fs.writeFileSync(path.join(root,'.local/date-views-mobile-preview.png'),(await ui.webContents.capturePage()).toPNG());
     ui.setSize(...viewSize);await new Promise(resolve=>setTimeout(resolve,80));
@@ -194,24 +204,25 @@ async function runSmoke({ frontendURL, root }) {
       ui.webContents.sendInputEvent({type:'keyUp',keyCode});
       await new Promise(resolve=>setTimeout(resolve,100));
     };
-    await press('Tab');
-    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".reconnect-button")'),true,'Tab 应能到达重新连接');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".reconnect-button").tabIndex'),0,'重新连接应在键盘顺序内');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".rename-list-button")'),true,'Tab 应能到达清单重命名');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".list-appearance-button")'),true,'Tab 应能到达清单颜色与图标');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".delete-list-button")'),true,'Tab 应能到达清单删除');
-    for(const view of ['pending','today','scheduled','completed']) {
-      await press('Tab');
+    await press('Tab');
+    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".flag-filter")'),true,'Tab 应先到达旗标筛选');
+    await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="today"]\').focus()');
+    for(const view of ['today','scheduled','pending','flagged','overdue','completed']) {
       assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(\'.view-tab[data-status="'+view+'"]\')'),true,'Tab 应能到达各清单视图');
       if(view==='today') {
         await press('Enter');assert.equal(await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="today"]\').getAttribute("aria-pressed")'),'true');
       }
+      if(view!=='completed')await press('Tab');
     }
     await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="pending"]\').click()');
-    await press('Tab');
-    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".flag-filter")'),true,'Tab 应先到达旗标筛选');
+    await ui.webContents.executeJavaScript('document.querySelector(".flag-filter").focus()');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".desktop-sort .sort-picker-label")'),true,'Tab 应能到达排序菜单');
     await press('Enter');

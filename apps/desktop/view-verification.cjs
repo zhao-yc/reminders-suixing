@@ -3,7 +3,7 @@ async function inspectTestViews(expected) {
   const pause=()=>new Promise(resolve=>setTimeout(resolve,80));
   const root=document.querySelector('.list-content');
   const button=view=>document.querySelector('.view-tab[data-status="'+view+'"]');
-  if(root?.dataset.listId!==expected.listId || root.dataset.pageId!==expected.pageId || document.querySelector('.list-title')?.textContent.trim()!=='随行验证（2026-11-04）' || document.querySelector('.inline-editor') || document.querySelector('.flag-filter[aria-pressed="true"]') || document.querySelector('.toolbar-search input')?.value)return false;
+  if(root?.dataset.listId!==expected.listId || root.dataset.pageId!==expected.pageId || (root.dataset.listTitle ?? document.querySelector('.list-title')?.textContent.trim())!=='随行验证（2026-11-04）' || document.querySelector('.inline-editor') || document.querySelector('.flag-filter[aria-pressed="true"]') || document.querySelector('.toolbar-search input')?.value)return false;
   if(button('pending')?.getAttribute('aria-pressed')!=='true')return false;
   let success=true;
   try {

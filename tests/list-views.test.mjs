@@ -11,9 +11,10 @@ test('今天包括今天与逾期，计划包括有日期的待办，不从附�
   const items=[item('逾期','2030-01-14'),item('今天','2030-01-15'),item('将来','2030-01-16'),item('无日期'),item('未知',null,{schedule:null,metadata:'今天'}),item('非法',null,{schedule:{date:'2030-02-30',time:null,timeZone:null}}),item('已完成','2030-01-15',{completed:true})];
   const today=projectLoadedItems(items,{...options,view:'today'});
   assert.deepEqual(ids(today),['逾期','今天']);
-  assert.deepEqual(today.counts,{pending:6,today:2,scheduled:3,completed:1});
+  assert.deepEqual(today.counts,{pending:6,today:2,scheduled:3,completed:1,overdue:1,flagged:0});
   assert.equal(today.unknownDates,2);assert.equal(today.unknownToday,2);
   assert.deepEqual(ids(projectLoadedItems(items,{...options,view:'scheduled'})),['逾期','今天','将来']);
+  assert.deepEqual(ids(projectLoadedItems(items,{...options,view:'overdue'})),['逾期']);
 });
 
 test('筛选与排序使用原记录引用，不改事项；子事项匹配时保留祖先但不计入匹配数',()=>{
@@ -29,6 +30,7 @@ test('搜索与旗标可组合，祖先只供定位且不引入不匹配的兄�
   const result=projectLoadedItems(items,{...options,view:'scheduled',flagOnly:true,query:'找得到'});
   assert.deepEqual(ids(result),['前主项','孙项父项','目标']);assert.equal(result.matchCount,1);
   assert.deepEqual([...result.contextIds],['前主项','孙项父项']);assert.equal(result.flaggedCount,2);
+  assert.equal(result.counts.flagged,2,'侧栏计数保持当前快照范围，不受搜索或日期视图影响');
 });
 
 test('已完成子事项可带未完成祖先作为只读上下文；缺主项的部分加载不虚构祖先',()=>{
