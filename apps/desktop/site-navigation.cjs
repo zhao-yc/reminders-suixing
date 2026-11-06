@@ -3,10 +3,19 @@ async function reopenOfficial(contents, destination, timeoutMs = 12000) {
   let home;
   try {home=new URL('/',destination).href;}
   catch {return {ok:false,code:'RECONNECT_FAILED',message:'官方入口无效，请重新选择服务区域。'};}
+  return navigateOfficial(contents, destination, [['home',home],['reminders',destination]], timeoutMs);
+}
+
+/** 定向自动更新只重开提醒事项入口，不经过账号首页。 */
+function reloadOfficial(contents, destination) {
+  return navigateOfficial(contents, destination, [['reminders',destination]], 12000);
+}
+
+async function navigateOfficial(contents, destination, steps, timeoutMs) {
   const attempts=[];
-  for (const [index,url] of [home,destination].entries()) {
+  for (const [stage,url] of steps) {
     let timer,timedOut=false;
-    const attempt={stage:index===0?'home':'reminders',committed:false,unloadPrevented:false};attempts.push(attempt);
+    const attempt={stage,committed:false,unloadPrevented:false};attempts.push(attempt);
     const prevented=()=>{attempt.unloadPrevented=true;};
     const committed=(_event,value)=>{attempt.committed=true;try{const actual=new URL(value),entry=new URL(destination);attempt.routeKind=actual.origin!==entry.origin?'other-origin':actual.pathname==='/'?'home':actual.pathname.replace(/\/$/,'')===entry.pathname.replace(/\/$/,'')?'reminders':'other-path';}catch{attempt.routeKind='unknown';}};
     const inPage=()=>{attempt.inPageNavigation=true;};
@@ -19,6 +28,7 @@ async function reopenOfficial(contents, destination, timeoutMs = 12000) {
         timer=setTimeout(()=>{timedOut=true;try{contents.stop();}catch{}reject(new Error('RECONNECT_TIMEOUT'));},timeoutMs);
       });
       await Promise.race([operation,timeout]);
+      if(attempt.unloadPrevented)throw new Error('OFFICIAL_PAGE_BUSY');
     } catch(error) {
       const known=['ERR_ABORTED','ERR_BLOCKED_BY_CLIENT','ERR_INTERNET_DISCONNECTED','ERR_NAME_NOT_RESOLVED','ERR_FAILED'];
       attempt.errorKind=known.find(code=>error?.code===code || String(error?.message || '').includes(code)) || 'OTHER';
@@ -30,4 +40,4 @@ async function reopenOfficial(contents, destination, timeoutMs = 12000) {
   return {ok:true,code:'SITE_REOPENED',attempts};
 }
 
-module.exports={reopenOfficial};
+module.exports={reopenOfficial,reloadOfficial};

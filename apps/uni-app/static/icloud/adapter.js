@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.19') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.20') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -172,7 +172,7 @@
     if(command.background===true) {
       var focused=doc.activeElement;
       // 新增成功后保留官方输入焦点；只放行本次已观察且未再次输入的同一字段。
-      var known=settledCreation && settledCreation.epoch===connectionEpoch && settledCreation.listId===command.listId && settledCreation.row.isConnected && settledCreation.editor.isConnected &&
+      var known=command.reload!==true && settledCreation && settledCreation.epoch===connectionEpoch && settledCreation.listId===command.listId && settledCreation.row.isConnected && settledCreation.editor.isConnected &&
         doc.getElementById(settledCreation.id)===settledCreation.row && focused===settledCreation.editor && text(focused)===settledCreation.title;
       var editing=focused && focused.closest('[contenteditable="true"],input,textarea') && !known;
       var panels=Array.from(doc.querySelectorAll('.reminder-list-detail,.details-popover,[role="dialog"],[role="alertdialog"],[role="menu"]')).some(visibleControl);
@@ -1388,7 +1388,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.19',
+    version: '0.3.20',
     dispose:function(){clearSettledCreation();root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */

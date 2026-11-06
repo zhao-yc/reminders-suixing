@@ -120,7 +120,7 @@
           </template>
           <view class="list-bottom-space"></view>
         </scroll-view>
-        <view class="list-footer"><text>{{ isDemo ? '此处操作只改变示例数据' : snapshot.coverage }}{{ snapshot.partial ? ' · 尚有内容未加载' : '' }}</text><view class="read-status"><button v-if="canAutoRead && !isDemo" class="auto-read-toggle" role="button" :aria-pressed="String(autoReadEnabled)" :disabled="autoReading" title="窗口可见且没有编辑时，自动更新当前清单；不切换清单，网络恢复后仍需手动刷新。" @click="autoReadEnabled = !autoReadEnabled">{{ autoReading ? '更新中…' : autoReadEnabled ? '自动更新已开启' : '自动更新已暂停' }}</button><text>{{ formattedTime }}</text></view></view>
+        <view class="list-footer"><text>{{ isDemo ? '此处操作只改变示例数据' : snapshot.coverage }}{{ snapshot.partial ? ' · 尚有内容未加载' : '' }}</text><view class="read-status"><button v-if="canAutoRead && !isDemo" class="auto-read-toggle" role="button" :aria-pressed="String(autoReadEnabled)" :disabled="autoReading" title="窗口可见且空闲时读取当前清单，定期重载官方页面以检查跨设备变更；网络恢复后请手动刷新。" @click="autoReadEnabled = !autoReadEnabled">{{ autoReading ? '更新中…' : autoReadEnabled ? '自动更新已开启' : '自动更新已暂停' }}</button><text>{{ formattedTime }}</text></view></view>
       </view>
     </view>
   </view>
@@ -241,10 +241,10 @@ function accept(result,readRecovery=false) {
   if(result.code==='CONNECTION_UNAVAILABLE')updateConnection('unavailable');
   noticeCode.value = result.code || '';
   noticeStage.value = ['home','reminders','opening','waiting-navigation','selecting-list','waiting-selected'].includes(result.reconnectStage)?result.reconnectStage:'';
+  if(result.needsListSelection) listSelectionRequired.value=true;
   if (result.ok && result.snapshot) {
     if(readRecovery){networkOffline.value=false;networkNeedsRead.value=false;explicitReadGeneration.value++;}
     snapshot.value = result.snapshot;
-    if(result.needsListSelection) listSelectionRequired.value=true;
     live.value = !listSelectionRequired.value && !networkOffline.value && !networkNeedsRead.value;
     isDemo.value = false;
   } else if (!result.ok) {
@@ -712,7 +712,8 @@ onMounted(()=>{
   if(!canAutoRead)return;
   loadedListMonitor=monitorLoadedList({
     state:()=>({enabled:autoReadEnabled.value,visible:document.visibilityState==='visible',busy:busy.value,editing:!!editing.value || sortMenuOpen.value || notificationsPanelOpen.value,
-      recovery:networkOffline.value || networkNeedsRead.value || listSelectionRequired.value,live:live.value,demo:isDemo.value,region:region.value,revision:networkRevision,snapshot:snapshot.value}),
+      recovery:networkOffline.value || networkNeedsRead.value || listSelectionRequired.value,live:live.value,demo:isDemo.value,region:region.value,revision:networkRevision,snapshot:snapshot.value,
+      allowReload:tab.value!=='completed'}),
     read:(command,currentRegion)=>bridge.execute(command,currentRegion),
     started:()=>{autoReading.value=true;busy.value=true;},
     finished:()=>{autoReading.value=false;busy.value=false;},

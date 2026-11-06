@@ -9,7 +9,13 @@ const {installDesktopIPC}=require('./ipc.cjs');
 /** 独立的真实 Electron 合成专项：只改测试页面，不连接 Apple 或个人会话。 */
 async function runSmoke({frontendURL,root}) {
   const html=fs.readFileSync(path.join(root,'tests/fixtures/reminders.html'),'utf8');
-  const server=http.createServer((request,response)=>{response.setHeader('content-type','text/html; charset=utf-8');response.end(request.url==='/frame'?html:'<!doctype html><meta charset="utf-8"><iframe src="/frame"></iframe>');});
+  let pageLoads=0, externalChanges='';
+  const server=http.createServer((request,response)=>{
+    response.setHeader('content-type','text/html; charset=utf-8');
+    if(request.url==='/frame')return response.end(html.replace('<body>','<body>'+externalChanges));
+    if(request.url==='/')pageLoads++;
+    response.end('<!doctype html><meta charset="utf-8"><iframe src="/frame"></iframe>');
+  });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const controller=createController({fixtureURL:'http://127.0.0.1:'+server.address().port+'/',diagnostics:true});
   const commands=[],errors=[];let ui,stopIPC;
@@ -26,7 +32,7 @@ async function runSmoke({frontendURL,root}) {
     await title('随行验证 · 自动更新起点');first=await controller.execute({type:'read'},'cn');
     ui=new BrowserWindow({show:true,width:1160,height:830,title:'随行自动更新合成验证',webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}});
     ui.webContents.on('console-message',event=>{if(event.level==='error')errors.push(event.message);});
-    stopIPC=installDesktopIPC({ipcMain,controller:{...controller,execute:(command,region)=>{commands.push({...command});return controller.execute(command,region);}},getMainWindow:()=>ui});
+    stopIPC=installDesktopIPC({ipcMain,controller:{...controller,execute:(command,region,mayReload)=>{commands.push({...command});return controller.execute(command,region,mayReload);}},getMainWindow:()=>ui});
     await ui.loadURL(frontendURL);await waitFor(()=>ui.webContents.executeJavaScript('!!document.querySelector(".refresh-button")'),'界面未就绪');
     ui.webContents.send('suixing:snapshot',{region:'cn',result:{...first,snapshot:{...first.snapshot,capturedAt:'2000-01-01T00:00:00.000Z'}}});
     await waitFor(()=>visibleTitle('随行验证 · 自动更新起点'),'初始清单未显示');
@@ -83,6 +89,32 @@ async function runSmoke({frontendURL,root}) {
     const writes=await official('return {completion:w.fixtureClicks,text:w.fixtureTextSaves,dates:w.fixtureScheduleSaves,flag:w.fixtureFlagSaves,creation:w.fixtureCreationClicks,deletion:w.fixtureDeleteKeys,lists:w.fixtureListSaves};');
     assert.ok(Object.values(writes).every(value=>value===0),JSON.stringify(writes));assert.ok(commands.every(command=>['read','readList'].includes(command.type)));assert.deepEqual(errors,[]);
     console.log('自动读取选区保护、窄屏和零业务写入通过；本专项仅为合成网页证据。');
+
+    // 模拟其他设备写入后，旧官方页面只在下一次导航时取得更新。
+    await official('w.sessionStorage.setItem("fixture-list-name-two","随行验证 · 跨设备清单");w.document.querySelector("[data-list=two] button").textContent="随行验证 · 跨设备清单";');
+    const original=await controller.execute({type:'read'},'cn');
+    const request={type:'readList',pageId:original.snapshot.pageId,listId:original.snapshot.activeListId,background:true};
+    const execute=command=>ui.webContents.executeJavaScript('window.suixingDesktop.execute('+JSON.stringify(command)+',"cn")');
+    const newTitle='随行验证 · 仅重载后可见';
+    externalChanges='<script>sessionStorage.setItem('+JSON.stringify('fixture-text-'+original.snapshot.items[0].id+'-title')+','+JSON.stringify(newTitle)+');</script>';
+    const beforeLoads=pageLoads;
+    assert.ok(!(await execute(request)).snapshot.items.some(item=>item.title===newTitle));
+    const editor='w.document.querySelector(".title [role=textbox]")';
+    await official(editor+'.focus();');
+    assert.equal((await execute({...request,reload:true})).code,'AUTO_READ_DEFERRED');
+    assert.equal(pageLoads,beforeLoads);
+    await official(editor+'.blur();');
+    const reloaded=await execute({...request,reload:true});
+    assert.equal(reloaded.code,'READY');assert.equal(reloaded.reloaded,true);assert.notEqual(reloaded.snapshot.pageId,request.pageId);
+    assert.equal(reloaded.snapshot.activeListTitle,original.snapshot.activeListTitle);
+    assert.ok(reloaded.snapshot.items.some(item=>item.title===newTitle));assert.equal(pageLoads,beforeLoads+1);
+    assert.equal(controller.lastWriteOutcome(),null);
+
+    externalChanges='<script>sessionStorage.setItem("fixture-list-name-one","随行验证 · 跨设备清单");</script>';
+    const ambiguous=await execute({...request,pageId:reloaded.snapshot.pageId,listId:reloaded.snapshot.activeListId,reload:true});
+    assert.equal(ambiguous.code,'RELOAD_SELECT_LIST');assert.equal(ambiguous.needsListSelection,true);assert.equal(ambiguous.snapshot,undefined);
+    assert.equal(pageLoads,beforeLoads+2);assert.equal(await official('return w.document.querySelector("[role=treeitem][aria-selected=true]").dataset.list;'),'one');
+    console.log('官方编辑保护、单次重载获取跨设备模拟变更、重载后同名清单等待明确选择通过。');
   } finally {
     stopIPC?.();if(ui && !ui.isDestroyed())ui.destroy();controller.dispose();await new Promise(resolve=>server.close(resolve));
   }

@@ -8,12 +8,20 @@ const { inspectTestEditor, inspectNewTestList } = require('./editor-diagnostics.
 const { inspectTestDetails } = require('./date-diagnostics.cjs');
 const { inspectTestListDelete } = require('./list-delete-diagnostics.cjs');
 const { summarizeWriteOutcome, parseCreationStage, applyCreationStage } = require('./operation-diagnostics.cjs');
-const { reopenOfficial } = require('./site-navigation.cjs');
+const { reopenOfficial, reloadOfficial } = require('./site-navigation.cjs');
 const { readConnectionStatus,probePublicConnection } = require('./connection.cjs');
 
 const ROOT = path.resolve(__dirname, '../..');
 const SOURCE = fs.readFileSync(path.join(ROOT, 'apps/uni-app/static/icloud/adapter.js'), 'utf8');
 const ENTRY = { cn: 'https://www.icloud.com.cn/reminders/', global: 'https://www.icloud.com/reminders/' };
+
+function atRemindersEntry(contents, destination) {
+  try {
+    const current = new URL(contents.getURL());
+    const entry = new URL(destination);
+    return current.origin === entry.origin && current.pathname.replace(/\/$/, '') === entry.pathname.replace(/\/$/, '');
+  } catch { return false; }
+}
 
 /** 每个区域独立持久化会话。没有导入外部浏览器 Cookie，也没有账号密码读取接口。 */
 function createController(options = {}) {
@@ -22,6 +30,7 @@ function createController(options = {}) {
   let busy = false;
   let closing = false;
   let writeSequence = 0;
+  let lastWriteAt = -Infinity;
   let lastWriteOutcome = null;
   let automaticReadSequence=0,lastAutomaticReadOutcome=null;
   let lastReconnectOutcome = null;
@@ -146,13 +155,14 @@ function createController(options = {}) {
     return state;
   }
 
-  async function execute(command, region = 'cn') {
+  async function execute(command, region = 'cn', mayReload = () => false) {
     if (!validCommand(command)) return { ok: false, code: 'INVALID_COMMAND', message: '不支持的操作参数。' };
     if (busy) return { ok: false, code: 'BUSY', message: '上一项操作尚未结束。' };
     busy = true;
     const automaticSequence=options.diagnostics && command.type==='readList' && command.background===true?++automaticReadSequence:0;
     if(automaticSequence)lastAutomaticReadOutcome={sequence:automaticSequence,ok:false,code:'IN_FLIGHT'};
     const write = ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList','deleteList','setListAppearance','setSubtask'].includes(command.type);
+    if (write) lastWriteAt = performance.now();
     const sequence = write && options.diagnostics ? ++writeSequence : 0;
     if (sequence) lastWriteOutcome = summarizeWriteOutcome(command.type, sequence, null, true);
     const finish = result => {
@@ -170,7 +180,7 @@ function createController(options = {}) {
     const mayWait = command.type === 'read' || command.type === 'readLists';
     const pageNotReady = {ok:false,code:'PAGE_NOT_READY',message:'官方页面或连接尚未就绪，请稍后重新读取。',dispatched:false,cloudConfirmed:false};
     let pendingPage = false;
-    async function attempt(force, deadline = Infinity) {
+    async function attempt(force, deadline = Infinity, request = command) {
       pendingPage = false;
       const network=await connectionState(region,force);
       if(network.state==='offline' || network.state==='unavailable')return {ok:false,code:network.state==='offline'?'OFFLINE':'CONNECTION_UNAVAILABLE',message:'连接暂时不可用，保留上次读取内容；恢复后请刷新。',dispatched:false,cloudConfirmed:false};
@@ -189,7 +199,7 @@ function createController(options = {}) {
         return pageNotReady;
       }
       const phaseDiagnostics=options.diagnostics && command.type === 'createItem' ? '\nwindow.__suixingDiagnosticPhases=true;window.__suixingDiagnosticWriteSequence=' + sequence + ';' : '';
-      const operation = target.executeJavaScript(SOURCE + phaseDiagnostics + '\nwindow.__suixingAdapter.execute(' + JSON.stringify(command) + ');', true);
+      const operation = target.executeJavaScript(SOURCE + phaseDiagnostics + '\nwindow.__suixingAdapter.execute(' + JSON.stringify(request) + ');', true);
       let timer;
       const timeout = new Promise(resolve => {
         timer = setTimeout(() => resolve({ ok: false, code: write ? 'UNCERTAIN_WRITE' : 'BRIDGE_TIMEOUT', message: '页面响应超时，请打开官方页面核对。', cloudConfirmed: false }), Math.min(18000,Math.max(1,deadline-performance.now())));
@@ -200,17 +210,60 @@ function createController(options = {}) {
         return reply;
       } finally {clearTimeout(timer);}
     }
-    try {
-      let reply=await attempt(write || mayWait || ['readList','selectList'].includes(command.type));
-      // 前台刷新可等待官方页面就绪。后台读、带页面绑定的命令和写入仍只执行一次。
-      const deadline=performance.now()+7000;
-      while(mayWait && pendingPage && performance.now()+250<deadline) {
+    async function waitForPage(reply, request, deadline=performance.now()+7000, canWait=()=>true) {
+      while(pendingPage && performance.now()+250<deadline && canWait()) {
         await delay(250);
         if(performance.now()>=deadline)break;
-        reply=await attempt(false,deadline);
+        reply=await attempt(false,deadline,request);
       }
-      return finish(reply);
+      return reply;
+    }
+
+    const deferred = reason => ({ ok:false, code:'AUTO_READ_DEFERRED', reason });
+    const selectAgain = { ok:false, code:'RELOAD_SELECT_LIST', reloaded:true, needsListSelection:true,
+      message:'官方页面状态可能已变化，请刷新清单导航后重新选择。' };
+    let navigationStarted = false;
+    // 预检、一次导航和清单恢复占用同一把桥接锁。旧页面句柄不能用于重载后的编辑。
+    async function reloadSelectedList() {
+      if(!mayReload())return deferred('window-hidden');
+      const officialHidden=()=>site && !site.isDestroyed() && !site.isVisible() && !site.getChildWindows().some(window=>window.isVisible());
+      if(!officialHidden() || region!==activeRegion || performance.now()-lastWriteAt<30000)return deferred('official-busy');
+      const contents = site.webContents;
+      const destination = fixtureURL || ENTRY[region];
+      const atEntry = () => atRemindersEntry(contents, destination);
+      if(!atEntry() || contents.isLoading())return deferred('official-busy');
+      const before=await attempt(true);
+      if(!before.ok)return before;
+      const original=before.snapshot.lists.find(list=>list.id===command.listId);
+      if(!original?.title || before.snapshot.lists.filter(list=>list.title===original.title).length!==1)return before;
+      if(!mayReload())return deferred('window-hidden');
+      if(!officialHidden() || !atEntry() || contents.isLoading())return deferred('official-busy');
+      navigationStarted=true;
+      const loaded=await reloadOfficial(contents,destination);
+      if(loaded.code==='OFFICIAL_PAGE_BUSY' && loaded.attempts.every(attempt=>!attempt.committed))return deferred('official-busy');
+      if(!loaded.ok || !atEntry() || !officialHidden())return selectAgain;
+      const navigation={type:'readLists'};
+      const deadline=performance.now()+7000;
+      const lists=await waitForPage(await attempt(false,deadline,navigation),navigation,deadline,officialHidden);
+      const page=lists.snapshot;
+      if(!lists.ok || !page?.pageId || page.pageId===command.pageId || !officialHidden())return selectAgain;
+      const matches=page.lists.filter(list=>list.title===original.title);
+      if(matches.length!==1 || matches[0].color!==original.color || matches[0].icon?.key!==original.icon?.key)return selectAgain;
+      const listId=matches[0].id;
+      const selected=await attempt(false,performance.now()+9000,{type:'selectList',pageId:page.pageId,listId});
+      const snapshot=selected.snapshot;
+      if(!selected.ok || selected.needsListSelection || !officialHidden() || snapshot?.pageId!==page.pageId || snapshot.activeListId!==listId ||
+          snapshot.activeListTitle!==original.title || snapshot.lists.filter(list=>list.title===original.title).length!==1)return selectAgain;
+      return {...selected,reloaded:true};
+    }
+
+    try {
+      if(command.type==='readList' && command.reload===true)return finish(await reloadSelectedList());
+      const reply=await attempt(write || mayWait || ['readList','selectList'].includes(command.type));
+      // 前台刷新可等待官方页面就绪。后台读、带页面绑定的命令和写入仍只执行一次。
+      return finish(mayWait?await waitForPage(reply,command):reply);
     } catch {
+      if(navigationStarted)return finish(selectAgain);
       return finish({ ok: false, code: write ? 'UNCERTAIN_WRITE' : 'PAGE_NOT_READY', message: '请在官方页面完成登录，等待清单显示后重新读取。', cloudConfirmed: false });
     } finally { busy = false; }
   }
@@ -280,13 +333,7 @@ function createController(options = {}) {
       if (busy) return { ok: false, code: 'BUSY', message: '请等待当前操作结束后再重载。' };
       const contents = ensure(region).webContents;
       const destination = fixtureURL || ENTRY[region];
-      let atEntry = false;
-      try {
-        const current = new URL(contents.getURL());
-        const entry = new URL(destination);
-        atEntry = current.origin === entry.origin && current.pathname.replace(/\/$/, '') === entry.pathname.replace(/\/$/, '');
-      } catch { /* 未取得有效页面时重新打开固定官方入口。 */ }
-      if (atEntry) contents.reload();
+      if (atRemindersEntry(contents, destination)) contents.reload();
       else contents.loadURL(destination).catch(() => {});
       return { ok: true, message: '官方提醒事项正在重新加载，请稍后读取。' };
     },

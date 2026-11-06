@@ -1,7 +1,12 @@
 /** 正式客户端与合成验收共用同一 IPC 入口，仅信任本地主窗口的主框架和固定区域。 */
 function installDesktopIPC({ipcMain, controller, getMainWindow, notifications}) {
+  const visible = window => window && !window.isDestroyed?.() && window.isVisible?.()!==false && window.isMinimized?.()!==true;
   const handlers = [
-    ['suixing:execute', async args=>{await notifications?.waitForRead?.();return controller.execute(args.command,args.region);}],
+    ['suixing:execute', async (args,window)=>{
+      await notifications?.waitForRead?.();
+      if(args.command?.type==='readList' && args.command.reload===true)return controller.execute(args.command,args.region,()=>visible(window));
+      return controller.execute(args.command,args.region);
+    }],
     ['suixing:open-site', args=>controller.openSite(args.region)],
     ['suixing:reload-site', args=>controller.reloadSite(args.region)],
     ['suixing:reconnect-site', args=>controller.reconnectSite(args.region)],
@@ -18,8 +23,8 @@ function installDesktopIPC({ipcMain, controller, getMainWindow, notifications}) 
           !args || !['cn','global'].includes(args.region)) return {ok:false,code:'INVALID_REQUEST',message:'请求来源或区域无效。'};
       // 关闭节流的验证窗口可能仍报告网页可见，后台读取须以原生窗口状态兜底。
       if(channel==='suixing:execute' && args.command?.type==='readList' && args.command.background===true &&
-          (window.isVisible?.()===false || window.isMinimized?.()===true))return {ok:false,code:'AUTO_READ_DEFERRED',reason:'window-hidden'};
-      return handler(args);
+          !visible(window))return {ok:false,code:'AUTO_READ_DEFERRED',reason:'window-hidden'};
+      return handler(args,window);
     });
   }
   return ()=>handlers.forEach(([channel])=>ipcMain.removeHandler(channel));
