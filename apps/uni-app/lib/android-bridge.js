@@ -28,7 +28,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
     pending = null;
     clearTimeout(current.timer);
     const { type, pageId, listId } = current.command;
-    const scoped = current.write || ['readList', 'selectList', 'getSchedule', 'showCompleted'].includes(type);
+    const scoped = current.write || ['readList', 'selectList', 'getSchedule', 'getDeleteInfo', 'showCompleted'].includes(type);
     if (result.ok && scoped &&
         (result.snapshot.pageId !== pageId || result.snapshot.activeListId !== listId)) {
       result = current.write
@@ -123,7 +123,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
     if (command.background && !isHidden(view)) return deferAutoRead();
     if (!ready || !official(view)) return failure('PAGE_NOT_READY', '请先打开官方页面，完成登录并等待页面载入。');
     const write = isNativeWrite(command.type);
-    if (needsRead && (write || command.background || command.type === 'getSchedule' || command.type === 'showCompleted')) return failure('READ_REQUIRED', '请先刷新，核对当前页面后再操作。');
+    if (needsRead && (write || command.background || ['getSchedule', 'getDeleteInfo', 'showCompleted'].includes(command.type))) return failure('READ_REQUIRED', '请先刷新，核对当前页面后再操作。');
     return new Promise(resolve => {
       const id = Date.now().toString(36) + '-' + (++counter);
       const current = { id, view, resolve, write, command };
@@ -139,7 +139,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
   }
 
   return {
-    platform: 'Android', capabilities: { reconnect: true, editText: true, editFlag: true, editSchedule: true, openNewItem: true, createItem: true, showCompleted: true, loadedListRefresh: true }, execute,
+    platform: 'Android', capabilities: { reconnect: true, editText: true, editFlag: true, editSchedule: true, deleteItem: true, openNewItem: true, createItem: true, showCompleted: true, loadedListRefresh: true }, execute,
     connectionState() {
       const network = runtime.networkinfo;
       const type = network?.getCurrentType();

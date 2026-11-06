@@ -300,6 +300,57 @@ test('Android 自动更新不创建窗口，窗口重新可见时舍弃迟到快
   assert.equal(view.scripts.length, 2);
 });
 
+test('Android 删除只在完整清单完成预检和确认后派发一次，同名事项保留', async t => {
+  const { bridge, open } = setup(t, { realAdapter: true, timeoutMs: 5000 });
+  const view = await open();
+  assert.equal(bridge.capabilities.deleteItem, true);
+  const { snapshot: before } = await bridge.execute({ type: 'read' });
+  const [other, item] = before.items;
+  assert.equal(item.title, other.title);
+  const target = { pageId: before.pageId, listId: item.listId, id: item.id,
+    fingerprint: item.fingerprint, expectedCompleted: item.completed };
+  const inspect = { type: 'getDeleteInfo', ...target };
+  const grid = view.window.document.querySelector('[role="treegrid"]');
+  grid.setAttribute('aria-rowcount', '3');
+  assert.equal((await bridge.execute(inspect)).code, 'DELETE_UNAVAILABLE');
+  assert.equal(view.window.fixtureDeleteKeys, 0);
+  grid.setAttribute('aria-rowcount', '2');
+  await bridge.execute({ type: 'read' });
+  const preview = await bridge.execute(inspect);
+  assert.equal(preview.code, 'DELETE_READY');
+  assert.equal(preview.dispatched, false);
+  assert.equal(view.window.fixtureDeleteKeys, 0);
+  const remove = { type: 'deleteItem', ...target, confirmed: true, requestId: 'delete-android-once' };
+  assert.equal((await bridge.execute({ ...remove, confirmed: false })).code, 'INVALID_COMMAND');
+  assert.equal(view.window.fixtureDeleteKeys, 0);
+  const removed = await bridge.execute(remove);
+  assert.equal(removed.code, 'WEB_STATE_OBSERVED');
+  assert.equal(removed.cloudConfirmed, false);
+  assert.deepEqual(removed.snapshot.items.map(row => row.fingerprint), [other.fingerprint]);
+  assert.equal((await bridge.execute(remove)).code, 'ALREADY_SUBMITTED');
+  assert.equal(view.window.fixtureDeleteKeys, 1);
+  assert.equal(view.window.fixtureDeletionCount, 1);
+});
+
+test('Android 删除回执异常后，重新读取前既不预检也不再次派发删除', async t => {
+  const state = setup(t);
+  const view = await state.open();
+  const inspect = { ...targetCommand, type: 'getDeleteInfo' };
+  const remove = { ...targetCommand, type: 'deleteItem', confirmed: true, requestId: 'delete-android-once' };
+  assert.equal((await state.bridge.execute({ ...remove, requestId: 'invalid request' })).code, 'INVALID_COMMAND');
+  assert.equal((await state.bridge.execute(inspect)).code, 'READ_REQUIRED');
+  assert.equal(view.scripts.length, 0);
+  await state.read(view);
+  const pending = state.bridge.execute(remove);
+  await tick();
+  view.calls.at(-1).reject(new Error('合成删除回执失败'));
+  const result = await pending;
+  assert.equal(result.code, 'UNCERTAIN_WRITE');
+  assert.equal(result.cloudConfirmed, false);
+  for (const command of [inspect, remove]) assert.equal((await state.bridge.execute(command)).code, 'READ_REQUIRED');
+  assert.equal(view.scripts.length, 2);
+});
+
 test('Android 拒绝不完整的文字和旗标命令，保留待核对前的写入保护', async t => {
   const { bridge, open } = setup(t);
   const view = await open();

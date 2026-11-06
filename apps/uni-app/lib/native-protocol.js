@@ -5,7 +5,7 @@ export const REPLY_PREFIX = 'suixingbridge://reply?payload=';
 export const MAX_PAYLOAD = 110000;
 
 export function isNativeWrite(type) {
-  return ['setCompleted', 'setText', 'setFlagged', 'createItem', 'setSchedule'].includes(type);
+  return ['setCompleted', 'setText', 'setFlagged', 'createItem', 'setSchedule', 'deleteItem'].includes(type);
 }
 
 export function normalizeCommand(command, { scopedReads = false, itemWrites = false } = {}) {
@@ -20,17 +20,22 @@ export function normalizeCommand(command, { scopedReads = false, itemWrites = fa
     if (command.background !== undefined && typeof command.background !== 'boolean') return null;
     return command.background ? { ...result, background: true } : result;
   }
-  if ((!isNativeWrite(type) && type !== 'getSchedule') || (type !== 'setCompleted' && !itemWrites)) return null;
+  const inspect = type === 'getSchedule' || type === 'getDeleteInfo';
+  if ((!isNativeWrite(type) && !inspect) || (type !== 'setCompleted' && !itemWrites)) return null;
+  const validRequestId = id => typeof id === 'string' && /^[a-z0-9-]{1,100}$/.test(id);
   if (type === 'createItem') {
     const { title, requestId } = command;
-    if (!bounded(title, 1000) || !title.trim() || /[\r\n]/.test(title) ||
-        typeof requestId !== 'string' || !/^[a-z0-9-]{1,100}$/.test(requestId)) return null;
+    if (!bounded(title, 1000) || !title.trim() || /[\r\n]/.test(title) || !validRequestId(requestId)) return null;
     return { ...result, title, requestId };
   }
   const { id, fingerprint, expectedCompleted } = command;
   if (!bounded(id, 1024) || !bounded(fingerprint, 16000) || typeof expectedCompleted !== 'boolean') return null;
   const target = { ...result, id, fingerprint, expectedCompleted };
-  if (type === 'getSchedule') return target;
+  if (inspect) return target;
+  if (type === 'deleteItem') {
+    const { confirmed, requestId } = command;
+    return confirmed === true && validRequestId(requestId) ? { ...target, confirmed, requestId } : null;
+  }
   if (type === 'setSchedule') {
     const { expectedSchedule, expectedScheduleFingerprint, value } = command;
     if (!validSchedule(expectedSchedule) || !bounded(expectedScheduleFingerprint, 200) || !validSchedule(value)) return null;
