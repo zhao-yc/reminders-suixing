@@ -1,18 +1,55 @@
+import { validSchedule } from './schedule.js';
+
 /** 原生容器之间共用的数据协议；此模块不提供网页可调用的原生 API。 */
 export const REPLY_PREFIX = 'suixingbridge://reply?payload=';
 export const MAX_PAYLOAD = 110000;
 
-export function normalizeCommand(command) {
+export function isNativeWrite(type) {
+  return ['setCompleted', 'setText', 'setFlagged', 'createItem', 'setSchedule', 'deleteItem'].includes(type);
+}
+
+export function normalizeCommand(command, { scopedReads = false, itemWrites = false } = {}) {
   if (!command || typeof command !== 'object') return null;
-  if (command.type === 'read') return { type: 'read' };
+  const { type } = command;
+  if (type === 'read' || (scopedReads && type === 'readLists')) return { type };
   const bounded = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
   if (!bounded(command.pageId, 150) || !bounded(command.listId, 150)) return null;
-  const result = { type: command.type, pageId: command.pageId, listId: command.listId };
-  if (command.type === 'selectList') return result;
-  if (command.type !== 'setCompleted' || !bounded(command.id, 1024) || !bounded(command.fingerprint, 16000) ||
-      typeof command.expectedCompleted !== 'boolean' || typeof command.completed !== 'boolean') return null;
-  return { ...result, id: command.id, fingerprint: command.fingerprint,
-    expectedCompleted: command.expectedCompleted, completed: command.completed };
+  const result = { type, pageId: command.pageId, listId: command.listId };
+  if (type === 'selectList' || (scopedReads && type === 'showCompleted')) return result;
+  if (scopedReads && type === 'readList') {
+    if (command.background !== undefined && typeof command.background !== 'boolean') return null;
+    return command.background ? { ...result, background: true } : result;
+  }
+  const inspect = type === 'getSchedule' || type === 'getDeleteInfo';
+  if ((!isNativeWrite(type) && !inspect) || (type !== 'setCompleted' && !itemWrites)) return null;
+  const validRequestId = id => typeof id === 'string' && /^[a-z0-9-]{1,100}$/.test(id);
+  if (type === 'createItem') {
+    const { title, requestId } = command;
+    if (!bounded(title, 1000) || !title.trim() || /[\r\n]/.test(title) || !validRequestId(requestId)) return null;
+    return { ...result, title, requestId };
+  }
+  const { id, fingerprint, expectedCompleted } = command;
+  if (!bounded(id, 1024) || !bounded(fingerprint, 16000) || typeof expectedCompleted !== 'boolean') return null;
+  const target = { ...result, id, fingerprint, expectedCompleted };
+  if (inspect) return target;
+  if (type === 'deleteItem') {
+    const { confirmed, requestId } = command;
+    return confirmed === true && validRequestId(requestId) ? { ...target, confirmed, requestId } : null;
+  }
+  if (type === 'setSchedule') {
+    const { expectedSchedule, expectedScheduleFingerprint, value } = command;
+    if (!validSchedule(expectedSchedule) || !bounded(expectedScheduleFingerprint, 200) || !validSchedule(value)) return null;
+    return { ...target, expectedSchedule: { ...expectedSchedule }, expectedScheduleFingerprint, value: { ...value } };
+  }
+  if (type === 'setCompleted') return typeof command.completed === 'boolean' ? { ...target, completed: command.completed } : null;
+  if (type === 'setFlagged') {
+    const { flagged, expectedFlagged } = command;
+    return typeof flagged === 'boolean' && typeof expectedFlagged === 'boolean' ? { ...target, flagged, expectedFlagged } : null;
+  }
+  const { field, value } = command;
+  if (!['title', 'notes'].includes(field) || typeof value !== 'string' || value.length > (field === 'title' ? 1000 : 2000) ||
+      (field === 'title' && (!value.trim() || /[\r\n]/.test(value)))) return null;
+  return { ...target, field, value };
 }
 
 /** 不匹配的旧回执返回 null；损坏或超限的当前回执交给容器按操作类型结束。 */
@@ -29,12 +66,16 @@ export function parseNativeReply(payload, requestId) {
 
 /** 仅将固定命令交给唯一共享适配器，结果用被原生拦截的 URL 返回，不注入原生对象。 */
 export function nativeCommandScript(adapterSource, command, requestId) {
+  const write = isNativeWrite(command.type);
+  const oversized = write
+    ? { ok: false, code: 'UNCERTAIN_WRITE', cloudConfirmed: false, message: '修改回执超出传输范围，请先在官方页面核对，不要重复提交。' }
+    : { ok: false, code: 'PAYLOAD_TOO_LARGE', message: '当前列表超出传输范围，请选择较小清单。' };
   return adapterSource + '\n' +
     '(function(){var id=' + JSON.stringify(requestId) + ';function reply(result){' +
     'var payload=encodeURIComponent(JSON.stringify({requestId:id,result:result}));' +
-    'if(payload.length>' + MAX_PAYLOAD + ')payload=encodeURIComponent(JSON.stringify({requestId:id,result:{ok:false,code:"PAYLOAD_TOO_LARGE",message:"当前列表超出传输范围，请选择较小清单。"}}));' +
+    'if(payload.length>' + MAX_PAYLOAD + ')payload=encodeURIComponent(JSON.stringify({requestId:id,result:' + JSON.stringify(oversized) + '}));' +
     'location.href=' + JSON.stringify(REPLY_PREFIX) + '+payload;}' +
     'Promise.resolve().then(function(){return window.__suixingAdapter.execute(' + JSON.stringify(command) + ');})' +
-    '.then(reply,function(){reply({ok:false,code:' + JSON.stringify(command.type === 'setCompleted' ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED') +
+    '.then(reply,function(){reply({ok:false,code:' + JSON.stringify(write ? 'UNCERTAIN_WRITE' : 'PAGE_CHANGED') +
     ',cloudConfirmed:false,message:"页面响应异常，请核对后重新读取。"});});})();';
 }
