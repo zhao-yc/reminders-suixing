@@ -441,15 +441,25 @@ async function connect() {
   const openLogin = typeof bridge.openLogin === 'function';
   if (openLogin && !editing.value && (!snapshot.value || isDemo.value)) {
     const revision = networkRevision;
+    let initialSummary=false;
     resetLoginView('请在官方页面完成登录，清单就绪后将自动返回。','LOGIN_WAITING');
     busy.value = true;
     try {
       const result = await bridge.openLogin(region.value);
       if (['LOGIN_CANCELLED','LOGIN_WAIT_TIMEOUT'].includes(result.code)) resetLoginView(result.message);
-      else accept(result,revision===networkRevision);
+      else {
+        accept(result,revision===networkRevision);
+        initialSummary=result.ok && result.code==='LOGIN_READY' && result.initialSummary===true;
+      }
     } catch {
       accept({ok:false,code:'CONNECTION_FAILED',message:'连接暂时不可用，请重新打开官方页面核对。'});
     } finally { busy.value = false; }
+    if (initialSummary && canReadSummary.value) {
+      // 登录只交接清单导航。先显示只读汇总，仍由用户明确选择清单后进入编辑。
+      const emptyAccount = snapshot.value.emptyAccount === true;
+      if (!emptyAccount) summaryView.value = 'today';
+      await refreshSummary(emptyAccount);
+    }
     return;
   }
   const result = await bridge.openSite(region.value);

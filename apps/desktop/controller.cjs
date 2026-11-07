@@ -324,7 +324,8 @@ function createController(options = {}) {
           if (canCheck() && result.ok && result.needsListSelection && snapshot?.pageId &&
               snapshot.activeListId === null && snapshot.items?.length === 0 && (snapshot.lists?.length || snapshot.emptyAccount)) {
             window.hide();
-            return { ...result, code:'LOGIN_READY', message:snapshot.emptyAccount?'已连接 iCloud，可以新建第一份清单。':'已连接 iCloud，请选择清单。' };
+            return { ...result, code:'LOGIN_READY', initialSummary:options.allowSummary!==false,
+              message:snapshot.emptyAccount?'已连接 iCloud，可以新建第一份清单。':'已连接 iCloud，请选择清单。' };
           }
         }
         if (current()) await delay(1000);

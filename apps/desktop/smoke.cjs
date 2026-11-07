@@ -137,6 +137,7 @@ async function runSmoke({ frontendURL, root }) {
     officialWindow.close();
     await waitForRenderer('!document.querySelector(".welcome-connect")?.hasAttribute("disabled")');
     assert.equal(officialWindow.isVisible(),false);
+    assert.equal(summaryReads,0,'取消登录时不读取清单汇总');
 
     await Promise.all([once(officialWindow,'show'),clickLogin()]);
     await waitForRenderer('document.querySelector(".notice")?.dataset.code === "LOGIN_WAITING"');
@@ -145,12 +146,7 @@ async function runSmoke({ frontendURL, root }) {
     await new Promise(resolve=>setTimeout(resolve,1250));
     assert.equal(officialWindow.isVisible(),true,'官方编辑弹层可见时保留登录窗口');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".notice")?.dataset.code'),'LOGIN_WAITING');
-    await officialWindow.webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("#login-fixture-dialog").remove()');
-    await waitForRenderer('document.querySelector(".notice")?.dataset.code === "LOGIN_READY"');
-    assert.equal(officialWindow.isVisible(),false);
-    assert.deepEqual(await ui.webContents.executeJavaScript('[document.querySelectorAll(".list-button").length,document.querySelectorAll(".reminder-row").length,document.querySelector(".list-content").dataset.live]'),[2,0,'false']);
-    await ui.webContents.executeJavaScript('window.dispatchEvent(new Event("offline"));window.dispatchEvent(new Event("online"));');
-    await waitForRenderer('document.querySelector(".network-notice")?.dataset.state === "read-required"');
+    assert.equal(summaryReads,0,'官方页面就绪前不读取清单汇总');
 
     // 原清单没有已知的今天事项，另一份同名清单有一条且标记为部分加载。
     await officialWindow.webContents.executeJavaScript(`(()=>{
@@ -163,14 +159,19 @@ async function runSmoke({ frontendURL, root }) {
       w.renderFixture=list=>{w.fixtureBeforeTodayRender(list);if(list==='two')w.document.querySelector('.reminder-item').setAttribute('aria-setsize','2');};
       w.renderFixture('one');
     })()`);
+    await officialWindow.webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("#login-fixture-dialog").remove()');
+    await waitForRenderer('document.querySelector(".across-lists .summary-row") && !document.querySelector(".refresh-button[disabled]")');
+    assert.equal(officialWindow.isVisible(),false);
+    assert.equal(summaryReads,1,'登录就绪后无需点击，应自动读取一次汇总');
+    assert.deepEqual(await ui.webContents.executeJavaScript('[document.querySelectorAll(".list-button").length,document.querySelectorAll(".summary-row").length,!!document.querySelector(".list-content[data-live=true]")]'),[2,1,false]);
+    await ui.webContents.executeJavaScript('window.dispatchEvent(new Event("offline"));window.dispatchEvent(new Event("online"));');
+    await waitForRenderer('document.querySelector(".network-notice")?.dataset.state === "read-required"');
+
     const todayCard='.desktop-view-card[data-status="today"]';
-    assert.equal(await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+'+" .desktop-card-count").textContent.trim()'),'—');
     ui.focus();ui.webContents.focus();
     await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+').focus()');
     ui.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});
     ui.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
-    await waitForRenderer('document.querySelector(".across-lists .summary-row") !== null');
-    assert.equal(summaryReads,1,'首次打开应读取一次汇总');
     await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+').click()');
     assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".refresh-button[disabled]")'),false,'重按今天应直接显示缓存');
     assert.equal(summaryReads,1);
@@ -178,7 +179,10 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(await ui.webContents.executeJavaScript('getComputedStyle(document.querySelector(".summary-row .reminder-metadata")).color'),'rgb(209, 46, 60)','跨清单的逾期日期应标红');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+'+" .desktop-card-count").textContent.trim()'),'1+');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".across-lists .date-view-description").textContent.trim()'),'部分内容尚未读取');
-    assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".network-notice")'),false,'导航状态下成功汇总后也应收起联网提示');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".network-notice")?.dataset.state'),'read-required','使用缓存不解除恢复保护');
+    await ui.webContents.executeJavaScript('document.querySelector(".refresh-button").click()');
+    await waitForRenderer('!document.querySelector(".network-notice,.refresh-button[disabled]")');
+    assert.equal(summaryReads,2,'导航状态下手动汇总成功可解除恢复保护');
     assert.match(await ui.webContents.executeJavaScript('document.querySelector(".across-lists .list-footer").textContent.trim()'),/^汇总于 \d{2}:\d{2}$/);
     const officialSelected=()=>officialWindow.webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("[role=treeitem][aria-selected=true]").dataset.list');
     assert.equal(await officialSelected(),'one','汇总完成后恢复原选区');
@@ -200,12 +204,12 @@ async function runSmoke({ frontendURL, root }) {
     await officialWindow.webContents.executeJavaScript(`(()=>{const w=document.querySelector('iframe').contentWindow;w.renderFixture=w.fixtureBeforeTodayRender;delete w.fixtureBeforeTodayRender;w.renderFixture('two');})()`);
     await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+').click();document.querySelector(".refresh-button").click()');
     await waitForRenderer('document.querySelector(".across-lists .summary-row") && !document.querySelector(".across-lists .date-view-description,.refresh-button[disabled]")');
-    assert.equal(summaryReads,2,'切回今天应复用缓存，手动刷新应重新读取一次');
+    assert.equal(summaryReads,3,'切回今天应复用缓存，手动刷新应重新读取一次');
     assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".across-lists .eyebrow")'),false,'汇总标题上方不再显示范围说明');
     await ui.webContents.executeJavaScript('document.querySelector(".list-button").click()');
     await waitForRenderer('document.querySelectorAll(".list-content[data-live=true] .reminder-row").length===2');
     await officialWindow.webContents.executeJavaScript(`document.querySelector('iframe').contentWindow.sessionStorage.removeItem('fixture-schedule-reminder-item-fixture-two-0');`);
-    console.log('跨清单今天经键盘和正式 IPC 读到另一清单的事项，提示部分加载，恢复原选区并可打开来源。');
+    console.log('登录后经正式 IPC 自动读取跨清单事项，切换视图复用缓存，手动刷新恢复联网并可打开来源。');
 
     await ui.webContents.executeJavaScript('document.querySelector(".toolbar-actions .quiet-button").click()');
     await new Promise(resolve=>setTimeout(resolve,1100));

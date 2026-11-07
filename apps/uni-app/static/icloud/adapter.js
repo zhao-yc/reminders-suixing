@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.23') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.24') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -176,7 +176,8 @@
     var navigation={snapshot:navigationSnapshot(doc,lists),needsListSelection:true};
     if(command.background===true) {
       var selected=lists.filter(function(list){return list.selected;});
-      navigation.selectedListId=selected.length===1?selected[0].id:null;
+      // 空字符串表示确认无选区，null 表示选区不唯一，后者不能作为后台切换起点。
+      navigation.selectedListId=selected.length===1?selected[0].id:selected.length===0?'':null;
     }
     return result(true,'SELECT_A_LIST','请选择清单后继续。',navigation);
   }
@@ -369,7 +370,8 @@
     var nodes = listNodes(doc);
     if(command.background===true) {
       var selected=nodes.filter(function(node){return node.getAttribute('aria-selected')==='true';});
-      if(isLoading(doc) || selected.length!==1 || handle(selected[0])!==command.fromListId)return result(false,'STALE_VIEW','官方选区已变化，请刷新清单。');
+      var previousId=selected.length===1?handle(selected[0]):selected.length===0?'':null;
+      if(isLoading(doc) || typeof command.fromListId!=='string' || previousId!==command.fromListId)return result(false,'STALE_VIEW','官方选区已变化，请刷新清单。');
       var deferred=deferredWhileEditing(doc);
       if(deferred)return deferred;
     }
@@ -1458,7 +1460,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.23',
+    version: '0.3.24',
     dispose:function(){clearSettledCreation();root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */

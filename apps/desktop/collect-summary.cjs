@@ -13,7 +13,7 @@ async function collectSummary(command, { read, canRead }) {
   const {pageId,lists,emptyAccount} = before.snapshot;
   const original = before.selectedListId;
   if (pageId!==command.pageId || command.listId && command.listId!==original) return reselect;
-  if (!emptyAccount && !lists.some(list=>list.id===original)) return {...reselect,message:'请先选择一份清单，再打开汇总。'};
+  if (!emptyAccount && (typeof original!=='string' || original && !lists.some(list=>list.id===original))) return reselect;
 
   const readList = listId => ({type:'readList',pageId,listId,background:true});
   const selectList = (listId,fromListId) => ({type:'selectList',pageId,listId,fromListId,background:true});
@@ -35,7 +35,7 @@ async function collectSummary(command, { read, canRead }) {
       collected.push({list,items:reply.snapshot.items,partial:reply.snapshot.partial});
     }
   } finally {
-    if (lastDestination) {
+    if (lastDestination && original) {
       originalSnapshot = undefined;
       if (canRead()) {
         const restoreDeadline = performance.now()+9500;

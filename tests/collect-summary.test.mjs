@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { collectSummary } from '../apps/desktop/collect-summary.cjs';
 
-function fixture({failOnSwitch=false,restoreAllowed=true}={}) {
+function fixture({failOnSwitch=false,restoreAllowed=true,initialSelection='one'}={}) {
   const lists=['one','two'].map(id=>({id,title:'随行验证 · 同名清单'}));
   const pageId='fixture-page';
-  let selected='one',blocked=false;
+  let selected=initialSelection,blocked=false;
   const commands=[];
   const read=async command=>{
     commands.push(command);
@@ -32,6 +32,19 @@ test('跨清单读取只使用页面绑定，完成后恢复原选区，导航�
   assert.equal(state.selected(),'one');
   assert.equal(result.snapshot,undefined);
   assert.deepEqual(state.commands.map(command=>command.type),['readLists','readList','selectList','readLists','selectList']);
+});
+
+test('首次汇总可以从无选区读取所有清单，选区不明确时不切换',async()=>{
+  const unselected=fixture({initialSelection:''});
+  const result=await unselected.run('');
+  assert.equal(result.ok,true);
+  assert.deepEqual(result.summary.lists.map(entry=>entry.list.id),['one','two']);
+  assert.deepEqual(unselected.commands.slice(1).map(command=>[command.fromListId,command.listId]),[['','one'],['one','two']]);
+  assert.equal(result.snapshot,undefined);
+
+  const ambiguous=fixture({initialSelection:null});
+  assert.equal((await ambiguous.run('')).code,'STALE_VIEW');
+  assert.deepEqual(ambiguous.commands.map(command=>command.type),['readLists']);
 });
 
 test('切换后读不到事项时保留已读结果，原选区恢复失败则要求重新选择',async()=>{
