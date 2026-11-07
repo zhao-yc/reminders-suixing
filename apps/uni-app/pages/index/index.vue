@@ -88,7 +88,7 @@
               <view class="completion-button" :class="{ checked: entry.item.completed }" aria-hidden="true">{{ entry.item.completed ? '✓' : '' }}</view>
               <view class="reminder-copy">
                 <text class="reminder-title">{{ entry.item.title }}</text>
-                <view class="summary-row-meta"><button class="summary-source-button" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" :aria-label="'打开清单：' + entry.list.title" @click="selectList(entry.list)">{{ entry.list.title }}</button><text v-if="entry.item.metadata" class="reminder-metadata" :class="{ 'is-overdue': entry.overdue }">{{ entry.item.metadata }}</text></view>
+                <view class="summary-row-meta"><button v-if="summarySourcesCurrent" class="summary-source-button" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" :aria-label="'打开清单：' + entry.list.title" @click="selectList(entry.list)">{{ entry.list.title }}</button><text v-else class="reminder-metadata">{{ entry.list.title }}</text><text v-if="entry.item.metadata" class="reminder-metadata" :class="{ 'is-overdue': entry.overdue }">{{ entry.item.metadata }}</text></view>
               </view>
             </view>
           </template>
@@ -295,6 +295,7 @@ const viewContext=computed(()=>viewProjection.value.contextIds);
 const dateView=computed(()=>groupLoadedDateView(viewProjection.value,{view:tab.value,...viewDates.value,descending:sortMode.value==='date-descending'}));
 const visibleItems=computed(()=>dateView.value.items);
 const summaryData=computed(()=>summaryCache.value?.pageId===snapshot.value?.pageId && summaryCache.value?.region===region.value?summaryCache.value.report:null);
+const summarySourcesCurrent=computed(()=>!!summaryData.value && summaryCache.value.sourcePageId===snapshot.value?.pageId);
 const summaryProjection=computed(()=>projectAcrossLists(summaryData.value?.lists || [],{...viewDates.value,view:summaryView.value || 'pending',query:summaryView.value?search.value:''}));
 const summaryPartial=computed(()=>!!summaryData.value && (summaryData.value.lists.length<summaryData.value.totalLists || summaryData.value.lists.some(entry=>entry.partial)));
 const summaryNotice=computed(()=>{
@@ -318,7 +319,7 @@ function desktopCardCount(view) {
 // 同一页面的单清单读回只更新该清单的缓存，其余清单继续使用上次汇总数据。
 watch(snapshot,value=>{
   const report=summaryData.value;
-  if (!report || !value?.lists) return;
+  if (!summarySourcesCurrent.value || !value?.lists) return;
   const prior=new Map(report.lists.map(entry=>[entry.list.id,entry]));
   const lists=value.lists.flatMap(list=>list.id===value.activeListId ? [{list,items:value.items,partial:value.partial}] : prior.has(list.id) ? [{...prior.get(list.id),list}] : []);
   summaryCache.value={...summaryCache.value,report:{...report,lists,totalLists:value.lists.length}};
@@ -464,11 +465,10 @@ async function selectTab(next) {
 function selectDesktopCard(view) {
   if (desktopCardsDisabled.value) return;
   if (canReadSummary.value) {
-    const refresh = summaryView.value===view || !summaryData.value || networkNeedsRead.value;
     if (summaryView.value!==view) search.value='';
     updateViewClock();
     summaryView.value=view;
-    if (refresh) return refreshSummary();
+    if (!summaryData.value) return refreshSummary();
     return;
   }
   flagOnly.value = view === 'flagged';
@@ -496,7 +496,7 @@ async function refreshSummary(quiet=false) {
     else if (revision!==networkRevision) return;
     else if (result.ok && result.snapshot) snapshot.value=result.snapshot;
     if(result.needsListSelection)live.value=false;
-    if(result.ok) summaryCache.value={pageId,region:currentRegion,report:result.summary};
+    if(result.ok) summaryCache.value={pageId,sourcePageId:pageId,region:currentRegion,report:result.summary};
     else if(result.needsListSelection) {
       summaryView.value=null;
       summaryCache.value=null;
@@ -918,24 +918,17 @@ let loadedListMonitor;
 const checkLoadedList=()=>loadedListMonitor?.check();
 onMounted(()=>{
   if(!canAutoRead)return;
-  let restoreSummary=false;
   loadedListMonitor=monitorLoadedList({
     state:()=>({enabled:autoReadEnabled.value && !summaryView.value,visible:document.visibilityState==='visible',busy:busy.value,editing:!!editing.value || sortMenuOpen.value || notificationsPanelOpen.value,
       recovery:networkOffline.value || networkNeedsRead.value || listSelectionRequired.value,live:live.value,demo:isDemo.value,region:region.value,revision:networkRevision,snapshot:snapshot.value,
       allowReload:tab.value!=='completed'}),
     read:(command,currentRegion)=>bridge.execute(command,currentRegion),
     started:()=>{autoReading.value=true;busy.value=true;},
-    finished:()=>{
-      autoReading.value=false;busy.value=false;
-      if(restoreSummary) {
-        restoreSummary=false;
-        if(document.visibilityState==='visible') void loadInitialSummary();
-      }
-    },
+    finished:()=>{autoReading.value=false;busy.value=false;},
     // 自动读取只更新内容；不抹去仍待核对的保存提示，也不自动解除断网恢复保护。
     received:result=>{
-      // 页面重载会换掉所有清单句柄，已有汇总需按新的页面重新读取。
-      restoreSummary=!!summaryData.value && result.snapshot.pageId!==snapshot.value?.pageId;
+      // 已核对的自动重载只保留上次汇总供显示，旧清单句柄要等手动刷新后才能使用。
+      if(result.reloaded && summaryData.value) summaryCache.value={...summaryCache.value,pageId:result.snapshot.pageId};
       snapshot.value=result.snapshot;
     },
     failed:result=>accept(result)

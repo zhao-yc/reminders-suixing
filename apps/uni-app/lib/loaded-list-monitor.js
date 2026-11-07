@@ -2,7 +2,7 @@
 export function monitorLoadedList({ state, read, started, finished, received, failed }, options = {}) {
   const schedule = options.setInterval || globalThis.setInterval;
   const unschedule = options.clearInterval || globalThis.clearInterval;
-  const now = options.now || Date.now;
+  const now = options.now || (()=>Date.now());
   let stopped = false, pending = false, lastAttempt = -Infinity;
   let scope = '', lastReloadAttempt = 0;
   const eligible = value => value.enabled && value.visible && value.live && !value.demo && !value.editing && !value.recovery &&

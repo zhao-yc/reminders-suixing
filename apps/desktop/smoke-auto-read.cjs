@@ -80,10 +80,23 @@ async function runSmoke({frontendURL,root}) {
     await waitFor(()=>ui.webContents.executeJavaScript('!document.querySelector(".refresh-button[disabled]")'),'手动刷新后未完成首次汇总');
     assert.deepEqual(commands.slice(7).map(command=>command.type),['read','readSummary']);
     assert.notEqual(await ui.webContents.executeJavaScript('document.querySelector(".desktop-view-card[data-status=pending] .desktop-card-count").textContent.trim()'),'—');
-    await click('.auto-read-toggle');
     console.log('官方编辑期间只暂缓，网络恢复后保持只读并等待手动核对通过。');
 
-    ui.setSize(391,800);await pause(250);assert.equal(await ui.webContents.executeJavaScript('document.documentElement.scrollWidth<=window.innerWidth+2'),true,'自动更新状态在窄屏不能横向溢出');
+    await official('w.sessionStorage.setItem("fixture-list-name-two","随行验证 · 汇总重载对照");w.document.querySelector("[data-list=two] button").textContent="随行验证 · 汇总重载对照";');
+    // 快进合成窗口的时间，触发正常的低频重载条件。
+    await ui.webContents.executeJavaScript('(()=>{const now=Date.now;Date.now=()=>now()+121000;})()');
+    await focus();
+    await waitFor(()=>ui.webContents.executeJavaScript('(()=>{const pageId=document.querySelector(".list-content[data-live=true]")?.dataset.pageId;return pageId && pageId!=='+JSON.stringify(first.snapshot.pageId)+' && !document.querySelector(".refresh-button[disabled]")})()'),'未完成当前清单自动重载');
+    assert.deepEqual(commands.slice(9).map(command=>[command.type,command.reload]),[['readList',true]]);
+    await click('.desktop-view-card[data-status=pending]');
+    assert.equal(await visibleTitle('随行验证 · 网络恢复待核对'),true,'自动重载后仍可查看上次汇总');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".across-lists .summary-source-button").length'),0,'汇总不可使用旧页面的来源句柄');
+    assert.equal(commands.length,10,'自动重载与再次进入卡片都不重新汇总');
+
+    ui.setSize(391,800);
+    await waitFor(()=>ui.webContents.executeJavaScript('matchMedia("(max-width:760px)").matches && !!document.querySelector(".auto-read-toggle")'),'窄屏未切回当前清单');
+    assert.equal(await ui.webContents.executeJavaScript('document.documentElement.scrollWidth<=window.innerWidth+2'),true,'自动更新状态在窄屏不能横向溢出');
+    await click('.auto-read-toggle');
     fs.writeFileSync(path.join(root,'.local/desktop-auto-read-synthetic-20261105.png'),(await ui.webContents.capturePage()).toPNG());
     await pause(3100);await official('w.document.querySelector("[role=treeitem][data-list=two]").click();');
     assert.equal(await official('return w.document.querySelector("[role=treeitem][aria-selected=true]").dataset.list;'),'two');

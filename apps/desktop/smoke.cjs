@@ -86,7 +86,11 @@ async function runSmoke({ frontendURL, root }) {
       preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false
     } });
     ui.webContents.on('console-message', event => { if (event.level === 'error') {uiErrors.push(event.message);console.error('界面错误：' + event.message);} });
-    stopIPC=installDesktopIPC({ipcMain,controller,getMainWindow:()=>ui});
+    let summaryReads=0;
+    stopIPC=installDesktopIPC({ipcMain,controller:{...controller,execute:(command,region,mayReload)=>{
+      if(command.type==='readSummary') summaryReads++;
+      return controller.execute(command,region,mayReload);
+    }},getMainWindow:()=>ui});
     await ui.loadURL(frontendURL);
     await ui.webContents.executeJavaScript('new Promise((resolve,reject) => { const deadline=Date.now()+8000; const timer=setInterval(()=>{if(document.body.innerText.includes("连接我的提醒事项")){clearInterval(timer);resolve(true)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("构建界面未完成加载"))}},50) })');
     const uiState = await ui.webContents.executeJavaScript('({title:document.title, bridge:typeof window.suixingDesktop?.execute, hasNode:typeof require})');
@@ -166,6 +170,10 @@ async function runSmoke({ frontendURL, root }) {
     ui.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});
     ui.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
     await waitForRenderer('document.querySelector(".across-lists .summary-row") !== null');
+    assert.equal(summaryReads,1,'首次打开应读取一次汇总');
+    await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+').click()');
+    assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".refresh-button[disabled]")'),false,'重按今天应直接显示缓存');
+    assert.equal(summaryReads,1);
     assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".summary-row .reminder-title")].map(node=>node.textContent.trim())'),['随行验证 · 第二个同名清单']);
     assert.equal(await ui.webContents.executeJavaScript('getComputedStyle(document.querySelector(".summary-row .reminder-metadata")).color'),'rgb(209, 46, 60)','跨清单的逾期日期应标红');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+'+" .desktop-card-count").textContent.trim()'),'1+');
@@ -192,6 +200,7 @@ async function runSmoke({ frontendURL, root }) {
     await officialWindow.webContents.executeJavaScript(`(()=>{const w=document.querySelector('iframe').contentWindow;w.renderFixture=w.fixtureBeforeTodayRender;delete w.fixtureBeforeTodayRender;w.renderFixture('two');})()`);
     await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+').click();document.querySelector(".refresh-button").click()');
     await waitForRenderer('document.querySelector(".across-lists .summary-row") && !document.querySelector(".across-lists .date-view-description,.refresh-button[disabled]")');
+    assert.equal(summaryReads,2,'切回今天应复用缓存，手动刷新应重新读取一次');
     assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".across-lists .eyebrow")'),false,'汇总标题上方不再显示范围说明');
     await ui.webContents.executeJavaScript('document.querySelector(".list-button").click()');
     await waitForRenderer('document.querySelectorAll(".list-content[data-live=true] .reminder-row").length===2');
