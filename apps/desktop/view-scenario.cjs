@@ -29,7 +29,7 @@ function classifyViewScenario(snapshot) {
 /** 仅切换本地视图，观察指定父子记录和未知日期说明，最后恢复未完成。 */
 async function inspectDatedTestViews(expected) {
   const pause=()=>new Promise(resolve=>setTimeout(resolve,80));
-  const tab=view=>document.querySelector('.view-tab[data-status="'+view+'"]');
+  const tab=view=>document.querySelector('.view-tab:not([data-scope=summary] .view-tab)[data-status="'+view+'"]');
   const root=document.querySelector('.list-content');
   if(root?.dataset.pageId!==expected.pageId || root.dataset.listId!==expected.listId || document.querySelector('.inline-editor') || document.querySelector('.toolbar-search input')?.value || document.querySelector('.flag-filter[aria-pressed="true"]') || tab('pending')?.getAttribute('aria-pressed')!=='true')return false;
   let confirmed=true;

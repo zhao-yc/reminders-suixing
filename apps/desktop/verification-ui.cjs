@@ -5,7 +5,7 @@ async function clickTestCompletion(expected) {
     const list = document.querySelector('.list-content');
     if (list?.dataset.pageId === expected.pageId && list.dataset.listId === expected.listId) {
       // uni-app H5 的 button 会生成 uni-button；用业务属性定位，避免依赖生成标签和页签顺序。
-      const tab = document.querySelector(`.tabs [data-status="${expected.completed ? 'completed' : 'pending'}"]`);
+      const tab = document.querySelector(`:is(.tabs,.desktop-view-grid:not([data-scope=summary])) [data-status="${expected.completed ? 'completed' : 'pending'}"]`);
       if (!tab) return false;
       if (!tab.classList.contains('active')) tab.click();
       await pause();
@@ -31,7 +31,7 @@ async function editTestText(expected) {
   for (let attempt = 0; attempt < 50; attempt++) {
     const list = document.querySelector('.list-content');
     if (list?.dataset.pageId !== expected.pageId || list.dataset.listId !== expected.listId) { await pause(); continue; }
-    const tab = document.querySelector(`.tabs [data-status="${expected.completed ? 'completed' : 'pending'}"]`);
+    const tab = document.querySelector(`:is(.tabs,.desktop-view-grid:not([data-scope=summary])) [data-status="${expected.completed ? 'completed' : 'pending'}"]`);
     if (!tab) return false;
     if (!tab.classList.contains('active')) { tab.click(); await pause(); }
     const rows = [...document.querySelectorAll('.reminder-row')].filter(row => row.dataset.recordId === expected.id);
@@ -81,14 +81,14 @@ async function createTestItem(expected) {
 /** 显示完成项也走正式页签，只激活一次，等待异步显示请求结束后才返回。 */
 async function showTestCompleted(expected) {
   const list=document.querySelector('.list-content');
-  const tab=document.querySelector('.tabs [data-status="completed"]');
+  const tab=document.querySelector(':is(.tabs,.desktop-view-grid:not([data-scope=summary])) [data-status="completed"]');
   if (list?.dataset.pageId !== expected.pageId || list.dataset.listId !== expected.listId || !tab || tab.disabled || ['true',''].includes(tab.getAttribute('disabled'))) return false;
   tab.click();
   await new Promise(resolve=>setTimeout(resolve,100));
   for(let attempt=0;attempt<80;attempt++) {
     const current=document.querySelector('.list-content');
     if (current?.dataset.pageId !== expected.pageId || current.dataset.listId !== expected.listId) return false;
-    const currentTab=document.querySelector('.tabs [data-status="completed"]');
+    const currentTab=document.querySelector(':is(.tabs,.desktop-view-grid:not([data-scope=summary])) [data-status="completed"]');
     if (currentTab?.classList.contains('active') && !currentTab.disabled && !['true',''].includes(currentTab.getAttribute('disabled'))) return !document.querySelector('.notice.error');
     await new Promise(resolve=>setTimeout(resolve,100));
   }
@@ -103,7 +103,7 @@ async function editTestSchedule(expected) {
   for(let attempt=0;attempt<80;attempt++) {
     const list=document.querySelector('.list-content');
     if (list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId) {await pause();continue;}
-    const tab=document.querySelector('.tabs [data-status="'+(expected.completed?'completed':'pending')+'"]');
+    const tab=document.querySelector(':is(.tabs,.desktop-view-grid:not([data-scope=summary])) [data-status="'+(expected.completed?'completed':'pending')+'"]');
     if (!tab) return false;
     if (!tab.classList.contains('active') && !disabled(tab)) {tab.click();await pause();}
     const rows=[...document.querySelectorAll('.reminder-row')].filter(node=>node.dataset.recordId===expected.id);
@@ -181,7 +181,7 @@ async function clickTestFlag(expected) {
   for(let attempt=0;attempt<50;attempt++) {
     const list=document.querySelector('.list-content');
     if(list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId) {await pause();continue;}
-    const tab=document.querySelector('.tabs [data-status="'+(expected.completed?'completed':'pending')+'"]');
+    const tab=document.querySelector(':is(.tabs,.desktop-view-grid:not([data-scope=summary])) [data-status="'+(expected.completed?'completed':'pending')+'"]');
     if(!tab || tab.hasAttribute('disabled')) return false;
     if(!tab.classList.contains('active')) {tab.click();await pause();continue;}
     const rows=[...document.querySelectorAll('.reminder-row')].filter(row=>row.dataset.recordId===expected.id);
@@ -216,7 +216,7 @@ async function reconnectTestClient(expected) {
         const message=error.textContent.trim(),known={'重新连接暂不可用，请在官方页面核对。':'RECONNECT_FAILED','官方页面尚未就绪，请完成登录或稍后读取。':'PAGE_NOT_READY','请等待当前操作结束后再重新连接。':'BUSY','清单位置已变化，请重新读取并选择清单。':'STALE_VIEW','重新连接未完成，请打开官方页面核对。':'NAVIGATION_FAILED','重新连接超时，请稍后读取或打开官方页面核对。':'NAVIGATION_TIMEOUT'};
         return failed('UI_ERROR',Object.hasOwn(known,message)?known[message]:'OTHER');
       }
-      if(current?.dataset.pageId && current.dataset.pageId!==expected.pageId) return current.dataset.live==='true' && document.querySelector('.list-title')?.textContent.trim()===expected.title?true:failed('VIEW_NOT_RESTORED');
+      if(current?.dataset.pageId && current.dataset.pageId!==expected.pageId) return current.dataset.live==='true' && (current.dataset.listTitle ?? document.querySelector('.list-title')?.textContent.trim())===expected.title?true:failed('VIEW_NOT_RESTORED');
     }
   }
   return failed('OBSERVATION_TIMEOUT');
@@ -259,14 +259,14 @@ async function editTestList(expected) {
   let list;const readyDeadline=Date.now()+5000;
   for(let attempt=0;attempt<35;attempt++) {
     list=document.querySelector('.list-content');
-    if(list?.dataset.pageId===expected.pageId && list.dataset.listId===expected.listId && document.querySelector('.list-title')?.textContent.trim()===expected.title && !document.querySelector('.inline-editor')) break;
+    if(list?.dataset.pageId===expected.pageId && list.dataset.listId===expected.listId && (list.dataset.listTitle ?? document.querySelector('.list-title')?.textContent.trim())===expected.title && !document.querySelector('.inline-editor')) break;
     if(Date.now()>=readyDeadline) break;await pause();
   }
   if(list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId ||
-    document.querySelector('.list-title')?.textContent.trim()!==expected.title || !expected.title?.startsWith('随行验证') || document.querySelector('.inline-editor')) return false;
+    (list?.dataset.listTitle ?? document.querySelector('.list-title')?.textContent.trim())!==expected.title || !expected.title?.startsWith('随行验证') || document.querySelector('.inline-editor')) return false;
   const button=document.querySelector(expected.operation==='create'?'.add-list-button':'.rename-list-button');
   if(disabled(button)) return false;button.click();
-  for(let attempt=0;attempt<35 && !document.querySelector('.list-editor');attempt++) await pause();
+  for(let attempt=0;attempt<35 && disabled(document.querySelector('.list-editor input'));attempt++) await pause();
   const editor=document.querySelector('.list-editor'),current=document.querySelector('.list-content');
   if(!editor || editor.dataset.operation!==expected.operation || current?.dataset.pageId!==expected.pageId || current.dataset.listId!==expected.listId) return false;
   const input=editor.querySelector('.list-name-input input,input.list-name-input');
@@ -287,7 +287,7 @@ async function deleteTestList(expected) {
   const deadline=Date.now()+5000;let list,button;
   for(let attempt=0;attempt<45;attempt++) {
     list=document.querySelector('.list-content');button=document.querySelector('.delete-list-button');
-    if(list?.dataset.pageId===expected.pageId && list.dataset.listId===expected.listId && document.querySelector('.list-title')?.textContent.trim()===expected.title && !document.querySelector('.inline-editor') && !disabled(button))break;
+    if(list?.dataset.pageId===expected.pageId && list.dataset.listId===expected.listId && (list.dataset.listTitle ?? document.querySelector('.list-title')?.textContent.trim())===expected.title && !document.querySelector('.inline-editor') && !disabled(button))break;
     if(Date.now()>=deadline)break;await pause();
   }
   if(list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId || document.querySelector('.inline-editor') || disabled(button))return false;
@@ -326,7 +326,7 @@ async function selectTestListClient(expected) {
 async function editTestListAppearance(expected) {
   const pause=()=>new Promise(resolve=>setTimeout(resolve,100)),disabled=node=>!node || node.disabled || node.hasAttribute('disabled');
   const list=document.querySelector('.list-content'),button=document.querySelector('.list-appearance-button');
-  if(!expected.title?.startsWith('随行验证') || list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId || document.querySelector('.list-title')?.textContent.trim()!==expected.title || document.querySelector('.inline-editor') || disabled(button))return false;
+  if(!expected.title?.startsWith('随行验证') || list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId || (list.dataset.listTitle ?? document.querySelector('.list-title')?.textContent.trim())!==expected.title || document.querySelector('.inline-editor') || disabled(button))return false;
   button.click();let editor;
   for(let attempt=0;attempt<60;attempt++){await pause();editor=document.querySelector('.appearance-editor');if(editor)break;if(document.querySelector('.notice.error'))return false;}
   if(!editor)return false;

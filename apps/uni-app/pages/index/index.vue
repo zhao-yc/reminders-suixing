@@ -1,37 +1,58 @@
 <template>
-  <view class="app-shell">
+  <view class="app-shell" :class="{ 'desktop-sidebar-layout': desktopWide }">
     <!-- #ifdef APP-HARMONY -->
     <HarmonyICloudHost :bridge="bridge" />
     <!-- #endif -->
     <view v-if="sidebarOpen" class="sidebar-scrim" @click="sidebarOpen = false"></view>
-    <view class="sidebar" :class="{ 'is-open': sidebarOpen }">
+    <view class="sidebar" :class="{ 'is-open': sidebarOpen }" :inert="creatingList ? '' : undefined">
       <view class="brand">
         <view class="brand-icon"><view></view><view></view><view></view></view>
         <view><text class="brand-name">提醒事项·随行</text><text class="brand-caption">让每一件事，随身而行</text></view>
       </view>
-      <view class="account-card">
+      <view v-if="desktopWide && snapshot && (snapshot.activeListId || canReadSummary)" class="desktop-view-grid" :data-scope="canReadSummary ? 'summary' : 'list'" role="group" aria-label="快捷视图">
+        <button v-for="card in desktopCards" :key="card.value" class="view-tab desktop-view-card" role="button" :data-status="card.value"
+          :tabindex="desktopCardsDisabled ? -1 : 0" :disabled="desktopCardsDisabled" :class="{ active: activeDesktopCard === card.value }" :aria-pressed="String(activeDesktopCard === card.value)"
+          :aria-label="card.label + (canReadSummary ? '，跨清单' : '，当前清单') + '，' + desktopCardCount(card.value)"
+          @click="selectDesktopCard(card.value)">
+          <view class="desktop-card-top"><image class="desktop-icon" :src="'/static/desktop-icons/' + card.icon + '.svg'" mode="aspectFit" aria-hidden="true" />
+            <text class="desktop-card-count">{{ desktopCardCount(card.value) }}</text></view>
+          <text class="desktop-card-label">{{ card.label }}</text>
+        </button>
+      </view>
+      <view v-if="!desktopWide || !snapshot?.activeListId" class="account-card">
         <view class="account-dot" :class="{ connected: accountConnected }"></view>
         <view class="account-copy"><text class="account-title">{{ isDemo ? '界面示例' : accountConnected ? '已连接 iCloud' : snapshot ? '待读取核对' : '连接你的 iCloud' }}</text><text class="muted small">{{ isDemo ? '示例数据，不连接账户' : region === 'cn' ? '中国大陆账户' : '其他地区账户' }}</text></view>
       </view>
-      <view class="sidebar-section"><text>我的清单</text><text class="muted">{{ snapshot?.lists.length || 0 }}</text></view>
+      <view class="sidebar-section"><text>我的清单</text><text v-if="!desktopWide" class="muted">{{ snapshot?.lists.length || 0 }}</text>
+        <button v-if="desktopWide && snapshot && canManageLists" class="add-list-button desktop-add-list" role="button"
+          :tabindex="busy || editing || (!live && !canCreateFirstList) ? -1 : 0" :disabled="busy || !!editing || (!live && !canCreateFirstList)"
+          aria-label="新建清单" title="新建清单" @click="startListEdit('create', $event)"><image class="desktop-icon" src="/static/desktop-icons/journal-plus.svg" mode="aspectFit" aria-hidden="true" /></button>
+      </view>
       <view v-if="!snapshot" class="sidebar-placeholder">连接后，你的清单会显示在这里。</view>
       <button v-for="list in snapshot?.lists || []" :key="list.id" class="list-button" :data-list-id="list.id" :class="{ selected: list.id === snapshot.activeListId }" :disabled="busy || !!editing" @click="selectList(list)">
-        <view class="list-symbol" :style="{ background: list.color }"><image v-if="listIconURL(list.icon)" class="list-glyph" :src="listIconURL(list.icon)" mode="aspectFit" aria-hidden="true" /><text v-else>≡</text></view><text class="list-name">{{ list.title }}</text>
+        <view class="list-symbol" :style="{ background: list.color }"><image v-if="listIconURL(list.icon)" class="list-glyph" :src="listIconURL(list.icon)" mode="aspectFit" aria-hidden="true" /><image v-else-if="desktopWide" class="desktop-icon" src="/static/desktop-icons/list-ul.svg" mode="aspectFit" aria-hidden="true" /><text v-else>≡</text></view><text class="list-name">{{ list.title }}</text>
         <text v-if="list.id === snapshot.activeListId" class="list-count">{{ incompleteCount }}</text>
       </button>
-      <button v-if="snapshot && canManageLists" class="add-list-button" role="button" :tabindex="busy || editing || (!live && !canCreateFirstList) ? -1 : 0" :disabled="busy || !!editing || (!live && !canCreateFirstList)" @click="startListEdit('create')">＋ 新建清单</button>
+      <button v-if="!desktopWide && snapshot && canManageLists" class="add-list-button" role="button" :tabindex="busy || editing || (!live && !canCreateFirstList) ? -1 : 0" :disabled="busy || !!editing || (!live && !canCreateFirstList)" @click="startListEdit('create', $event)">＋ 新建清单</button>
       <view class="sidebar-footer"><button v-if="canNotify" class="notifications-settings-button" role="button" :aria-expanded="String(notificationsPanelOpen)" :disabled="busy || !!editing" @click="toggleNotificationPanel">系统通知{{ notificationState.enabled ? ' · 已开启' : '' }}</button><text class="footer-wordmark">随行 · 开源</text><text class="muted small">{{ bridge.platform }} · 最小验证版</text></view>
     </view>
-    <view class="workspace">
+    <view class="workspace" :inert="creatingList ? '' : undefined">
       <view class="toolbar" :class="{ 'with-tools': !!snapshot }">
         <button class="mobile-menu" aria-label="显示清单" @click="sidebarOpen = true">☰</button>
         <text v-if="!snapshot" class="toolbar-label">你的清单，随时在身边</text>
         <view v-if="snapshot" class="quick-tools">
-          <button v-if="canCreate" class="add-reminder-button" :disabled="busy || !!editing || (!live && !isDemo)" aria-label="新增提醒事项" title="新增提醒事项（Ctrl+N）" @click="startCreate"><text>＋</text></button>
-          <view class="toolbar-search"><view class="search-mark"></view><input v-model="search" :disabled="!!editing" :focus="searchFocused" class="search" placeholder="搜索当前清单" aria-label="搜索当前清单" @blur="searchFocused = false" /></view>
+          <button v-if="canCreate" class="add-reminder-button" :disabled="summaryView || busy || !!editing || (!live && !isDemo)" aria-label="新增提醒事项" title="新增提醒事项（Ctrl+N）" @click="startCreate"><text>＋</text></button>
+          <view class="toolbar-search"><view class="search-mark"></view><input v-model="search" :disabled="!!editing" :focus="searchFocused" class="search" :placeholder="searchLabel" :aria-label="searchLabel" @blur="searchFocused = false" /></view>
         </view>
         <view class="toolbar-actions">
-          <picker :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || !!editing" @change="changeRegion"><view class="region-picker">{{ region === 'cn' ? '中国大陆' : '其他地区' }}⌄</view></picker>
+          <picker class="region-control" :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || !!editing" @change="changeRegion">
+            <button class="region-picker" role="button" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing"
+              :aria-label="'iCloud 地区，当前为' + (region === 'cn' ? '中国大陆' : '其他地区')">
+              <view class="region-globe" aria-hidden="true"></view>
+              <text>{{ region === 'cn' ? '中国大陆' : '其他地区' }}</text>
+              <view class="region-chevron" aria-hidden="true"></view>
+            </button>
+          </picker>
           <button class="quiet-button" :disabled="busy || (!!editing && !editing.blocked)" @click="connect">{{ snapshot && !isDemo ? '官方页面' : '登录 iCloud' }}</button>
           <button v-if="snapshot && !isDemo && bridge.capabilities?.reconnect" class="quiet-button reconnect-button" role="button" :tabindex="busy || editing || networkOffline ? -1 : 0" :disabled="busy || !!editing || networkOffline" title="重新打开官方页面并读取清单，复用现有会话" @click="reconnectClient">重新连接</button>
           <button class="primary-button refresh-button" :disabled="busy || (!!editing && !editing.blocked)" @click="refresh">{{ busy && !autoReading ? '处理中…' : '刷新' }}</button>
@@ -57,13 +78,31 @@
         <button class="demo-link" :disabled="busy" @click="showDemo">先看看界面示例 →</button>
         <text class="welcome-footnote">登录在 iCloud 官方页面完成</text>
       </view>
-      <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-captured-at="snapshot.capturedAt" :data-live="String(live)">
-        <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title">{{ snapshot.activeListTitle || (snapshot.emptyAccount ? '还没有清单' : '选择清单') }}</text><text v-if="snapshot.activeListId" class="heading-count">{{ incompleteCount }}</text><button v-if="canManageLists && snapshot.activeListId" class="rename-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="重命名清单" title="重命名当前清单" @click="startListEdit('rename')">✎</button><button v-if="canEditListAppearance && snapshot.activeListId" class="list-appearance-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="清单颜色与图标" title="清单颜色与图标" @click="startListAppearance">◉</button><button v-if="canDeleteList && snapshot.activeListId" class="delete-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="删除清单" title="删除当前清单" @click="startListDeletion">⌫</button></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : !snapshot.activeListId ? '清单导航' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
+      <view v-else-if="summaryView" class="list-content across-lists">
+        <view class="list-heading"><view class="title-line"><text class="list-title" role="heading" aria-level="1">{{ summaryTitle }}</text><text v-if="summaryData" class="heading-count">{{ summaryProjection.matchCount }}</text></view></view>
+        <text v-if="summaryNotice" class="date-view-description" role="status">{{ summaryNotice }}</text>
+        <scroll-view class="items-scroll" scroll-y>
+          <template v-for="entry in summaryProjection.rows" :key="entry.key">
+            <view v-if="entry.heading" class="date-section-heading" role="heading" aria-level="2">{{ entry.heading }}</view>
+            <view class="reminder-row summary-row" :class="{ 'view-context': entry.context, 'is-subtask': entry.item.level > 1, completed: entry.item.completed }">
+              <view class="completion-button" :class="{ checked: entry.item.completed }" aria-hidden="true">{{ entry.item.completed ? '✓' : '' }}</view>
+              <view class="reminder-copy">
+                <text class="reminder-title">{{ entry.item.title }}</text>
+                <view class="summary-row-meta"><button v-if="summarySourcesCurrent" class="summary-source-button" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" :aria-label="'打开清单：' + entry.list.title" @click="selectList(entry.list)">{{ entry.list.title }}</button><text v-else class="reminder-metadata">{{ entry.list.title }}</text><text v-if="entry.item.metadata" class="reminder-metadata" :class="{ 'is-overdue': entry.overdue }">{{ entry.item.metadata }}</text></view>
+              </view>
+            </view>
+          </template>
+          <view v-if="!summaryProjection.rows.length" class="empty-list"><text>{{ busy ? '正在逐份读取清单…' : !summaryData ? '点击刷新重新读取清单。' : search ? '没有找到相关事项。' : '已加载内容中没有符合条件的事项。' }}</text></view>
+        </scroll-view>
+        <view v-if="summaryData" class="list-footer summary-footer"><text>汇总于 {{ summaryReadTime }}</text></view>
+      </view>
+      <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-list-title="snapshot.activeListTitle" :data-captured-at="snapshot.capturedAt" :data-live="String(live)">
+        <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title" role="heading" aria-level="1">{{ snapshot.activeListTitle || (snapshot.emptyAccount ? '还没有清单' : '选择清单') }}</text><text v-if="snapshot.activeListId" class="heading-count">{{ incompleteCount }}</text><button v-if="canManageLists && snapshot.activeListId" class="rename-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="重命名清单" title="重命名当前清单" @click="startListEdit('rename')">✎</button><button v-if="canEditListAppearance && snapshot.activeListId" class="list-appearance-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="清单颜色与图标" title="清单颜色与图标" @click="startListAppearance">◉</button><button v-if="canDeleteList && snapshot.activeListId" class="delete-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="删除清单" title="删除当前清单" @click="startListDeletion">⌫</button></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : !snapshot.activeListId ? '清单导航' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
         <view v-if="editing?.field === 'list-delete'" class="inline-editor list-delete-confirmation" role="alertdialog" aria-label="确认删除清单"><text class="delete-title">删除清单“{{ editing.title }}”？</text><text>清单及其中的全部事项都会从 iCloud 和同步设备移除，包括当前尚未加载的内容。</text><text class="muted small">共享清单请在官方页面处理。</text><view class="editor-actions"><button class="confirm-list-delete" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '删除中…' : '确认删除清单' }}</button><button class="cancel-list-delete" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view></view>
         <view v-if="editing?.field === 'list-appearance'" class="inline-editor appearance-editor" role="group" aria-label="清单颜色与图标"><text class="editor-label">{{ editing.title }} · 颜色与图标</text><view class="appearance-colors" role="radiogroup" aria-label="清单颜色"><button v-for="(option,index) in editing.colors" :key="option.key" class="appearance-choice color-choice" :data-key="option.key" role="radio" :aria-checked="String(editing.color === option.key)" :aria-label="appearanceColorLabel(option.color,index)" :title="appearanceColorLabel(option.color,index)" :tabindex="busy || editing.blocked || editing.color !== option.key ? -1 : 0" :disabled="busy || editing.blocked" :style="{background:option.color}" @click="editing.color = option.key"><text v-if="editing.color === option.key">✓</text></button></view><scroll-view class="appearance-icons-scroll" scroll-y><view class="appearance-icons" role="radiogroup" aria-label="清单图标"><button v-for="(option,index) in editing.icons" :key="option.key" class="appearance-choice icon-choice" :data-key="option.key" :class="{'icon-choice-selected':editing.iconKey === option.key}" role="radio" :aria-checked="String(editing.iconKey === option.key)" :aria-label="'图标 '+(index+1)" :title="'图标 '+(index+1)" :tabindex="busy || editing.blocked || editing.iconKey !== option.key ? -1 : 0" :disabled="busy || editing.blocked" @click="editing.iconKey = option.key"><image class="appearance-glyph" :src="listIconURL(option.icon)" mode="aspectFit" aria-hidden="true" /></button></view></scroll-view><text class="muted small">保存后同步到使用此清单的设备。</text><view class="editor-actions"><button class="save-list-appearance" role="button" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '保存中…' : '保存外观' }}</button><button class="cancel-list-appearance" role="button" :disabled="busy" @click="endEdit">取消</button></view></view>
-        <view v-if="editing?.listOperation" class="inline-editor list-editor" :data-operation="editing.listOperation"><text class="editor-label">{{ editing.listOperation === 'create' ? '新建清单' : '重命名清单' }}</text><input v-model="editing.value" class="edit-field list-name-input" :maxlength="100" :focus="true" :disabled="busy || editing.blocked" aria-label="清单名称" @confirm="confirmEdit" @keydown="editKeydown" /><text class="muted small">保存后可单独调整颜色与图标。</text><view class="editor-actions"><button class="save-edit save-list-edit" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '保存中…' : editing.listOperation === 'create' ? '创建清单' : '保存名称' }}</button><button class="cancel-list-edit" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view></view>
+        <view v-if="editing?.listOperation === 'rename'" class="inline-editor list-editor" data-operation="rename"><text class="editor-label">重命名清单</text><input v-model="editing.value" class="edit-field list-name-input" :maxlength="100" :focus="true" :disabled="busy || editing.blocked" aria-label="清单名称" @confirm="confirmEdit" @keydown="editKeydown" /><text class="muted small">保存后可单独调整颜色与图标。</text><view class="editor-actions"><button class="save-edit save-list-edit" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '保存中…' : '保存名称' }}</button><button class="cancel-list-edit" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view></view>
         <view class="list-controls">
-          <view class="tabs" role="group" aria-label="当前清单已加载内容的视图"><button v-for="option in VIEW_OPTIONS" :key="option.value" class="view-tab" role="button" :data-status="option.value" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing" :aria-pressed="String(tab === option.value)" :aria-label="option.label + '，已确认 ' + viewProjection.counts[option.value] + ' 项' + (unknownForView(option.value) ? '，另有日期待核对' : '')" :class="{ active: tab === option.value }" @click="selectTab(option.value)">{{ option.label }} <text>{{ viewProjection.counts[option.value] }}{{ unknownForView(option.value) ? '+' : '' }}</text></button></view>
+          <view v-if="!desktopWide || (canReadSummary && snapshot.activeListId)" class="tabs" role="group" aria-label="当前清单已加载内容的视图"><button v-for="option in scopedViewOptions" :key="option.value" class="view-tab" role="button" :data-status="option.value" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing" :aria-pressed="String(tab === option.value)" :aria-label="option.label + '，当前清单已确认 ' + viewProjection.counts[option.value] + ' 项' + (unknownForView(option.value) ? '，另有日期待核对' : '')" :class="{ active: tab === option.value }" @click="selectTab(option.value)">{{ option.label }} <text>{{ viewProjection.counts[option.value] }}{{ unknownForView(option.value) ? '+' : '' }}</text></button></view>
           <view class="list-view-tools"><text class="current-scope">当前清单已加载</text>
             <button class="flag-filter" role="button" :tabindex="busy || editing || !flagReadable ? -1 : 0" :disabled="busy || !!editing || !flagReadable" :aria-pressed="String(flagOnly)" :class="{ 'flag-active': flagOnly }" aria-label="只看当前清单已加载的旗标事项" @click="flagOnly = !flagOnly">⚑ {{ flaggedCount }}</button>
             <!-- #ifdef H5 -->
@@ -79,13 +118,13 @@
             <!-- #endif -->
           </view>
         </view>
-        <text v-if="tab === 'today' || tab === 'scheduled'" class="date-view-description" :data-view="tab" :data-matches="viewProjection.matchCount" :data-unknown="unknownForView(tab)">{{ tab === 'today' ? '今天与逾期' : '已安排日期' }} · 当前清单已加载 · {{ viewProjection.matchCount }} 项{{ unknownForView(tab) ? '；另有 ' + unknownForView(tab) + ' 项日期或时区待核对，未计入' : '' }}{{ viewContext.size ? '；灰色主事项仅供定位，不计入数量' : '' }}</text>
+        <text v-if="dateViewLabel" class="date-view-description" :data-view="tab" :data-matches="viewProjection.matchCount" :data-unknown="unknownForView(tab)">{{ dateViewLabel }} · 当前清单已加载 · {{ viewProjection.matchCount }} 项{{ unknownForView(tab) ? '；另有 ' + unknownForView(tab) + ' 项日期或时区待核对，未计入' : '' }}{{ viewContext.size ? '；灰色主事项仅供定位，不计入数量' : '' }}</text>
         <text v-if="sortMode !== 'manual'" class="sort-description">仅本地显示排序，子事项跟随主事项{{ sortMode.startsWith('date-') ? '；日期不可读的主事项列在末尾' : sortMode.startsWith('priority-') ? '；无优先级在后，不可读的主事项列在末尾' : '' }}</text>
         <text v-if="sortMode.startsWith('priority-')" class="sort-description">优先级仅查看，请在苹果设备上修改</text>
         <text v-if="flagOnly" class="sort-description">只显示当前清单已加载的旗标事项{{ unreadableFlags ? '；还有旗标状态不可读的事项，请在官方页面核对' : '' }}</text>
         <scroll-view class="items-scroll" scroll-y>
           <view v-if="editing?.creating" class="reminder-row new-reminder-row"><view class="draft-circle"></view><view class="inline-editor"><text class="editor-label">新提醒事项 · {{ snapshot.activeListTitle }}</text><input v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" placeholder="提醒我…" aria-label="新事项标题" @confirm="confirmEdit" @keydown="editKeydown" /><view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '添加中…' : '添加' }}</button><button :disabled="busy" @click="endEdit">取消</button></view></view></view>
-          <view v-if="!visibleItems.length && !editing?.creating" class="empty-list"><text class="empty-circle">✓</text><text>{{ !snapshot.activeListId ? snapshot.emptyAccount ? '还没有清单，先新建一份。' : '请选择一份清单继续。' : search ? '没有找到相关事项' : flagOnly ? '当前已加载内容中没有符合筛选的旗标事项' : tab === 'today' ? '当前已确认日期的已加载事项中，没有今天或逾期待办' : tab === 'scheduled' ? '当前已确认日期的已加载事项中，没有计划待办' : tab === 'completed' ? '这里会显示网页已加载的完成事项' : '这份清单暂时没有待办事项' }}</text><button v-if="canCreateFirstList" class="empty-add" :disabled="busy || !!editing" @click="startListEdit('create')">新建清单</button><button v-else-if="flagOnly" class="empty-add" @click="flagOnly = false">显示全部事项</button><button v-else-if="snapshot.activeListId && canCreate && tab === 'pending' && !search" class="empty-add" :disabled="busy || !!editing || (!live && !isDemo)" @click="startCreate">添加提醒事项</button></view>
+          <view v-if="!visibleItems.length && !editing?.creating" class="empty-list"><text class="empty-circle">✓</text><text>{{ emptyViewMessage }}</text><button v-if="canCreateFirstList" class="empty-add" :disabled="busy || !!editing" @click="startListEdit('create', $event)">新建清单</button><button v-else-if="flagOnly" class="empty-add" @click="flagOnly = false">显示全部事项</button><button v-else-if="snapshot.activeListId && canCreate && tab === 'pending' && !search" class="empty-add" :disabled="busy || !!editing || (!live && !isDemo)" @click="startCreate">添加提醒事项</button></view>
           <template v-for="item in visibleItems" :key="item.id">
           <view v-if="dateView.headings.has(item.id)" class="date-section-heading" role="heading" aria-level="2">{{ dateView.headings.get(item.id) }}</view>
           <view class="reminder-row" :data-record-id="item.id" :data-priority="item.priority" :data-view-context="String(viewContext.has(item.id))" :class="{ completed: item.completed, 'is-subtask': item.level > 1, 'view-context': viewContext.has(item.id) }">
@@ -111,7 +150,7 @@
               </view>
               <template v-else><view class="reminder-title-line"><text v-if="item.flagged" class="flag-mark" aria-label="已添加旗标">⚑</text><text v-if="priorityInfo(item.priority).mark" class="priority-mark" :aria-label="priorityInfo(item.priority).label" :title="priorityInfo(item.priority).label + '；请在苹果设备上修改'">{{ priorityInfo(item.priority).mark }}</text><text class="reminder-title" @dblclick="startEdit(item, 'title')">{{ item.title }}</text></view><text v-if="item.notes" class="reminder-notes" @dblclick="startEdit(item, 'notes')">{{ item.notes }}</text><text v-if="item.notesTruncated" class="reminder-metadata">备注较长，请在官方页面查看完整内容</text><text v-if="item.priority === null" class="reminder-metadata">优先级不可读</text></template>
               <text v-if="viewContext.has(item.id)" class="reminder-metadata">所属主事项 · 仅供定位</text>
-              <text v-if="item.metadata" class="reminder-metadata">{{ item.metadata }}</text>
+              <text v-if="item.metadata" class="reminder-metadata" :class="{ 'is-overdue': viewProjection.overdueIds.has(item.id) }">{{ item.metadata }}</text>
               <text v-if="item.metadataPartial" class="reminder-metadata">部分日期附注请在官方页面查看</text>
             </view>
             <view v-if="(canEdit || canEditSchedule || canEditFlag || canDelete || canEditHierarchy) && !editing && !viewContext.has(item.id)" class="row-actions"><button v-if="canEdit" class="edit-title-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑标题" @click="startEdit(item, 'title')">✎</button><button v-if="canEdit" class="edit-notes-button" :disabled="busy || (!live && !isDemo) || item.disabled || item.notesTruncated" aria-label="编辑备注" @click="startEdit(item, 'notes')">≡</button><button v-if="canEditSchedule" class="edit-schedule-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑日期与时间" @click="startScheduleEdit(item)">▦</button><button v-if="canEditFlag" class="flag-toggle-button" role="button" :tabindex="busy || item.disabled || typeof item.flagged !== 'boolean' ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled || typeof item.flagged !== 'boolean'" :aria-pressed="String(item.flagged === true)" :aria-label="item.flagged ? '移除旗标' : '添加旗标'" :class="{ 'flag-active': item.flagged }" @click="toggleFlag(item)">⚑</button><button v-if="canEditHierarchy" class="subtask-item-button" role="button" :tabindex="busy || item.disabled || !item.hierarchyReadable ? -1 : 0" :disabled="busy || !live || item.disabled || !item.hierarchyReadable" :aria-label="item.level > 1 ? '提升为顶层事项' : '设为上一主事项的子事项'" :title="item.level > 1 ? '提升为顶层事项' : '设为上一主事项的子事项'" @click="startSubtask(item)">{{ item.level > 1 ? '⇤' : '⇥' }}</button><button v-if="canDelete" class="delete-item-button" role="button" :tabindex="busy || item.disabled ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="删除事项" title="删除这一条事项" @click="startDelete(item)">⌫</button></view>
@@ -120,7 +159,42 @@
           </template>
           <view class="list-bottom-space"></view>
         </scroll-view>
-        <view class="list-footer"><text>{{ isDemo ? '此处操作只改变示例数据' : snapshot.coverage }}{{ snapshot.partial ? ' · 尚有内容未加载' : '' }}</text><view class="read-status"><button v-if="canAutoRead && !isDemo" class="auto-read-toggle" role="button" :aria-pressed="String(autoReadEnabled)" :disabled="autoReading" title="窗口可见且没有编辑时，自动更新当前清单；不切换清单，网络恢复后仍需手动刷新。" @click="autoReadEnabled = !autoReadEnabled">{{ autoReading ? '更新中…' : autoReadEnabled ? '自动更新已开启' : '自动更新已暂停' }}</button><text>{{ formattedTime }}</text></view></view>
+        <view class="list-footer"><text>{{ isDemo ? '此处操作只改变示例数据' : snapshot.coverage }}{{ snapshot.partial ? ' · 尚有内容未加载' : '' }}</text><view class="read-status"><button v-if="canAutoRead && !isDemo" class="auto-read-toggle" role="button" :aria-pressed="String(autoReadEnabled)" :disabled="autoReading" title="窗口可见且空闲时读取当前清单，定期重载官方页面以检查跨设备变更；网络恢复后请手动刷新。" @click="autoReadEnabled = !autoReadEnabled">{{ autoReading ? '更新中…' : autoReadEnabled ? '自动更新已开启' : '自动更新已暂停' }}</button><text>{{ formattedTime }}</text></view></view>
+      </view>
+    </view>
+    <view v-if="creatingList" class="create-list-overlay">
+      <view class="inline-editor list-editor create-list-dialog" data-operation="create" role="dialog" aria-modal="true" aria-labelledby="create-list-title" :aria-busy="String(busy)" tabindex="-1">
+        <text id="create-list-title" class="create-list-title">新建清单</text>
+        <view class="create-list-name">
+          <text>名称</text><input v-model="editing.value" class="edit-field list-name-input" :maxlength="100" :focus="!busy && !editing.blocked" :disabled="busy || editing.blocked" aria-label="清单名称" @confirm="confirmEdit" @keydown="editKeydown" />
+        </view>
+        <text v-if="editing.loadingAppearance" class="create-list-hint" role="status">正在读取颜色和图标…</text>
+        <view v-else-if="editing.appearance" class="create-list-appearance">
+          <view class="create-list-colors" role="radiogroup" aria-label="颜色">
+            <text class="create-list-field-label">颜色</text>
+            <view class="create-list-swatches"><button v-for="(option,index) in editing.appearance.colors" :key="option.key" class="appearance-choice color-choice" role="radio"
+              :aria-checked="String(editing.appearance.color === option.key)" :aria-label="appearanceColorLabel(option.color,index)" :title="appearanceColorLabel(option.color,index)"
+              :tabindex="busy || editing.blocked || editing.appearance.color !== option.key ? -1 : 0" :disabled="busy || editing.blocked" :style="{ background: option.color }" @click="editing.appearance.color = option.key"></button></view>
+          </view>
+          <view class="create-list-icon">
+            <text class="create-list-field-label">图标</text>
+            <button class="create-list-icon-toggle" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked" aria-label="选择图标" :aria-expanded="String(editing.showIcons)" @click="toggleCreateListIcons">
+              <view class="create-list-badge" :style="{ background: editing.appearance.color }"><image :src="createListIcon" mode="aspectFit" aria-hidden="true" /></view>
+              <text>选择图标</text>
+            </button>
+          </view>
+          <scroll-view v-if="editing.showIcons" class="create-list-icons" scroll-y>
+            <view class="appearance-icons" role="radiogroup" aria-label="清单图标"><button v-for="(option,index) in editing.appearance.icons" :key="option.key" :data-key="option.key" class="appearance-choice icon-choice" role="radio"
+              :aria-checked="String(editing.appearance.iconKey === option.key)" :aria-label="'图标 '+(index+1)" :title="'图标 '+(index+1)" :tabindex="busy || editing.blocked || editing.appearance.iconKey !== option.key ? -1 : 0"
+              :disabled="busy || editing.blocked" :class="{ 'icon-choice-selected': editing.appearance.iconKey === option.key }" @click="editing.appearance.iconKey = option.key"><image class="appearance-glyph" :src="listIconURL(option.icon)" mode="aspectFit" aria-hidden="true" /></button></view>
+          </scroll-view>
+        </view>
+        <view class="create-list-type"><text>清单类型</text><text class="create-list-type-value">标准</text></view>
+        <text v-if="editing.blocked" class="create-list-error" role="alert">{{ notice || '请关闭弹窗并刷新后再试。' }}</text>
+        <view class="editor-actions create-list-actions">
+          <button class="cancel-list-edit" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button>
+          <button class="save-edit save-list-edit" role="button" :tabindex="busy || editing.blocked || !editing.value.trim() ? -1 : 0" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy && !editing.loadingAppearance ? '创建中…' : '创建' }}</button>
+        </view>
       </view>
     </view>
   </view>
@@ -136,7 +210,7 @@ import { validSchedule, localDateString } from '../../lib/schedule.js';
 import { SORT_OPTIONS, readSortPreference, saveSortPreference, sortLoadedItems } from '../../lib/list-sort.js';
 import { reconnectLoadedList } from '../../lib/reconnect.js';
 import { listIconURL, appearanceColorLabel } from '../../lib/list-appearance.js';
-import { VIEW_OPTIONS, groupLoadedDateView, projectLoadedItems } from '../../lib/list-views.js';
+import { VIEW_OPTIONS, groupLoadedDateView, projectLoadedItems, projectAcrossLists } from '../../lib/list-views.js';
 import { monitorConnection, connectionResult } from '../../lib/connection.js';
 import { monitorLoadedList } from '../../lib/loaded-list-monitor.js';
 // #ifdef APP-HARMONY
@@ -170,6 +244,12 @@ const networkReason = ref('offline');
 const networkNeedsRead = ref(false);
 let networkRevision = 0;
 const editing = ref(null);
+const creatingList = computed(()=>editing.value?.listOperation==='create');
+const createListIcon = computed(()=>{
+  const appearance=editing.value?.appearance;
+  return listIconURL(appearance?.icons.find(option=>option.key===appearance.iconKey)?.icon);
+});
+let createListTrigger;
 const canAutoRead = bridge.capabilities?.loadedListRefresh === true;
 const autoReadEnabled = ref(true);
 const autoReading = ref(false);
@@ -208,6 +288,37 @@ const accountConnected = computed(() => !isDemo.value && !networkOffline.value &
 const sidebarOpen = ref(false);
 const tab = ref('pending');
 const flagOnly = ref(false);
+const summaryView = ref(null);
+const summaryCache = ref(null);
+const canReadSummary = computed(()=>!isDemo.value && typeof bridge.readSummary==='function');
+const desktopWide = ref(false);
+const scopedViewOptions = computed(() => VIEW_OPTIONS.filter(option => desktopWide.value || !option.desktopOnly));
+const desktopCards = [
+  { value:'today', label:'今天', icon:'calendar2-event' },
+  { value:'scheduled', label:'计划', icon:'calendar3' },
+  { value:'pending', label:'待办', icon:'inbox-fill' },
+  { value:'flagged', label:'旗标', icon:'flag-fill' },
+  { value:'overdue', label:'逾期', icon:'alarm' },
+  { value:'completed', label:'完成', icon:'check2' }
+];
+const activeDesktopCard = computed(() => canReadSummary.value ? summaryView.value : tab.value === 'pending' && flagOnly.value ? 'flagged' : tab.value);
+const summaryTitle = computed(() => desktopCards.find(card=>card.value===summaryView.value)?.label || '');
+const searchLabel = computed(() => summaryView.value ? '搜索' + summaryTitle.value : '搜索当前清单');
+// #ifdef H5
+const desktopViewport = typeof window === 'undefined' ? null : window.matchMedia('(min-width:761px)');
+function updateDesktopWidth() {
+  desktopWide.value = desktopViewport?.matches === true;
+  if (!desktopWide.value && summaryView.value) {
+    flagOnly.value=summaryView.value==='flagged';
+    tab.value=flagOnly.value?'pending':summaryView.value;
+    summaryView.value=null;
+  }
+  if (!desktopWide.value && tab.value === 'overdue') tab.value = 'pending';
+}
+updateDesktopWidth();
+onMounted(() => desktopViewport?.addEventListener('change', updateDesktopWidth));
+onUnmounted(() => desktopViewport?.removeEventListener('change', updateDesktopWidth));
+// #endif
 const search = ref('');
 const searchFocused = ref(false);
 const incompleteCount = computed(() => snapshot.value?.items.filter(item => !item.completed).length || 0);
@@ -224,7 +335,53 @@ const viewProjection=computed(()=>projectLoadedItems(sortLoadedItems(snapshot.va
 const viewContext=computed(()=>viewProjection.value.contextIds);
 const dateView=computed(()=>groupLoadedDateView(viewProjection.value,{view:tab.value,...viewDates.value,descending:sortMode.value==='date-descending'}));
 const visibleItems=computed(()=>dateView.value.items);
-function unknownForView(view) {return view==='today'?viewProjection.value.unknownToday:view==='scheduled'?viewProjection.value.unknownDates:0;}
+const summaryData=computed(()=>summaryCache.value?.pageId===snapshot.value?.pageId && summaryCache.value?.region===region.value?summaryCache.value.report:null);
+const summarySourcesCurrent=computed(()=>!!summaryData.value && summaryCache.value.sourcePageId===snapshot.value?.pageId);
+const summaryProjection=computed(()=>projectAcrossLists(summaryData.value?.lists || [],{...viewDates.value,view:summaryView.value || 'pending',query:summaryView.value?search.value:''}));
+const summaryPartial=computed(()=>!!summaryData.value && (summaryData.value.lists.length<summaryData.value.totalLists || summaryData.value.lists.some(entry=>entry.partial)));
+const summaryNotice=computed(()=>{
+  const data=summaryData.value;
+  if(!data) return '';
+  const messages=[];
+  if(data.lists.length<data.totalLists) messages.push(`已读取 ${data.lists.length} / ${data.totalLists} 份清单`);
+  if(summaryPartial.value) messages.push('部分内容尚未读取');
+  const unknown=summaryProjection.value.unknown[summaryView.value];
+  if(unknown) messages.push(unknown+(summaryView.value==='flagged'?' 项旗标待核对':' 项日期待核对'));
+  if(summaryView.value==='completed') messages.push('网页隐藏的完成事项未计入');
+  return messages.join(' · ');
+});
+const summaryReadTime=computed(()=>summaryData.value?new Date(summaryData.value.capturedAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'');
+const desktopCardsDisabled=computed(()=>busy.value || !!editing.value || (!canReadSummary.value && !snapshot.value?.activeListId));
+function desktopCardCount(view) {
+  if (canReadSummary.value) return summaryData.value?summaryProjection.value.counts[view]+((summaryPartial.value || summaryProjection.value.unknown[view])?'+':''):'—';
+  if (!snapshot.value?.activeListId) return '—';
+  return viewProjection.value.counts[view]+(unknownForView(view)?'+':'');
+}
+// 同一页面的单清单读回只更新该清单的缓存，其余清单继续使用上次汇总数据。
+watch(snapshot,value=>{
+  const report=summaryData.value;
+  if (!summarySourcesCurrent.value || !value?.lists) return;
+  const prior=new Map(report.lists.map(entry=>[entry.list.id,entry]));
+  const lists=value.lists.flatMap(list=>list.id===value.activeListId ? [{list,items:value.items,partial:value.partial}] : prior.has(list.id) ? [{...prior.get(list.id),list}] : []);
+  summaryCache.value={...summaryCache.value,report:{...report,lists,totalLists:value.lists.length}};
+});
+const dateViewLabel = computed(() => ({ today:'今天与逾期', scheduled:'已安排日期', overdue:'早于今天' })[tab.value]);
+const emptyViewMessage = computed(() => {
+  if (!snapshot.value?.activeListId) return snapshot.value?.emptyAccount ? '还没有清单，先新建一份。' : '请选择一份清单继续。';
+  if (search.value) return '没有找到相关事项';
+  if (flagOnly.value) return '当前已加载内容中没有符合筛选的旗标事项';
+  return {
+    today:'当前已确认日期的已加载事项中，没有今天或逾期待办',
+    scheduled:'当前已确认日期的已加载事项中，没有计划待办',
+    overdue:'当前已确认日期的已加载事项中，没有逾期待办',
+    completed:'这里会显示网页已加载的完成事项'
+  }[tab.value] || '这份清单暂时没有待办事项';
+});
+function unknownForView(view) {
+  if (view === 'today' || view === 'overdue') return viewProjection.value.unknownToday;
+  if (view === 'scheduled') return viewProjection.value.unknownDates;
+  return view === 'flagged' && unreadableFlags.value;
+}
 let viewClockTimer;
 const updateViewClock=()=>{viewClock.value=Date.now();};
 onMounted(()=>{viewClockTimer=setInterval(updateViewClock,30000);});
@@ -241,10 +398,13 @@ function accept(result,readRecovery=false) {
   if(result.code==='CONNECTION_UNAVAILABLE')updateConnection('unavailable');
   noticeCode.value = result.code || '';
   noticeStage.value = ['home','reminders','opening','waiting-navigation','selecting-list','waiting-selected'].includes(result.reconnectStage)?result.reconnectStage:'';
+  if(result.needsListSelection) listSelectionRequired.value=true;
+  // 跨清单汇总可在清单导航状态下确认连接，但只有单个清单快照能恢复编辑。
+  if(readRecovery && result.ok && (result.snapshot || (result.code==='SUMMARY_READY' && !result.needsListSelection))) {
+    networkOffline.value=false;networkNeedsRead.value=false;explicitReadGeneration.value++;
+  }
   if (result.ok && result.snapshot) {
-    if(readRecovery){networkOffline.value=false;networkNeedsRead.value=false;explicitReadGeneration.value++;}
     snapshot.value = result.snapshot;
-    if(result.needsListSelection) listSelectionRequired.value=true;
     live.value = !listSelectionRequired.value && !networkOffline.value && !networkNeedsRead.value;
     isDemo.value = false;
   } else if (!result.ok) {
@@ -263,38 +423,85 @@ async function run(command) {
   finally { busy.value = false; }
 }
 
-async function connect() {
-  if (busy.value || (editing.value && !editing.value.blocked)) return;
-  const result = await bridge.openSite(region.value);
-  if (!result.ok) { accept(result); return; }
-  if (editing.value?.blocked) { notice.value = '请在官方页面核对修改结果，返回后刷新。'; return; }
+function resetLoginView(message, code = '') {
+  summaryView.value = null;
+  summaryCache.value = null;
   isDemo.value = false;
   snapshot.value = null;
   listSelectionRequired.value = false;
   live.value = false;
-  notice.value = '请在官方页面完成登录，返回后点击“刷新”。';
+  notice.value = message;
+  noticeCode.value = code;
+  noticeStage.value = '';
   noticeError.value = false;
 }
 
+async function connect() {
+  if (busy.value || (editing.value && !editing.value.blocked)) return;
+  const openLogin = typeof bridge.openLogin === 'function';
+  if (openLogin && !editing.value && (!snapshot.value || isDemo.value)) {
+    const revision = networkRevision;
+    let initialSummary=false;
+    resetLoginView('请在官方页面完成登录，清单就绪后将自动返回。','LOGIN_WAITING');
+    busy.value = true;
+    try {
+      const result = await bridge.openLogin(region.value);
+      if (['LOGIN_CANCELLED','LOGIN_WAIT_TIMEOUT'].includes(result.code)) resetLoginView(result.message);
+      else {
+        accept(result,revision===networkRevision);
+        initialSummary=result.ok && result.code==='LOGIN_READY' && result.initialSummary===true;
+      }
+    } catch {
+      accept({ok:false,code:'CONNECTION_FAILED',message:'连接暂时不可用，请重新打开官方页面核对。'});
+    } finally { busy.value = false; }
+    if (initialSummary && canReadSummary.value) {
+      // 登录只交接清单导航。先显示只读汇总，仍由用户明确选择清单后进入编辑。
+      const emptyAccount = snapshot.value.emptyAccount === true;
+      if (!emptyAccount) summaryView.value = 'today';
+      await refreshSummary(emptyAccount);
+    }
+    return;
+  }
+  const result = await bridge.openSite(region.value);
+  if (!result.ok) { accept(result); return; }
+  if (editing.value?.blocked) { notice.value = '请在官方页面核对修改结果，返回后刷新。'; return; }
+  if (openLogin && snapshot.value && !isDemo.value) {
+    summaryView.value = null;
+    summaryCache.value = null;
+    live.value = false;
+    notice.value = '请在官方页面操作，返回后点击“刷新”核对。';
+    noticeCode.value = '';
+    noticeError.value = false;
+    return;
+  }
+  resetLoginView('请在官方页面完成登录，返回后点击“刷新”。');
+}
+
 async function refresh() {
+  if (summaryView.value) return refreshSummary();
   if (isDemo.value) { showDemo(); return; }
   const result = await run({ type: listSelectionRequired.value ? 'readLists' : 'read' });
   if (result?.ok && !listSelectionRequired.value && tab.value === 'completed') await selectTab('completed');
+  if (result?.ok && !summaryData.value && !listSelectionRequired.value) await loadInitialSummary();
 }
 
 async function reconnectClient() {
   if(busy.value || editing.value || isDemo.value || networkOffline.value || !bridge.capabilities?.reconnect) return;
   const revision=networkRevision;
+  summaryView.value=null;
+  summaryCache.value=null;
   const previous={title:snapshot.value?.activeListTitle,pageId:snapshot.value?.pageId};
   live.value=false;busy.value=true;notice.value='正在重新连接 iCloud…';noticeCode.value='RECONNECTING';noticeError.value=false;
   let result;
   try {result=await reconnectLoadedList(bridge,region.value,previous);accept(result,revision===networkRevision);}
   finally {busy.value=false;}
   if(result?.ok && !listSelectionRequired.value && tab.value==='completed') await selectTab('completed');
+  if(result?.ok) await loadInitialSummary();
 }
 
 async function selectTab(next) {
   if (busy.value || editing.value || !VIEW_OPTIONS.some(option=>option.value===next)) return;
+  summaryView.value=null;
   updateViewClock();
   tab.value = next;
   if (next !== 'completed' || isDemo.value || !snapshot.value || !live.value) return;
@@ -306,8 +513,53 @@ async function selectTab(next) {
   await run({ type: 'showCompleted', pageId: snapshot.value.pageId, listId: snapshot.value.activeListId });
 }
 
+function selectDesktopCard(view) {
+  if (desktopCardsDisabled.value) return;
+  if (canReadSummary.value) {
+    if (summaryView.value!==view) search.value='';
+    updateViewClock();
+    summaryView.value=view;
+    if (!summaryData.value) return refreshSummary();
+    return;
+  }
+  flagOnly.value = view === 'flagged';
+  return selectTab(flagOnly.value ? 'pending' : view);
+}
+
+function loadInitialSummary() {
+  if (desktopWide.value && canReadSummary.value && live.value && !summaryData.value) return refreshSummary(true);
+}
+
+async function refreshSummary(quiet=false) {
+  if (busy.value || editing.value || !snapshot.value?.pageId) return;
+  const {pageId,activeListId} = snapshot.value;
+  const currentRegion = region.value;
+  const revision = networkRevision;
+  busy.value=true;
+  if (!quiet) {
+    notice.value='正在逐份读取清单…';
+    noticeCode.value='SUMMARY_LOADING';
+    noticeError.value=false;
+  }
+  try {
+    const result=await bridge.readSummary(pageId,activeListId || '',currentRegion);
+    if (!quiet || result.needsListSelection) accept(result,result.ok && revision===networkRevision);
+    else if (revision!==networkRevision) return;
+    else if (result.ok && result.snapshot) snapshot.value=result.snapshot;
+    if(result.needsListSelection)live.value=false;
+    if(result.ok) summaryCache.value={pageId,sourcePageId:pageId,region:currentRegion,report:result.summary};
+    else if(result.needsListSelection) {
+      summaryView.value=null;
+      summaryCache.value=null;
+    }
+  } catch {
+    if (!quiet) accept({ok:false,code:'CONNECTION_FAILED',message:'汇总暂时不可用，请稍后刷新。'});
+  } finally { busy.value=false; }
+}
+
 async function selectList(list) {
   if (busy.value || editing.value) return;
+  if (summaryView.value) { summaryView.value=null;tab.value='pending';flagOnly.value=false; }
   sidebarOpen.value = false;
   search.value = '';
   if (isDemo.value) {
@@ -323,6 +575,7 @@ async function selectList(list) {
     if(wasRequired && result.code==='READY') {notice.value='';noticeError.value=false;}
   }
   if (result?.ok && tab.value === 'completed') await selectTab('completed');
+  if (result?.ok) await loadInitialSummary();
 }
 
 /** 写入传递记录 ID、目标状态和最新指纹，禁止用标题匹配或简单地重复点击。 */
@@ -407,19 +660,54 @@ async function saveListAppearance(current) {
   else current.blocked=true;
 }
 
-function startListEdit(operation) {
+async function startListEdit(operation,event) {
   if(!canManageLists.value || (!live.value && !(operation==='create' && canCreateFirstList.value)) || busy.value || editing.value || !['create','rename'].includes(operation)) return;
   const list=snapshot.value.lists.find(list=>list.id===snapshot.value.activeListId);
   if(!list?.fingerprint && !canCreateFirstList.value) {notice.value='请先刷新，再编辑清单。';noticeError.value=true;return;}
+  const creating=operation==='create';
+  const loadingAppearance=creating && bridge.capabilities?.createListAppearance===true;
+  const binding={pageId:snapshot.value.pageId,listId:list?.id || '',expectedListFingerprint:list?.fingerprint || 'empty-list-set'};
+  if(creating) createListTrigger=event?.currentTarget;
+  const restoreSidebar=sidebarOpen.value;
   sidebarOpen.value=false;
-  editing.value={field:'list',listOperation:operation,value:operation==='create'?'':list.title,pageId:snapshot.value.pageId,listId:list?.id || '',expectedListFingerprint:list?.fingerprint || 'empty-list-set',
-    requestId:'list-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2),blocked:false};
+  editing.value={field:'list',listOperation:operation,value:creating?'':list.title,...binding,
+    requestId:'list-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2),blocked:false,loadingAppearance,showIcons:false,restoreSidebar};
+  if(!loadingAppearance)return;
+  const current=editing.value;
+  // #ifdef H5
+  nextTick(()=>document.querySelector('.create-list-dialog')?.focus());
+  // #endif
+  const result=await run({type:'getListCreateOptions',...binding});
+  if(editing.value!==current)return;
+  current.loadingAppearance=false;
+  if(!result?.ok) current.blocked=true;
+  else current.appearance=result.appearance;
+  // #ifdef H5
+  nextTick(()=>document.querySelector(current.blocked?'.create-list-dialog .cancel-list-edit':'.create-list-dialog input')?.focus());
+  // #endif
+}
+
+function toggleCreateListIcons() {
+  const current=editing.value;
+  if(!creatingList.value || busy.value || current.blocked)return;
+  current.showIcons=!current.showIcons;
+  // #ifdef H5
+  nextTick(()=>document.querySelector(current.showIcons?'.create-list-icons [aria-checked="true"]':'.create-list-icon-toggle')?.focus());
+  // #endif
 }
 
 async function saveListEdit(current) {
   if((!live.value && !(current.listOperation==='create' && canCreateFirstList.value)) || !current.value.trim() || current.value.length>100 || /[\r\n]/.test(current.value)) return;
-  const result=await run({type:current.listOperation==='create'?'createList':'renameList',pageId:current.pageId,listId:current.listId,expectedListFingerprint:current.expectedListFingerprint,value:current.value.trim(),requestId:current.requestId});
-  if(result?.ok) {editing.value=null;if(current.listOperation==='create'){listSelectionRequired.value=false;live.value=!networkOffline.value && !networkNeedsRead.value;tab.value='pending';search.value='';flagOnly.value=false;}}
+  const {appearance}=current;
+  const result=await run({type:current.listOperation==='create'?'createList':'renameList',pageId:current.pageId,listId:current.listId,expectedListFingerprint:current.expectedListFingerprint,value:current.value.trim(),requestId:current.requestId,
+    ...(appearance?{appearance:{color:appearance.color,iconKey:appearance.iconKey,expectedAppearanceFingerprint:appearance.fingerprint}}:{})});
+  if(result?.ok) {
+    editing.value=null;
+    if(current.listOperation==='create') {
+      createListTrigger=undefined;summaryView.value=null;listSelectionRequired.value=false;
+      live.value=!networkOffline.value && !networkNeedsRead.value;tab.value='pending';search.value='';flagOnly.value=false;
+    }
+  }
   else current.blocked=true;
 }
 
@@ -441,6 +729,8 @@ async function saveListDeletion(current) {
 
 function showDemo() {
   if (busy.value || editing.value) return;
+  summaryView.value=null;
+  summaryCache.value=null;
   snapshot.value = demoSnapshot();
   listSelectionRequired.value = false;
   isDemo.value = true;
@@ -459,6 +749,8 @@ function changeRegion(event) {
   const next = index === 0 ? 'cn' : 'global';
   if (next === region.value) return;
   region.value = next;
+  summaryView.value = null;
+  summaryCache.value = null;
   listSelectionRequired.value = false;
   flagOnly.value = false;
   snapshot.value = null;
@@ -494,6 +786,16 @@ function startEdit(item, field) {
 
 function endEdit() {
   if(busy.value)return;
+  if(creatingList.value) {
+    sidebarOpen.value=editing.value.restoreSidebar && !desktopWide.value;
+    const trigger=createListTrigger;
+    createListTrigger=undefined;
+    editing.value=null;
+    // #ifdef H5
+    nextTick(()=>trigger?.focus?.());
+    // #endif
+    return;
+  }
   const id=editing.value?.field==='subtask'?editing.value.id:null;editing.value=null;
   // #ifdef H5
   if(id)nextTick(()=>[...document.querySelectorAll('.reminder-row')].find(row=>row.dataset.recordId===id)?.querySelector('.subtask-item-button')?.focus());
@@ -540,6 +842,7 @@ async function saveSchedule(current) {
 }
 
 async function startCreate() {
+  if (summaryView.value) return;
   if (!canCreate.value || !snapshot.value || busy.value || editing.value || (!live.value && !isDemo.value)) return;
   if (!isDemo.value && bridge.capabilities?.createItem !== true) {
     const result = await bridge.openSite(region.value);
@@ -649,18 +952,27 @@ watch([busy,editing], () => { if (busy.value || editing.value) closeSortMenu(); 
 
 function workspaceKeydown(event) {
   if (event.isComposing || event.keyCode === 229) return;
+  if(creatingList.value && event.key==='Escape') {event.preventDefault();endEdit();return;}
+  if(creatingList.value && event.key==='Tab') {
+    const controls=[...document.querySelectorAll('.create-list-dialog input,.create-list-dialog [role="button"],.create-list-dialog [role="radio"]')].filter(control=>control.tabIndex>=0 && !control.hasAttribute('disabled'));
+    const edge=event.shiftKey?controls[0]:controls.at(-1);
+    if(!controls.length || document.activeElement===edge || !controls.includes(document.activeElement)) {
+      event.preventDefault();(event.shiftKey?controls.at(-1):controls[0])?.focus();
+    }
+    return;
+  }
   const notificationButton=event.target?.closest?.('.notifications-settings-button,.close-notification-panel,.enable-system-notifications,.save-notification-time,.test-system-notification');
   if(notificationButton && ['Enter',' '].includes(event.key)){event.preventDefault();if(!event.repeat && !notificationButton.hasAttribute('disabled'))notificationButton.click();return;}
   if(notificationsPanelOpen.value && event.key==='Escape'){event.preventDefault();notificationsPanelOpen.value=false;nextTick(()=>document.querySelector('.notifications-settings-button')?.focus());return;}
   if(!snapshot.value)return;
   if (event.target?.closest?.('.desktop-sort') && sortKeydown(event)) return;
-  if(editing.value?.field==='list-appearance' && event.target?.closest?.('.appearance-choice') && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key)){
+  if((creatingList.value || editing.value?.field==='list-appearance') && event.target?.closest?.('.appearance-choice') && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key)){
     event.preventDefault();if(busy.value || editing.value.blocked)return;
     const group=event.target.closest('[role="radiogroup"]'),buttons=[...group.querySelectorAll('.appearance-choice')],index=buttons.indexOf(event.target.closest('.appearance-choice'));
     const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(['ArrowLeft','ArrowUp'].includes(event.key)?-1:1)+buttons.length)%buttons.length;
     buttons[next].click();nextTick(()=>buttons[next].focus());return;
   }
-  const actionButton=event.target?.closest?.('.view-tab,.flag-toggle-button,.flag-filter,.reconnect-button,.auto-read-toggle,.delete-item-button,.confirm-delete,.cancel-delete,.add-list-button,.rename-list-button,.save-list-edit,.cancel-list-edit,.delete-list-button,.confirm-list-delete,.cancel-list-delete,.list-appearance-button,.appearance-choice,.save-list-appearance,.cancel-list-appearance,.subtask-item-button,.confirm-subtask,.cancel-subtask');
+  const actionButton=event.target?.closest?.('.region-picker,.view-tab,.summary-source-button,.flag-toggle-button,.flag-filter,.reconnect-button,.auto-read-toggle,.delete-item-button,.confirm-delete,.cancel-delete,.add-list-button,.rename-list-button,.save-list-edit,.cancel-list-edit,.create-list-icon-toggle,.delete-list-button,.confirm-list-delete,.cancel-list-delete,.list-appearance-button,.appearance-choice,.save-list-appearance,.cancel-list-appearance,.subtask-item-button,.confirm-subtask,.cancel-subtask');
   if (actionButton && ['Enter',' '].includes(event.key)) {
     event.preventDefault();
     if (!event.repeat && !actionButton.hasAttribute('disabled')) actionButton.click();
@@ -711,13 +1023,18 @@ const checkLoadedList=()=>loadedListMonitor?.check();
 onMounted(()=>{
   if(!canAutoRead)return;
   loadedListMonitor=monitorLoadedList({
-    state:()=>({enabled:autoReadEnabled.value,visible:document.visibilityState==='visible',busy:busy.value,editing:!!editing.value || sortMenuOpen.value || notificationsPanelOpen.value,
-      recovery:networkOffline.value || networkNeedsRead.value || listSelectionRequired.value,live:live.value,demo:isDemo.value,region:region.value,revision:networkRevision,snapshot:snapshot.value}),
+    state:()=>({enabled:autoReadEnabled.value && !summaryView.value,visible:document.visibilityState==='visible',busy:busy.value,editing:!!editing.value || sortMenuOpen.value || notificationsPanelOpen.value,
+      recovery:networkOffline.value || networkNeedsRead.value || listSelectionRequired.value,live:live.value,demo:isDemo.value,region:region.value,revision:networkRevision,snapshot:snapshot.value,
+      allowReload:tab.value!=='completed'}),
     read:(command,currentRegion)=>bridge.execute(command,currentRegion),
     started:()=>{autoReading.value=true;busy.value=true;},
     finished:()=>{autoReading.value=false;busy.value=false;},
     // 自动读取只更新内容；不抹去仍待核对的保存提示，也不自动解除断网恢复保护。
-    received:result=>{snapshot.value=result.snapshot;},
+    received:result=>{
+      // 已核对的自动重载只保留上次汇总供显示，旧清单句柄要等手动刷新后才能使用。
+      if(result.reloaded && summaryData.value) summaryCache.value={...summaryCache.value,pageId:result.snapshot.pageId};
+      snapshot.value=result.snapshot;
+    },
     failed:result=>accept(result)
   });
   window.addEventListener('focus',checkLoadedList);document.addEventListener('visibilitychange',checkLoadedList);
@@ -766,6 +1083,23 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .inline-editor { display:flex; flex-direction:column; gap:9px; width:100%; }.editor-label { color:#8393a8; font-size:11px; }.edit-field { box-sizing:border-box; width:100%; height:38px; padding:8px 10px; color:#3d4859; font-size:14px; border:1px solid #a3caff; border-radius:7px; background:#fafcff; }.edit-notes { min-height:95px; line-height:1.7; }.editor-actions { display:flex; gap:10px; }.editor-actions button { margin:0; padding:6px 11px; font-size:12px; color:#8491a4; border-radius:6px; }.editor-actions .save-edit { color:#fff; background:#1687ff; }.editor-actions .save-edit[disabled] { background:#aebed2; }.edit-recovery { margin:8px 34px 0; display:flex; align-items:center; gap:12px; font-size:12px; color:#b36139; }.edit-recovery button { margin:0; padding:5px; font-size:12px; color:#1687ff; }.reminder-notes { overflow-wrap:anywhere; }
 @media (hover:none) { .row-actions { opacity:1; } }
 .toolbar { height:68px; gap:16px; }
+.region-control { flex-shrink:0; }
+.region-picker {
+  display:flex; align-items:center; gap:8px; min-height:36px; padding:0 10px;
+  border:1px solid #d9e2ed; border-radius:9px; background:#f6f8fb;
+  color:#455b75; font-size:12px; font-weight:550; line-height:1.4; white-space:nowrap; cursor:pointer;
+}
+.region-picker:hover:not([disabled]),.region-picker:active:not([disabled]) { background:#eaf3ff; border-color:#a8c5e5; color:#205d9e; }
+.region-picker:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
+.region-picker[disabled] { opacity:.55; cursor:default; }
+.region-globe { position:relative; width:14px; height:14px; border:1.3px solid currentColor; border-radius:50%; flex-shrink:0; }
+.region-globe::before { content:''; position:absolute; inset:0 3px; border:1px solid currentColor; border-block:0; border-radius:50%; }
+.region-globe::after { content:''; position:absolute; top:50%; left:0; right:0; border-top:1px solid currentColor; }
+.region-chevron { width:6px; height:6px; margin:0 1px 3px 2px; border:solid currentColor; border-width:0 1.5px 1.5px 0; transform:rotate(45deg); }
+@media (max-width:760px) {
+  .region-picker { padding-inline:8px; gap:6px; font-size:11px; }
+  .region-globe { display:none; }
+}
 .quick-tools { display:flex; align-items:center; gap:12px; flex:1; min-width:0; }
 .add-reminder-button { flex-shrink:0; width:36px; height:36px; margin:0; display:flex; align-items:center; justify-content:center; border-radius:9px; font-size:27px; line-height:1; color:#1687ff; background:#edf5ff; }
 .add-reminder-button:hover { background:#dfedff; }.add-reminder-button[disabled] { color:#a5b6cc; }
@@ -785,8 +1119,166 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .list-delete-confirmation { padding:16px; margin-bottom:16px; border:1px solid #efdada; border-radius:10px; background:#fffafa; display:flex; flex-direction:column; gap:10px; font-size:13px; line-height:1.7; color:#69798b; }.editor-actions .confirm-list-delete { background:#ce5353; color:#fff; }.delete-list-button { margin:0; padding:2px 5px; color:#bd7a7a; font-size:17px; flex-shrink:0; }.delete-list-button:focus-visible,.confirm-list-delete:focus-visible,.cancel-list-delete:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
 .list-glyph { width:26px; height:26px; filter:brightness(0) invert(1); }.list-appearance-button { margin:0; padding:2px 5px; font-size:18px; color:#8198ba; }.appearance-editor { padding:16px; margin-bottom:16px; border:1px solid #dce6f4; border-radius:10px; background:#f8fbff; gap:14px; }.appearance-colors,.appearance-icons { display:flex; flex-wrap:wrap; gap:10px; }.appearance-choice { margin:0; padding:0; flex-shrink:0; }.color-choice { width:30px; height:30px; border-radius:50%; color:#fff; font-size:18px; text-shadow:0 1px 3px #0008; border:2px solid transparent; }.color-choice[aria-checked="true"] { outline:2px solid #718cb2; outline-offset:2px; }.appearance-icons-scroll { max-height:190px; height:190px; }.icon-choice { width:38px; height:38px; border-radius:8px; border:1px solid #d9e2ee; background:#fff; }.icon-choice-selected { border-color:#1687ff; background:#e6f2ff; }.appearance-glyph { width:36px; height:36px; }.appearance-choice:focus-visible,.list-appearance-button:focus-visible,.save-list-appearance:focus-visible,.cancel-list-appearance:focus-visible { outline:2px solid #1687ff; outline-offset:3px; }
 .editor-actions .save-list-appearance { background:#1687ff; color:#fff; padding:6px 12px; border-radius:6px; }.editor-actions .save-list-appearance[disabled] { opacity:.45; }
+.create-list-overlay { position:fixed; inset:0; z-index:40; display:flex; align-items:center; justify-content:center; padding:24px; background:#1d253744; }
+.create-list-dialog {
+  box-sizing:border-box; width:100%; max-width:600px; max-height:100%; overflow-y:auto;
+  gap:20px; padding:24px 26px 20px; margin:0; border:1px solid #d5dbe4; border-radius:20px; background:#fff;
+  color:#283344; font-size:14px; box-shadow:0 18px 56px #17243e40; outline:none;
+}
+.create-list-title { align-self:center; font-size:19px; font-weight:650; }
+.create-list-name,.create-list-type { display:flex; align-items:center; gap:14px; }
+.create-list-name > :first-child,.create-list-field-label { flex-shrink:0; min-width:38px; }
+.create-list-name .list-name-input { height:36px; flex:1; min-width:0; background:#fff; border-color:#b9c7db; }
+.create-list-name .list-name-input:focus-within { border-color:#348dff; box-shadow:0 0 0 3px #1687ff32; }
+.create-list-appearance { display:grid; grid-template-columns:1.3fr 1fr; gap:12px 0; align-items:start; }
+.create-list-colors,.create-list-icon { display:flex; align-items:flex-start; gap:14px; }
+.create-list-icon { padding-left:20px; border-left:1px solid #e2e6ed; }
+.create-list-field-label { padding-top:5px; }
+.create-list-swatches { display:grid; grid-template-columns:repeat(6,20px); gap:12px 9px; padding:4px 0; }
+.create-list-swatches .color-choice { box-sizing:border-box; width:20px; height:20px; padding:0; border:1px solid #24334d25; }
+.create-list-swatches .color-choice[aria-checked='true'] { border:2px solid #fff; outline:2px solid #347ece; outline-offset:1px; }
+.create-list-icon-toggle { display:flex; flex-direction:column; align-items:center; gap:5px; border-radius:8px; color:#546b85; font-size:11px; }
+.create-list-badge { width:44px; height:44px; display:grid; place-items:center; border-radius:50%; }
+.create-list-badge image { width:38px; height:38px; filter:brightness(0) invert(1); }
+.create-list-icon-toggle:focus-visible { outline:2px solid #1687ff; outline-offset:3px; }
+.create-list-icons { grid-column:1/-1; max-height:116px; height:116px; padding:4px; border:1px solid #e2e6ed; border-radius:9px; }
+.create-list-type,.create-list-actions { border-top:1px solid #e2e6ed; padding-top:14px; }
+.create-list-type-value { padding:5px 13px; border-radius:7px; background:#f1f3f7; }
+.create-list-actions { justify-content:flex-end; }
+.create-list-actions button { min-width:70px; padding:8px 14px; }
+.create-list-actions .cancel-list-edit { background:#edf0f4; color:#36465a; }
+.create-list-actions .save-list-edit[disabled] { background:#edf0f4; color:#7b8899; }
+.create-list-hint,.create-list-error { color:#637d99; font-size:12px; }
+.create-list-error { color:#a23743; }
+@media (max-width:480px) {
+  .create-list-overlay { padding:14px; }
+  .create-list-dialog { gap:16px; padding:20px 16px 16px; }
+  .create-list-appearance { grid-template-columns:1fr; }
+  .create-list-icon { padding-left:0; border-left:0; }
+  .create-list-icon-toggle { flex-direction:row; gap:9px; }
+}
 .reminder-row.is-subtask { margin-left:18px; padding-left:12px; border-left:2px solid #e3eaf4; }.affected-subtasks { max-height:180px; overflow-y:auto; display:flex; flex-direction:column; gap:5px; overflow-wrap:anywhere; }.subtask-item-button:focus-visible,.confirm-subtask:focus-visible,.cancel-subtask:focus-visible { outline:2px solid #1687ff; outline-offset:2px; border-radius:4px; }
 @media (max-width:760px) { .reminder-row { display:grid; grid-template-columns:22px minmax(0,1fr); column-gap:13px; row-gap:10px; }.reminder-row > .completion-button { grid-column:1; grid-row:1; align-self:start; }.reminder-row > .reminder-copy { grid-column:2; grid-row:1; min-width:0; }.reminder-row > .row-actions { grid-column:2; grid-row:2; justify-content:flex-start; opacity:1; flex-wrap:wrap; }.reminder-row > .subtask-tag { grid-column:2; grid-row:3; justify-self:start; }.row-actions button { padding:4px 6px; } }
 .list-controls { flex-wrap:wrap; gap:0 14px; }.tabs { gap:18px; flex-wrap:wrap; min-width:0; }.tabs button { white-space:nowrap; }.view-tab:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }.date-view-description { display:block; flex-shrink:0; color:#78899e; font-size:11px; line-height:1.7; margin:10px 0 0; }.view-context .reminder-title { color:#8795a6; }.view-context { background:#fafcff; }
 .date-section-heading { margin-top:14px; padding:7px 2px 5px; border-bottom:1px solid #e5ebf2; color:#53657b; font-size:13px; font-weight:600; }
+
+/* 宽屏快捷视图放在左侧，事项区沿用随行原有布局。 */
+.desktop-sidebar-layout .sidebar {
+  width:clamp(248px,33.4vw,510px);
+  padding:12px clamp(12px,1.55vw,26px) 18px;
+  overflow-y:auto;
+}
+.desktop-sidebar-layout .sidebar > * { flex-shrink:0; }
+.desktop-sidebar-layout .brand { min-height:46px; margin:0 4px 14px; }
+.desktop-sidebar-layout .brand-icon { width:34px; height:36px; padding:7px; box-shadow:none; }
+.desktop-sidebar-layout .brand-name { font-size:15px; }
+.desktop-sidebar-layout .brand-caption { display:none; }
+.desktop-sidebar-layout .desktop-view-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-bottom:22px; }
+.desktop-sidebar-layout .desktop-view-card {
+  min-height:clamp(64px,7.15vw,112px);
+  padding:clamp(9px,1.15vw,18px);
+  display:flex;
+  flex-direction:column;
+  justify-content:space-between;
+  gap:6px;
+  border-radius:clamp(12px,1.25vw,20px);
+  text-align:left;
+  line-height:1.15;
+  color:#fff;
+  background:var(--card-color);
+}
+.desktop-view-card[data-status='today'] { --card-color:#347bb7; }
+.desktop-view-card[data-status='scheduled'] { --card-color:#b75057; }
+.desktop-view-card[data-status='pending'] { --card-color:#4a4c4d; }
+.desktop-view-card[data-status='flagged'] { --card-color:#9e592c; }
+.desktop-view-card[data-status='overdue'] { --card-color:#a2476b; }
+.desktop-view-card[data-status='completed'] { --card-color:#5d6971; }
+.desktop-view-card[aria-pressed='true'] { outline:2px solid #1665a7; outline-offset:2px; }
+.desktop-view-card:hover:not([disabled]) { filter:brightness(1.11); }
+.desktop-card-top { display:flex; justify-content:space-between; align-items:center; gap:6px; }
+.desktop-icon { display:block; width:20px; height:20px; flex:none; }
+.desktop-view-card .desktop-icon,.desktop-sidebar-layout .list-symbol .desktop-icon { filter:brightness(0) invert(1); }
+.desktop-view-card .desktop-icon { width:clamp(19px,2.1vw,32px); height:clamp(19px,2.1vw,32px); }
+.desktop-card-count { font-size:clamp(18px,2.1vw,33px); font-weight:700; font-variant-numeric:tabular-nums; }
+.desktop-card-label { font-size:clamp(14px,1.5vw,23px); font-weight:650; }
+.desktop-sidebar-layout .sidebar-section { min-height:30px; align-items:center; margin-bottom:4px; padding:0 8px; color:#607083; letter-spacing:0; font-size:13px; }
+.desktop-sidebar-layout .desktop-add-list { margin:0; padding:5px; border:0; background:#e5ecf5; border-radius:8px; }
+.desktop-sidebar-layout .desktop-add-list .desktop-icon { width:17px; height:17px; }
+.desktop-sidebar-layout .list-button { gap:11px; padding:7px 8px; margin-bottom:2px; }
+.desktop-sidebar-layout .list-button.selected,.desktop-sidebar-layout .list-button:hover:not([disabled]) { background:#e2eaf6; }
+.desktop-sidebar-layout .list-symbol { display:flex; align-items:center; justify-content:center; width:clamp(28px,2.9vw,45px); height:clamp(28px,2.9vw,45px); flex:none; border-radius:50%; }
+.desktop-sidebar-layout .list-symbol .desktop-icon,.desktop-sidebar-layout .list-glyph { width:56%; height:56%; }
+.desktop-sidebar-layout .list-name { font-size:clamp(14px,1.5vw,22px); font-weight:550; }
+.desktop-sidebar-layout .list-count { color:#607083; font-variant-numeric:tabular-nums; }
+.desktop-sidebar-layout .sidebar-footer { gap:5px; padding:18px 8px 0; }
+.desktop-sidebar-layout .list-view-tools { margin-left:auto; }
+.summary-row-meta { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; }
+.reminder-metadata.is-overdue { color:#d12e3c; }
+.summary-footer { justify-content:flex-end; }
+.summary-source-button { margin:0; color:#2872ba; font-size:11px; text-align:left; }
+.summary-source-button:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
+
+/* #ifdef H5 */
+/* 系统配色只改变颜色，桌面与窄屏共用同一套事项区布局和编辑状态。 */
+@media (prefers-color-scheme: dark) {
+  .app-shell {
+    --theme-background:#1c1d1e;
+    --theme-sidebar:#242628;
+    --theme-surface:#303234;
+    --theme-border:#44474b;
+    --theme-text:#ebedef;
+    --theme-muted:#adb3bc;
+    color-scheme:dark;
+    background:var(--theme-background);
+    color:var(--theme-text);
+  }
+  .app-shell .sidebar { background:var(--theme-sidebar); border-color:var(--theme-border); }
+  .app-shell .brand-icon { background:var(--theme-surface); box-shadow:none; }
+  .app-shell .brand-icon view::after,.app-shell .welcome-line view { background:#747d89; }
+  .app-shell .list-button.selected,.app-shell .list-button:hover:not([disabled]) { background:#374252; }
+  .app-shell :is(.muted,.brand-caption,.sidebar-section,.sidebar-placeholder,.list-count,.footer-wordmark,.toolbar-label,
+    .quiet-button,.eyebrow,.heading-count,.source-chip,.current-scope,.date-view-description,.sort-description,
+    .sort-picker-label,.reminder-notes,.reminder-metadata,.subtask-tag,.list-footer,.auto-read-toggle,.flag-filter,
+    .empty-list,.editor-label,.editor-actions button,.schedule-toggle-row,.schedule-zone,.notifications-settings-button,
+    .notification-state,.demo-link,.welcome-kicker,.welcome-description,.welcome-footnote) { color:var(--theme-muted); }
+  .app-shell :is(.reminder-title,.delete-title,.delete-confirmation,.notification-heading,.welcome-title,.sort-option,.edit-field,.search) { color:var(--theme-text); }
+  .app-shell .completed .reminder-title,.app-shell .view-context .reminder-title { color:#a3aebb; }
+  .app-shell .list-title,.app-shell .empty-add,.app-shell .edit-recovery button { color:#67b9ff; }
+  .app-shell .summary-source-button { color:#67b9ff; }
+  .app-shell .reminder-metadata.is-overdue { color:#ff7883; }
+  .app-shell :is(.toolbar,.list-controls,.reminder-row,.list-footer,.source-chip,.empty-circle,.date-section-heading,.reminder-row.is-subtask) { border-color:var(--theme-border); }
+  .app-shell :is(.account-card,.notice,.notification-panel,.list-editor,.list-delete-confirmation,.appearance-editor,.edit-field,
+    .sort-menu,.new-reminder-row,.icon-choice,.toolbar-search,.welcome-art,.search,.notification-time-picker) {
+    background:var(--theme-surface);
+    border-color:var(--theme-border);
+    color:var(--theme-text);
+  }
+  .app-shell .toolbar-search .search { background:transparent; }
+  .app-shell .toolbar-search:focus-within { border-color:#67b9ff; }
+  .app-shell .create-list-dialog { background:#27292c; border-color:#535a65; }
+  .app-shell .create-list-name .list-name-input { background:#202225; border-color:#657187; }
+  .app-shell .create-list-name .list-name-input:focus-within { border-color:#83b9ff; }
+  .app-shell :is(.create-list-icon,.create-list-icons,.create-list-type,.create-list-actions) { border-color:var(--theme-border); }
+  .app-shell :is(.create-list-type-value,.create-list-actions .cancel-list-edit,.create-list-actions .save-list-edit[disabled]) { background:#41454c; color:var(--theme-text); }
+  .app-shell .create-list-actions .save-list-edit[disabled],.app-shell .create-list-hint,.app-shell .create-list-icon-toggle { color:var(--theme-muted); }
+  .app-shell .create-list-error { color:#ffb8bb; }
+  .app-shell .region-picker { background:var(--theme-surface); border-color:#4e5966; color:#d7e0eb; }
+  .app-shell .region-picker:hover:not([disabled]),.app-shell .region-picker:active:not([disabled]) { background:#293e54; border-color:#6c9ac7; color:#b6daff; }
+  .app-shell .region-picker:focus-visible { outline-color:#a9d9ff; }
+  .app-shell .notice.error { background:#3b282c; color:#ffb8bb; }
+  .app-shell .edit-recovery { color:#ffb8bb; }
+  .app-shell :is(.sort-option:hover,.sort-option-focused,.row-actions button:hover,.flag-filter.flag-active,.icon-choice-selected,.view-context) { background:#343f50; }
+  .app-shell .add-reminder-button,.app-shell .schedule-picker-button,.app-shell .schedule-presets button,.app-shell .notification-actions button { background:#253e57; color:#8bceff; }
+  .app-shell .schedule-toggle { background:#414750; color:var(--theme-muted); }
+  .app-shell .schedule-toggle[aria-checked='true'] { background:#244d75; color:#b6e1ff; }
+  .app-shell .completion-button,.app-shell .draft-circle { border-color:#82909f; }
+  .app-shell .completion-button:not(.checked) { background:transparent; }
+  .app-shell .completion-button.checked { border-color:#647c90; background:#647c90; }
+  .app-shell .date-section-heading { color:#c0cad6; }
+  .app-shell .editor-actions :is(.save-edit,.confirm-delete,.confirm-list-delete,.save-list-appearance) { color:#fff; }
+  .app-shell .desktop-add-list { background:var(--theme-surface); }
+  .app-shell .desktop-add-list .desktop-icon { filter:brightness(0) invert(1); }
+  .app-shell .desktop-view-card[aria-pressed='true'] { outline-color:#a9d9ff; }
+}
+/* #endif */
 </style>

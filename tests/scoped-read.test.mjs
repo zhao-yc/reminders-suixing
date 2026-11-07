@@ -27,6 +27,24 @@ test('后台参数必须为布尔值，自动读取仍先核对页面及官方�
   assert.equal((await execute({...command,listId:navigation.snapshot.lists[1].id})).code,'STALE_VIEW');assert.equal((await execute({...command,pageId:'old'})).code,'STALE_VIEW');
 });
 
+test('后台切换仅在确认没有选区时接受空的来源清单',async t=>{
+  const {window,execute}=await setup(t);
+  const lists=[...window.document.querySelectorAll('[role="treeitem"]')];
+  lists[0].setAttribute('aria-selected','false');
+  const navigation=await execute({type:'readLists',background:true});
+  assert.equal(navigation.selectedListId,'');
+  const {pageId}=navigation.snapshot;
+  const listId=navigation.snapshot.lists[1].id;
+  const command={type:'selectList',pageId,listId,fromListId:'',background:true};
+  assert.equal(validCommand(command),false,'空来源只用于控制器内部');
+  assert.equal((await execute(command)).snapshot?.activeListId,listId);
+  assert.equal((await execute(command)).code,'STALE_VIEW');
+
+  lists[0].setAttribute('aria-selected','true');
+  assert.equal((await execute({type:'readLists',background:true})).selectedListId,null);
+  assert.equal((await execute({...command,fromListId:listId})).code,'STALE_VIEW');
+});
+
 test('指定读取在官方选中其他清单时不查询任何事项字段',async t=>{
   const {window,execute}=await setup(t),navigation=await execute({type:'readLists'});
   assert.equal(navigation.snapshot.activeListId,null);assert.equal(navigation.snapshot.items.length,0);

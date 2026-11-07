@@ -2,7 +2,8 @@ import { validSchedule, localDateString } from './schedule.js';
 
 export const VIEW_OPTIONS = [
   {value:'pending',label:'未完成'}, {value:'today',label:'今天'},
-  {value:'scheduled',label:'计划'}, {value:'completed',label:'已完成'}
+  {value:'scheduled',label:'计划'}, {value:'completed',label:'已完成'},
+  {value:'overdue',label:'逾期',desktopOnly:true}
 ];
 
 /** 只筛选当前快照；不从附注猜日期，不读取详情或其他清单。 */
@@ -22,11 +23,15 @@ export function projectLoadedItems(items,options={}) {
   // 指定时间来自读取时的本机时区；系统时区变化后不沿用旧日历日归类。
   const dayKnown=item=>valid(item) && (item.schedule.time===null || item.schedule.timeZone===zone);
   const dueToday=item=>dated(item) && dayKnown(item) && item.schedule.date<=today;
+  const overdue=item=>dueToday(item) && item.schedule.date<today;
   const pending=items.filter(item=>item.completed===false);
-  const counts={pending:pending.length,today:pending.filter(dueToday).length,scheduled:pending.filter(dated).length,completed:items.filter(item=>item.completed===true).length};
+  const overdueIds=new Set(pending.filter(overdue).map(item=>item.id));
+  const counts={pending:pending.length,today:pending.filter(dueToday).length,scheduled:pending.filter(dated).length,
+    completed:items.filter(item=>item.completed===true).length,overdue:overdueIds.size,flagged:pending.filter(item=>item.flagged===true).length};
   const unknownDates=pending.filter(item=>!valid(item)).length;
   const unknownToday=pending.filter(item=>!dayKnown(item)).length;
-  const base=items.filter(item=>view==='completed'?item.completed===true:item.completed===false && (view==='today'?dueToday(item):view==='scheduled'?dated(item):true));
+  const matchesDate={today:dueToday,scheduled:dated,overdue:item=>overdueIds.has(item.id)};
+  const base=view==='completed' ? items.filter(item=>item.completed===true) : pending.filter(item=>matchesDate[view]?.(item) ?? true);
   const matches=new Set(base.filter(item=>(!options.flagOnly || item.flagged===true) && (!query || (item.title+' '+(item.notes || '')).toLocaleLowerCase().includes(query))).map(item=>item.id));
   const included=new Set(matches),ancestors=[];
   for(const item of items) {
@@ -35,11 +40,46 @@ export function projectLoadedItems(items,options={}) {
     if(matches.has(item.id))for(const ancestor of ancestors)included.add(ancestor.id);
     ancestors.push({id:item.id,level});
   }
-  return {items:items.filter(item=>included.has(item.id)),contextIds:new Set([...included].filter(id=>!matches.has(id))),matchCount:matches.size,counts,unknownDates,unknownToday,flaggedCount:base.filter(item=>item.flagged===true).length};
+  return {items:items.filter(item=>included.has(item.id)),contextIds:new Set([...included].filter(id=>!matches.has(id))),overdueIds,matchCount:matches.size,counts,unknownDates,unknownToday,flaggedCount:base.filter(item=>item.flagged===true).length};
 }
 
 const TODAY_SECTIONS = ['逾期','全天','上午','下午','今晚'];
 const UNKNOWN_ZONE = '时区待核对';
+
+/** 各清单独立筛选父子事项，再合并日期分组，避免不同清单的记录或层级混在一起。 */
+export function projectAcrossLists(lists, options) {
+  const {view='pending',...datesAndSearch} = options;
+  const filters = {today:localDateString(),...datesAndSearch,view,flagOnly:view==='flagged'};
+  const sections = new Map();
+  const counts = {today:0,scheduled:0,pending:0,flagged:0,overdue:0,completed:0};
+  const unknown = {...counts};
+  let matchCount = 0;
+  for (const {list,items} of lists) {
+    const projected = projectLoadedItems(items,filters);
+    const grouped = groupLoadedDateView(projected,filters);
+    for (const key of Object.keys(counts)) counts[key] += projected.counts[key];
+    matchCount += projected.matchCount;
+    unknown.today += projected.unknownToday;
+    unknown.overdue += projected.unknownToday;
+    unknown.scheduled += projected.unknownDates;
+    unknown.flagged += items.filter(item=>item.completed===false && typeof item.flagged!=='boolean').length;
+    let heading = '';
+    for (const item of grouped.items) {
+      heading = grouped.headings.get(item.id) || heading;
+      if (!sections.has(heading)) sections.set(heading,[]);
+      const section = sections.get(heading);
+      section.push({key:JSON.stringify([list.id,item.id]),list,item,heading:section.length?'':heading,context:projected.contextIds.has(item.id),overdue:projected.overdueIds.has(item.id)});
+    }
+  }
+  let headings = [...sections.keys()];
+  if (view==='today') headings=TODAY_SECTIONS.filter(heading=>sections.has(heading));
+  if (view==='scheduled') {
+    const date = heading=>heading==='今天'?filters.today:heading==='明天'?filters.tomorrow:heading;
+    headings=headings.filter(heading=>heading!==UNKNOWN_ZONE).sort((left,right)=>date(left).localeCompare(date(right)));
+    if (sections.has(UNKNOWN_ZONE)) headings.push(UNKNOWN_ZONE);
+  }
+  return {rows:headings.flatMap(heading=>sections.get(heading)),counts,matchCount,unknown};
+}
 
 /** 只重排已筛出的行。每组主子事项以首个匹配事项为归组依据，保留原行引用与层级。 */
 export function groupLoadedDateView({items,contextIds},{view,today,tomorrow,timeZone,descending=false}) {

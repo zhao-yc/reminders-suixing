@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { once } = require('node:events');
-const { BrowserWindow, ipcMain } = require('electron');
+const { BrowserWindow, ipcMain, nativeTheme } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
 const { installDesktopIPC } = require('./ipc.cjs');
@@ -11,11 +11,23 @@ const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, ed
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
 async function runSmoke({ frontendURL, root }) {
+  const originalTheme = nativeTheme.themeSource;
+  // 仅切换合成验证进程的配色来源，不更改操作系统设置。
+  nativeTheme.themeSource = 'light';
   console.log('正在验证桌面网页桥接和构建界面…');
   const html = fs.readFileSync(path.join(root, 'tests/fixtures/reminders.html'), 'utf8');
   let delayFirstReminderFrame = false;
+  let loginFixture = '';
   const server = http.createServer((request, response) => {
     response.setHeader('content-type', 'text/html; charset=utf-8');
+    if (request.url === '/frame' && loginFixture === 'waiting') {
+      response.end('<!doctype html><meta charset="utf-8"><title>合成认证等待</title><input type="password" aria-label="合成认证输入">');
+      return;
+    }
+    if (request.url === '/frame' && loginFixture === 'dialog') {
+      response.end(html.replace('</body>','<div id="login-fixture-dialog" role="dialog">合成编辑弹层</div></body>'));
+      return;
+    }
     if (request.url === '/frame' && delayFirstReminderFrame) {
       delayFirstReminderFrame = false;
       setTimeout(() => response.end(html), 500);
@@ -74,7 +86,11 @@ async function runSmoke({ frontendURL, root }) {
       preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false
     } });
     ui.webContents.on('console-message', event => { if (event.level === 'error') {uiErrors.push(event.message);console.error('界面错误：' + event.message);} });
-    stopIPC=installDesktopIPC({ipcMain,controller,getMainWindow:()=>ui});
+    let summaryReads=0;
+    stopIPC=installDesktopIPC({ipcMain,controller:{...controller,execute:(command,region,mayReload)=>{
+      if(command.type==='readSummary') summaryReads++;
+      return controller.execute(command,region,mayReload);
+    }},getMainWindow:()=>ui});
     await ui.loadURL(frontendURL);
     await ui.webContents.executeJavaScript('new Promise((resolve,reject) => { const deadline=Date.now()+8000; const timer=setInterval(()=>{if(document.body.innerText.includes("连接我的提醒事项")){clearInterval(timer);resolve(true)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("构建界面未完成加载"))}},50) })');
     const uiState = await ui.webContents.executeJavaScript('({title:document.title, bridge:typeof window.suixingDesktop?.execute, hasNode:typeof require})');
@@ -84,7 +100,14 @@ async function runSmoke({ frontendURL, root }) {
     // 区域设置保存在本地应用源，与远程账号会话分开；重建页面时恢复，避免回到另一区域。
     const displayedRegion = () => ui.webContents.executeJavaScript('document.querySelector(".region-picker")?.textContent');
     for (const [value, label] of [['global', '其他地区'], ['cn', '中国大陆']]) {
-      await ui.webContents.executeJavaScript('document.querySelector(".region-picker").click()');
+      if (value === 'global') {
+        assert.equal(await ui.webContents.executeJavaScript(`(() => {
+          const button=document.querySelector('.region-picker');
+          button.focus();
+          button.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
+          return document.activeElement===button;
+        })()`),true,'地区选择器可以聚焦并通过回车打开');
+      } else await ui.webContents.executeJavaScript('document.querySelector(".region-picker").click()');
       await ui.webContents.executeJavaScript('new Promise((resolve,reject)=>{const deadline=Date.now()+5000;const timer=setInterval(()=>{const option=[...document.querySelectorAll(".uni-picker-select .uni-picker-item")].find(node=>node.textContent===' + JSON.stringify(label) + ');if(option){clearInterval(timer);option.click();resolve(true)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("区域选项未出现"))}},50)})');
       const stored = await ui.webContents.executeJavaScript('localStorage.getItem("suixing.settings.region")');
       assert.equal(stored, value, '实际区域选择应通过 uni API 保存设置');
@@ -93,6 +116,109 @@ async function runSmoke({ frontendURL, root }) {
       assert.ok((await displayedRegion()).includes(label), '重建页面必须恢复保存的区域');
     }
     console.log('构建界面服务区域恢复验证通过。');
+    const officialWindow = controller.window();
+    const fixtureEntry = officialWindow.webContents.getURL();
+    const writeBeforeLogin = controller.lastWriteOutcome()?.sequence;
+    const waitForRenderer = async (predicate,window=ui) => {
+      const deadline = Date.now()+6000;
+      while (Date.now()<deadline) {
+        if (await window.webContents.executeJavaScript(predicate)) return;
+        await new Promise(resolve=>setTimeout(resolve,50));
+      }
+      assert.fail('随行未进入预期界面状态');
+    };
+    const clickLogin = () => ui.webContents.executeJavaScript('document.querySelector(".welcome-connect").click()');
+    loginFixture = 'waiting';
+    await officialWindow.webContents.loadURL(fixtureEntry);
+    ui.show();
+    await Promise.all([once(officialWindow,'show'),clickLogin()]);
+    await waitForRenderer('document.querySelector(".notice")?.dataset.code === "LOGIN_WAITING"');
+    assert.equal(officialWindow.isVisible(),true);
+    officialWindow.close();
+    await waitForRenderer('!document.querySelector(".welcome-connect")?.hasAttribute("disabled")');
+    assert.equal(officialWindow.isVisible(),false);
+    assert.equal(summaryReads,0,'取消登录时不读取清单汇总');
+
+    await Promise.all([once(officialWindow,'show'),clickLogin()]);
+    await waitForRenderer('document.querySelector(".notice")?.dataset.code === "LOGIN_WAITING"');
+    loginFixture = 'dialog';
+    await officialWindow.webContents.loadURL(fixtureEntry);
+    await new Promise(resolve=>setTimeout(resolve,1250));
+    assert.equal(officialWindow.isVisible(),true,'官方编辑弹层可见时保留登录窗口');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".notice")?.dataset.code'),'LOGIN_WAITING');
+    assert.equal(summaryReads,0,'官方页面就绪前不读取清单汇总');
+
+    // 原清单没有已知的今天事项，另一份同名清单有一条且标记为部分加载。
+    await officialWindow.webContents.executeJavaScript(`(()=>{
+      const w=document.querySelector('iframe').contentWindow;
+      const date=new Date();date.setDate(date.getDate()-1);
+      const day=[date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');
+      w.sessionStorage.setItem('fixture-complete','false');
+      w.sessionStorage.setItem('fixture-schedule-reminder-item-fixture-two-0',JSON.stringify({date:day,time:null,timeZone:null}));
+      w.fixtureBeforeTodayRender=w.renderFixture;
+      w.renderFixture=list=>{w.fixtureBeforeTodayRender(list);if(list==='two')w.document.querySelector('.reminder-item').setAttribute('aria-setsize','2');};
+      w.renderFixture('one');
+    })()`);
+    await officialWindow.webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("#login-fixture-dialog").remove()');
+    await waitForRenderer('document.querySelector(".across-lists .summary-row") && !document.querySelector(".refresh-button[disabled]")');
+    assert.equal(officialWindow.isVisible(),false);
+    assert.equal(summaryReads,1,'登录就绪后无需点击，应自动读取一次汇总');
+    assert.deepEqual(await ui.webContents.executeJavaScript('[document.querySelectorAll(".list-button").length,document.querySelectorAll(".summary-row").length,!!document.querySelector(".list-content[data-live=true]")]'),[2,1,false]);
+    await ui.webContents.executeJavaScript('window.dispatchEvent(new Event("offline"));window.dispatchEvent(new Event("online"));');
+    await waitForRenderer('document.querySelector(".network-notice")?.dataset.state === "read-required"');
+
+    const todayCard='.desktop-view-card[data-status="today"]';
+    ui.focus();ui.webContents.focus();
+    await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+').focus()');
+    ui.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});
+    ui.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
+    await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+').click()');
+    assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".refresh-button[disabled]")'),false,'重按今天应直接显示缓存');
+    assert.equal(summaryReads,1);
+    assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".summary-row .reminder-title")].map(node=>node.textContent.trim())'),['随行验证 · 第二个同名清单']);
+    assert.equal(await ui.webContents.executeJavaScript('getComputedStyle(document.querySelector(".summary-row .reminder-metadata")).color'),'rgb(209, 46, 60)','跨清单的逾期日期应标红');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+'+" .desktop-card-count").textContent.trim()'),'1+');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".across-lists .date-view-description").textContent.trim()'),'部分内容尚未读取');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".network-notice")?.dataset.state'),'read-required','使用缓存不解除恢复保护');
+    await ui.webContents.executeJavaScript('document.querySelector(".refresh-button").click()');
+    await waitForRenderer('!document.querySelector(".network-notice,.refresh-button[disabled]")');
+    assert.equal(summaryReads,2,'导航状态下手动汇总成功可解除恢复保护');
+    assert.match(await ui.webContents.executeJavaScript('document.querySelector(".across-lists .list-footer").textContent.trim()'),/^汇总于 \d{2}:\d{2}$/);
+    const officialSelected=()=>officialWindow.webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("[role=treeitem][aria-selected=true]").dataset.list');
+    assert.equal(await officialSelected(),'one','汇总完成后恢复原选区');
+    const summaryCounts=()=>ui.webContents.executeJavaScript('[...document.querySelectorAll(".desktop-card-count")].map(node=>node.textContent.trim())');
+    const crossCounts=await summaryCounts();
+    assert.equal(crossCounts[1],'1+');assert.equal(crossCounts[2],'3+');
+    await ui.webContents.executeJavaScript('document.querySelector(".desktop-view-card[data-status=scheduled]").click()');
+    await waitForRenderer('document.querySelector(".across-lists .list-title")?.textContent === "计划"');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".summary-row").length'),1);
+    await ui.webContents.executeJavaScript('document.querySelector(".desktop-view-card[data-status=pending]").click()');
+    await waitForRenderer('document.querySelector(".across-lists .list-title")?.textContent === "待办"');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".summary-row").length'),3);
+    await ui.webContents.executeJavaScript('document.querySelector(".desktop-view-card[data-status=scheduled]").click()');
+    await waitForRenderer('document.querySelectorAll(".summary-row").length === 1');
+    await ui.webContents.executeJavaScript('document.querySelector(".summary-source-button").click()');
+    await waitForRenderer('document.querySelector(".list-content[data-live=true] .reminder-title")?.textContent.includes("第二个同名清单")');
+    assert.equal(await officialSelected(),'two');
+    assert.deepEqual(await summaryCounts(),crossCounts,'切换清单后卡片仍按跨清单结果计数');
+    await officialWindow.webContents.executeJavaScript(`(()=>{const w=document.querySelector('iframe').contentWindow;w.renderFixture=w.fixtureBeforeTodayRender;delete w.fixtureBeforeTodayRender;w.renderFixture('two');})()`);
+    await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+').click();document.querySelector(".refresh-button").click()');
+    await waitForRenderer('document.querySelector(".across-lists .summary-row") && !document.querySelector(".across-lists .date-view-description,.refresh-button[disabled]")');
+    assert.equal(summaryReads,3,'切回今天应复用缓存，手动刷新应重新读取一次');
+    assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".across-lists .eyebrow")'),false,'汇总标题上方不再显示范围说明');
+    await ui.webContents.executeJavaScript('document.querySelector(".list-button").click()');
+    await waitForRenderer('document.querySelectorAll(".list-content[data-live=true] .reminder-row").length===2');
+    await officialWindow.webContents.executeJavaScript(`document.querySelector('iframe').contentWindow.sessionStorage.removeItem('fixture-schedule-reminder-item-fixture-two-0');`);
+    console.log('登录后经正式 IPC 自动读取跨清单事项，切换视图复用缓存，手动刷新恢复联网并可打开来源。');
+
+    await ui.webContents.executeJavaScript('document.querySelector(".toolbar-actions .quiet-button").click()');
+    await new Promise(resolve=>setTimeout(resolve,1100));
+    assert.equal(officialWindow.isVisible(),true,'手动打开官方页面仍由用户关闭');
+    assert.equal(controller.lastWriteOutcome()?.sequence,writeBeforeLogin);
+    officialWindow.hide();
+    loginFixture = '';
+    await ui.loadURL(frontendURL);
+    console.log('合成登录取消、官方弹层保护、清单就绪后自动隐藏及手动重开通过。');
     const ipcRead = await ui.webContents.executeJavaScript('window.suixingDesktop.execute({type:"read"},"cn").then(r=>({ok:r.ok,count:r.snapshot?.items.length}))');
     assert.equal(ipcRead.ok, true);
     assert.equal(ipcRead.count, 2);
@@ -147,18 +273,34 @@ async function runSmoke({ frontendURL, root }) {
       schedule:{date:calendarDay(0),time,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},metadata:time
     });
     const viewItems=[viewItem('view-root','随行验证 · 日期父项',null),viewItem('view-child','随行验证 · 日期子项',calendarDay(0),{level:2,flagged:true}),
-      timedViewItem('view-evening','随行验证 · 今晚事项','18:00'),viewItem('view-overdue','随行验证 · 逾期',calendarDay(-1)),
+      timedViewItem('view-evening','随行验证 · 今晚事项','18:00'),viewItem('view-overdue','随行验证 · 逾期',calendarDay(-1),{metadata:calendarDay(-1)+'，每月'}),
       timedViewItem('view-morning','随行验证 · 上午事项','09:30'),viewItem('view-future','随行验证 · 将来',calendarDay(1)),
       timedViewItem('view-afternoon','随行验证 · 下午事项','12:00'),viewItem('view-completed','随行验证 · 完成',calendarDay(0),{completed:true}),
       viewItem('view-unknown','随行验证 · 日期未知',null,{schedule:null,metadata:'今天（合成文案，不得用于猜测）'})];
-    const viewSnapshot={...sorting.snapshot,items:viewItems};
+    const viewSnapshot={...sorting.snapshot,items:viewItems,lists:[
+      {...sorting.snapshot.lists.find(list=>list.id===sorting.snapshot.activeListId),icon:null},
+      ...['项目','阅读','出行','购物','长期计划'].map((title,index)=>({
+        id:'preview-list-'+index,title,color:['#db584f','#6958ad','#1687ff','#398f76','#b9653e'][index]
+      }))
+    ]};
     ui.webContents.send('suixing:snapshot',{region:'cn',result:{ok:true,code:'READY',snapshot:viewSnapshot}});
     await new Promise(resolve=>setTimeout(resolve,80));
-    const chooseView=async view=>{await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="'+view+'"]\').click()');await new Promise(resolve=>setTimeout(resolve,80));};
+    const chooseView=async view=>{
+      const selector=view==='flagged'?'.flag-filter':'.tabs .view-tab[data-status="'+view+'"]';
+      await ui.webContents.executeJavaScript('(()=>{if('+JSON.stringify(view)+'!=="flagged")document.querySelector(".flag-filter[aria-pressed=true]")?.click();document.querySelector('+JSON.stringify(selector)+').click()})()');
+      await new Promise(resolve=>setTimeout(resolve,80));
+    };
     const dateHeadings=()=>ui.webContents.executeJavaScript('[...document.querySelectorAll(".date-section-heading[role=heading]")].map(node=>node.textContent.trim())');
+    assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".desktop-view-card")].map(card=>card.dataset.status)'),['today','scheduled','pending','flagged','overdue','completed']);
+    await chooseView('flagged');assert.deepEqual(await displayedIds(),['view-root','view-child']);
+    await chooseView('overdue');assert.deepEqual(await displayedIds(),['view-overdue']);
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".list-title").textContent.trim()'),viewSnapshot.activeListTitle,'侧栏筛选不改写原事项区的清单标题');
     await chooseView('today');
     assert.deepEqual(await displayedIds(),['view-overdue','view-root','view-child','view-morning','view-afternoon','view-evening']);
     assert.deepEqual(await dateHeadings(),['逾期','全天','上午','下午','今晚']);
+    const overdueColor=()=>ui.webContents.executeJavaScript('getComputedStyle(document.querySelector(\'[data-record-id="view-overdue"] .reminder-metadata\')).color');
+    assert.equal(await overdueColor(),'rgb(209, 46, 60)');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".reminder-metadata.is-overdue").length'),1,'当天事项不使用逾期色');
     assert.deepEqual(await ui.webContents.executeJavaScript('(()=>{const n=document.querySelector(".date-view-description");return [n.dataset.matches,n.dataset.unknown,n.textContent.includes("当前清单已加载")];})()'),['5','1',true]);
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(\'[data-record-id="view-root"] .completion-button\').hasAttribute("disabled")'),true);
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(\'[data-record-id="view-root"] .row-actions\')===null'),true);
@@ -172,10 +314,34 @@ async function runSmoke({ frontendURL, root }) {
     ui.show();ui.focus();ui.webContents.focus();
     await ui.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
     fs.writeFileSync(path.join(root,'.local/date-views-desktop-preview.png'),(await ui.webContents.capturePage()).toPNG());
+    const themeState=()=>ui.webContents.executeJavaScript('(()=>{const root=document.querySelector(".app-shell"),title=document.querySelector(".list-title");return {dark:matchMedia("(prefers-color-scheme: dark)").matches,background:getComputedStyle(root).backgroundColor,titleSize:getComputedStyle(title).fontSize,pageId:document.querySelector(".list-content").dataset.pageId,ids:[...document.querySelectorAll(".reminder-row")].map(row=>row.dataset.recordId)};})()');
+    const lightState=await themeState();
+    assert.equal(lightState.background,'rgb(255, 255, 255)');
+    assert.equal(lightState.titleSize,'32px','事项区沿用原字号');
+    fs.writeFileSync(path.join(root,'.local/sidebar-layout-light.png'),(await ui.webContents.capturePage()).toPNG());
+    for(const theme of ['dark','light']) {
+      nativeTheme.themeSource=theme;
+      let current;
+      for(let attempt=0;attempt<30;attempt++) {
+        await new Promise(resolve=>setTimeout(resolve,20));
+        current=await themeState();
+        if(current.dark===(theme==='dark') && current.background===(theme==='dark'?'rgb(28, 29, 30)':'rgb(255, 255, 255)'))break;
+      }
+      assert.equal(current.dark,theme==='dark');
+      assert.equal(current.background,theme==='dark'?'rgb(28, 29, 30)':'rgb(255, 255, 255)');
+      assert.equal(await overdueColor(),theme==='dark'?'rgb(255, 120, 131)':'rgb(209, 46, 60)');
+      assert.equal(current.titleSize,lightState.titleSize);
+      assert.equal(current.pageId,lightState.pageId,'配色切换不重载清单');
+      assert.deepEqual(current.ids,lightState.ids);
+      await ui.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+      if(theme==='dark')fs.writeFileSync(path.join(root,'.local/sidebar-layout-dark.png'),(await ui.webContents.capturePage()).toPNG());
+    }
+    console.log('系统浅色／深色实时切换、原事项区字号与清单状态保持通过。');
     const viewSize=ui.getSize();ui.setSize(430,932);
-    await new Promise(resolve=>setTimeout(resolve,300));
+    await waitForRenderer('matchMedia("(max-width:760px)").matches && document.querySelector(".sidebar").getBoundingClientRect().right<=1');
     assert.equal(await ui.webContents.executeJavaScript('document.documentElement.scrollWidth<=window.innerWidth+2'),true,'日期视图说明和四个入口在窄屏不得横向溢出');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".sidebar").getBoundingClientRect().right<=1'),true,'等待抽屉收起动画后再核对与截图');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".tabs .view-tab").length'),4);
     await ui.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
     fs.writeFileSync(path.join(root,'.local/date-views-mobile-preview.png'),(await ui.webContents.capturePage()).toPNG());
     ui.setSize(...viewSize);await new Promise(resolve=>setTimeout(resolve,80));
@@ -195,6 +361,8 @@ async function runSmoke({ frontendURL, root }) {
       await new Promise(resolve=>setTimeout(resolve,100));
     };
     await press('Tab');
+    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".region-picker")'),true,'Tab 应先到达地区选择器');
+    await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".reconnect-button")'),true,'Tab 应能到达重新连接');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".rename-list-button")'),true,'Tab 应能到达清单重命名');
@@ -202,16 +370,15 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".list-appearance-button")'),true,'Tab 应能到达清单颜色与图标');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".delete-list-button")'),true,'Tab 应能到达清单删除');
-    for(const view of ['pending','today','scheduled','completed']) {
-      await press('Tab');
-      assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(\'.view-tab[data-status="'+view+'"]\')'),true,'Tab 应能到达各清单视图');
-      if(view==='today') {
-        await press('Enter');assert.equal(await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="today"]\').getAttribute("aria-pressed")'),'true');
-      }
-    }
-    await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="pending"]\').click()');
     await press('Tab');
-    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".flag-filter")'),true,'Tab 应先到达旗标筛选');
+    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".tabs .view-tab[data-status=pending]")'),true,'Tab 应先到达当前清单筛选');
+    await ui.webContents.executeJavaScript('document.querySelector(\'.desktop-view-card[data-status="today"]\').focus()');
+    for(const view of ['today','scheduled','pending','flagged','overdue','completed']) {
+      assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(\'.view-tab[data-status="'+view+'"]\')'),true,'Tab 应能到达各清单视图');
+      if(view!=='completed')await press('Tab');
+    }
+    await ui.webContents.executeJavaScript('document.querySelector(\'.tabs .view-tab[data-status="pending"]\').click()');
+    await ui.webContents.executeJavaScript('document.querySelector(".flag-filter").focus()');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".desktop-sort .sort-picker-label")'),true,'Tab 应能到达排序菜单');
     await press('Enter');
@@ -468,6 +635,7 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(normalController.window().webContents.getBackgroundThrottling(),false);
     stopIPC();
     normalUI = new BrowserWindow({show:false,webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}});
+    const waitForNormalReady=()=>waitForRenderer('document.querySelector(".list-content")?.dataset.live==="true" && !document.querySelector(".network-notice,.refresh-button[disabled]")',normalUI);
     normalUI.webContents.on('console-message',event=>{if(event.level==='error')uiErrors.push(event.message);});
     stopIPC=installDesktopIPC({ipcMain,controller:normalController,getMainWindow:()=>normalUI});
     await normalUI.loadURL(frontendURL);
@@ -564,7 +732,7 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'false');
     assert.deepEqual(await normalController.window().webContents.executeJavaScript(offlineCountsScript),beforeOfflineCounts);
     assert.equal(await normalUI.webContents.executeJavaScript('(()=>{const end=document.querySelector(".end-blocked-edit"),refresh=document.querySelector(".refresh-button");if(!end || !refresh)return false;end.click();refresh.click();return true;})()'),true);
-    assert.equal(await normalUI.webContents.executeJavaScript('new Promise(resolve=>{const deadline=Date.now()+5000;const timer=setInterval(()=>{if(document.querySelector(".list-content")?.dataset.live==="true" && !document.querySelector(".network-notice")){clearInterval(timer);resolve(true)}else if(Date.now()>deadline){clearInterval(timer);resolve(false)}},50)})'),true);
+    await waitForNormalReady();
     normalSnapshot=await normalController.execute({type:'read'},'cn');
     assert.notEqual(normalSnapshot.snapshot.pageId,beforeOffline.pageId);assert.equal(normalSnapshot.snapshot.items.filter(item=>item.title===normalTitle).length,1);
     assert.deepEqual(await normalController.window().webContents.executeJavaScript(offlineCountsScript),beforeOfflineCounts);
@@ -582,7 +750,7 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'false','同名清单不能自动猜测身份并开放写入');
     assert.ok((await normalUI.webContents.executeJavaScript('document.querySelector(".notice").textContent')).includes('重新选择清单'));
     await normalUI.webContents.executeJavaScript('document.querySelector(".list-button").click()');
-    await new Promise(resolve=>setTimeout(resolve,150));
+    await waitForNormalReady();
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'true','用户明确选定新清单后才恢复写入');
     console.log('普通模式重新连接经键盘与正式 IPC 完成，同名清单只读保护及新句柄选择通过，事项内容未变。');
     const beforeUnloadCheck=await normalController.execute({type:'read'},'cn');normalUI.webContents.send('suixing:snapshot',{region:'cn',result:beforeUnloadCheck});await new Promise(resolve=>setTimeout(resolve,100));
@@ -591,7 +759,7 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(unloadResult.reason,'UI_ERROR');assert.equal(unloadResult.kind,'OFFICIAL_PAGE_BUSY');assert.equal(unloadResult.stage,'home');
     assert.equal(normalController.window().isDestroyed(),false);assert.equal((await normalController.execute({type:'read'},'cn')).snapshot.pageId,beforeUnloadCheck.snapshot.pageId);
     await normalController.window().webContents.executeJavaScript('removeEventListener("beforeunload",window.fixtureBeforeUnload);delete window.fixtureBeforeUnload;');
-    await normalUI.webContents.executeJavaScript('document.querySelector(".refresh-button").click()');await new Promise(resolve=>setTimeout(resolve,150));
+    await normalUI.webContents.executeJavaScript('document.querySelector(".refresh-button").click()');await waitForNormalReady();
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'true');
     console.log('官方 beforeunload 阻止离开时保留原窗口、固定阶段及只读状态，不强制忽略或继续导航，结束阻止后刷新恢复通过。');
     const hierarchyBefore=await normalController.execute({type:'read'},'cn'),hierarchyTarget=hierarchyBefore.snapshot.items.find(item=>item.title===normalTitle);
@@ -660,10 +828,32 @@ async function runSmoke({ frontendURL, root }) {
     await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("[role=treeitem][aria-selected=true] .inline-editable-label").textContent="随行验证 · 合成原清单"');
     const listBefore=await normalController.execute({type:'read'},'cn'),listTitle='随行验证 · 普通模式新清单',renamedListTitle=listTitle+' · 改名';
     normalUI.webContents.send('suixing:snapshot',{region:'cn',result:listBefore});await new Promise(resolve=>setTimeout(resolve,100));
+    const extraColors=['255, 149, 0','255, 204, 0','81, 170, 242','88, 86, 214','234, 66, 106','192, 119, 219','162, 132, 94','91, 103, 112','217, 166, 159'].map(color=>'rgb('+color+')');
+    await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.eval('+JSON.stringify('fixtureAppearanceColors.push(...'+JSON.stringify(extraColors)+')')+')');
     const listExpected={pageId:listBefore.snapshot.pageId,listId:listBefore.snapshot.activeListId,title:listBefore.snapshot.activeListTitle,operation:'create',value:listTitle};
     assert.equal(await normalUI.webContents.executeJavaScript('('+editTestList.toString()+')('+JSON.stringify({...listExpected,cancel:true})+')',true),true);
     assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureListSaves'),0);
     assert.equal(await normalUI.webContents.executeJavaScript('('+editTestList.toString()+')('+JSON.stringify({...listExpected,preview:true})+')',true),true);
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".create-list-dialog").getAttribute("aria-modal")'), 'true');
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelectorAll(".create-list-swatches .color-choice").length'),12);
+    const changeDraftName=value=>normalUI.webContents.executeJavaScript('(()=>{const input=document.querySelector(".create-list-dialog input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,'+JSON.stringify(value)+');input.dispatchEvent(new Event("input",{bubbles:true}));input.focus();})()');
+    await changeDraftName('');
+    await waitForRenderer('document.querySelector(".create-list-dialog .save-list-edit[disabled]") && document.querySelector(".create-list-badge uni-image > div")?.style.backgroundImage.startsWith("url(")',normalUI);
+    fs.writeFileSync(path.join(root,'.local/list-create-dialog-light.png'),(await normalUI.webContents.capturePage()).toPNG());
+    nativeTheme.themeSource='dark';
+    await waitForRenderer('getComputedStyle(document.querySelector(".create-list-dialog")).backgroundColor==="rgb(39, 41, 44)"',normalUI);
+    await normalUI.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
+    fs.writeFileSync(path.join(root,'.local/list-create-dialog-dark.png'),(await normalUI.webContents.capturePage()).toPNG());
+    nativeTheme.themeSource='light';
+    await changeDraftName(listTitle);
+    assert.equal(await normalUI.webContents.executeJavaScript('(()=>{document.activeElement.dispatchEvent(new KeyboardEvent("keydown",{key:"Tab",shiftKey:true,bubbles:true,cancelable:true}));return document.activeElement.matches(".save-list-edit");})()'),true,'焦点应保持在新建弹窗内');
+    const createdAppearance=await normalUI.webContents.executeJavaScript(`(()=>{
+      const color=document.querySelectorAll('.create-list-swatches .color-choice')[2];color.click();
+      document.querySelector('.create-list-icon-toggle').click();return color.style.backgroundColor;
+    })()`);
+    await waitForRenderer('document.querySelectorAll(".create-list-icons .icon-choice").length>1',normalUI);
+    const createdIcon=await normalUI.webContents.executeJavaScript('(()=>{const icon=document.querySelectorAll(".create-list-icons .icon-choice")[1];icon.click();document.querySelector(".create-list-icon-toggle").click();return icon.dataset.key;})()');
+    await normalUI.webContents.executeJavaScript('document.querySelector(".create-list-dialog input").focus()');
     await normalUI.webContents.executeJavaScript('document.querySelector(".list-name-input input").dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",isComposing:true,bubbles:true,cancelable:true}))');
     assert.equal(await normalUI.webContents.executeJavaScript('!!document.querySelector(".list-editor")'),true);
     normalUI.setContentSize(390,780);await new Promise(resolve=>setTimeout(resolve,150));
@@ -674,11 +864,16 @@ async function runSmoke({ frontendURL, root }) {
     let listCreated;
     for(let attempt=0;attempt<50;attempt++){await new Promise(resolve=>setTimeout(resolve,100));listCreated=await normalController.execute({type:'read'},'cn');if(listCreated.snapshot?.activeListTitle===listTitle)break;}
     assert.equal(listCreated.snapshot.activeListTitle,listTitle);assert.equal(listCreated.snapshot.items.length,0);assert.equal(listCreated.snapshot.lists.length,listBefore.snapshot.lists.length+1);
+    const createdList=listCreated.snapshot.lists.find(list=>list.id===listCreated.snapshot.activeListId);
+    assert.equal(createdList.color,createdAppearance);assert.equal(createdList.icon.key,createdIcon);
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureListSaves'),1,'名称和外观应随新建一起提交一次');
     for(const old of listBefore.snapshot.lists)assert.ok(listCreated.snapshot.lists.some(list=>list.fingerprint===old.fingerprint));
     normalUI.setContentSize(1160,830);await new Promise(resolve=>setTimeout(resolve,100));
     let listChanged=listCreated;
     for(const value of [renamedListTitle,listTitle]) {
-      assert.equal(await normalUI.webContents.executeJavaScript('('+editTestList.toString()+')('+JSON.stringify({pageId:listChanged.snapshot.pageId,listId:listChanged.snapshot.activeListId,title:listChanged.snapshot.activeListTitle,operation:'rename',value})+')',true),true);
+      await waitForRenderer('document.querySelector(".list-content")?.dataset.listTitle==='+JSON.stringify(listChanged.snapshot.activeListTitle)+' && document.querySelector(".rename-list-button:not([disabled])") && !document.querySelector(".list-editor")',normalUI);
+      const renamed=await normalUI.webContents.executeJavaScript('('+editTestList.toString()+')('+JSON.stringify({pageId:listChanged.snapshot.pageId,listId:listChanged.snapshot.activeListId,title:listChanged.snapshot.activeListTitle,operation:'rename',value})+')',true);
+      assert.equal(renamed,true,'新建后应可进入重命名编辑');
       for(let attempt=0;attempt<50;attempt++){await new Promise(resolve=>setTimeout(resolve,100));listChanged=await normalController.execute({type:'read'},'cn');if(listChanged.snapshot?.activeListTitle===value)break;}
       assert.equal(listChanged.snapshot.activeListId,listCreated.snapshot.activeListId);assert.equal(listChanged.snapshot.activeListTitle,value);assert.equal(listChanged.snapshot.items.length,0);
     }
@@ -751,7 +946,7 @@ async function runSmoke({ frontendURL, root }) {
     await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelectorAll(".reminder-item").forEach(row=>{row.querySelector=row.fixtureOriginalQuery;delete row.fixtureOriginalQuery;})');
     const nextList=navigation.snapshot.lists[0];
     await normalUI.webContents.executeJavaScript('document.querySelector('+JSON.stringify('.list-button[data-list-id="'+nextList.id+'"]')+').click()');
-    await new Promise(resolve=>setTimeout(resolve,150));
+    await waitForNormalReady();
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'true','明确选择另一清单后恢复编辑');
     // 合成空账户场景；只改变本地固定夹具，不删除真实清单。
     await normalController.window().webContents.executeJavaScript('(()=>{const w=document.querySelector("iframe").contentWindow;w.sessionStorage.setItem("fixture-deleted-lists",JSON.stringify(["one","two"]));w.document.querySelector("[role=tree]").remove();w.document.querySelector("[role=treegrid]").innerHTML="";const note=w.document.createElement("div");note.className="no-lists-note";w.document.body.append(note)})()');
@@ -759,7 +954,8 @@ async function runSmoke({ frontendURL, root }) {
     normalUI.webContents.send('suixing:snapshot',{region:'cn',result:emptyAccount});await new Promise(resolve=>setTimeout(resolve,100));
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".account-title").textContent'),'已连接 iCloud');
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".add-list-button").hasAttribute("disabled")'),false);
-    await normalUI.webContents.executeJavaScript('document.querySelector(".empty-add").click()');await new Promise(resolve=>setTimeout(resolve,100));
+    await normalUI.webContents.executeJavaScript('document.querySelector(".empty-add").click()');
+    await waitForRenderer('document.querySelector(".create-list-dialog input:not([disabled])")',normalUI);
     const firstListTitle='随行验证 · 空账户首份清单';
     await normalUI.webContents.executeJavaScript('(()=>{const input=document.querySelector(".list-name-input input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,'+JSON.stringify(firstListTitle)+');input.dispatchEvent(new Event("input",{bubbles:true}))})()');
     normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
@@ -828,6 +1024,9 @@ async function runSmoke({ frontendURL, root }) {
     report.checks.push('本地清单排序、原顺序恢复、设置恢复及窄屏入口');
     report.checks.push('排序下拉框 Tab 聚焦、回车展开、方向键选择和 Esc 取消');
     report.checks.push('旗标空格操作、正式 IPC 单次保存、移除及本地筛选');
+    report.checks.push('登录就绪后自动隐藏官方窗口、保留会话和清单导航');
+    report.checks.push('跨清单今天读取、部分加载提示、原选区恢复与来源跳转');
+    report.checks.push('系统浅色／深色实时切换与清单状态保持');
     report.checks.push('普通模式重新连接、同名清单只读保护与新页面句柄');
     report.checks.push('服务不可达时保留草稿、禁止写入与导航，恢复后手动刷新且不重放');
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });
@@ -836,6 +1035,7 @@ async function runSmoke({ frontendURL, root }) {
   } catch(error) {
     console.error(error.stack || error.message);throw error;
   } finally {
+    nativeTheme.themeSource=originalTheme;
     stopIPC?.();
     ui?.destroy();
     normalUI?.destroy();

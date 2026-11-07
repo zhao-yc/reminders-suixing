@@ -4,7 +4,7 @@ async function offlineTestUI(expected) {
   let clicked=false;
   for(let attempt=0;attempt<50;attempt++) {
     const list=document.querySelector('.list-content'),notice=document.querySelector('.network-notice');
-    if(!list || list.dataset.listId!==expected.listId || document.querySelector('.list-title')?.textContent.trim()!==expected.title || document.querySelector('.inline-editor'))return false;
+    if(!list || list.dataset.listId!==expected.listId || (list.dataset.listTitle ?? document.querySelector('.list-title')?.textContent.trim())!==expected.title || document.querySelector('.inline-editor'))return false;
     if(expected.stage==='ready')return list.dataset.pageId===expected.pageId && list.dataset.live==='true';
     if(expected.stage==='offline' && ['offline','unavailable'].includes(notice?.dataset.state) && list.dataset.live==='false')return true;
     if(expected.stage==='restored' && notice?.dataset.state==='read-required' && list.dataset.live==='false')return true;

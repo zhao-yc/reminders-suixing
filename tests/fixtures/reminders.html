@@ -252,7 +252,9 @@ function openFixtureList(creating) {
   const panel=document.createElement('div');panel.className='reminder-list-detail';
   panel.innerHTML='<div class="name-textfield"><input type="text"></div><div class="color-picker"></div><div class="badge-emblem-picker"></div><button class="done-button">完成</button><button class="cancel-button">取消</button>';
   const input=panel.querySelector('input'),done=panel.querySelector('.done-button');input.value=value;done.disabled=!value.trim();
-  let color=creating?fixtureAppearanceColors[0]:selected.querySelector('.reminder-list-icon').style.backgroundColor,icon=creating?0:Number(sessionStorage.getItem('fixture-list-icon-'+selected.dataset.list) || 0);
+  const saved=JSON.parse(sessionStorage.getItem('fixture-lists') || '[]').find(record=>record.key===selected?.dataset.list);
+  let color=creating?fixtureAppearanceColors[0]:selected.querySelector('.reminder-list-icon').style.backgroundColor;
+  let icon=creating?0:Number(sessionStorage.getItem('fixture-list-icon-'+selected.dataset.list) ?? saved?.icon ?? 0);
   function choices() {
     for(const [kind,values,current] of [['color-picker',fixtureAppearanceColors,color],['badge-emblem-picker',fixtureAppearanceIcons,icon]]) {
       const root=panel.querySelector('.'+kind);root.innerHTML='';

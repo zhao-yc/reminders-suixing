@@ -1,19 +1,49 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { groupLoadedDateView, projectLoadedItems } from '../apps/uni-app/lib/list-views.js';
+import { groupLoadedDateView, projectLoadedItems, projectAcrossLists } from '../apps/uni-app/lib/list-views.js';
 
 const none={date:null,time:null,timeZone:null};
 const item=(id,date=null,extra={})=>({id,title:id,notes:'',completed:false,level:1,flagged:false,schedule:date?{date,time:null,timeZone:null}:none,...extra});
 const options={today:'2030-01-15',timeZone:'Asia/Shanghai'};
 const ids=result=>result.items.map(item=>item.id);
 
+test('跨清单今天合并日期组，重复记录标识和父子上下文仍分属来源清单',()=>{
+  const lists=[
+    {list:{id:'one',title:'合成清单一'},items:[item('重复标识','2030-01-14'),item('日期待核对',null,{schedule:null})]},
+    {list:{id:'two',title:'合成清单二'},items:[item('第二清单主项'),item('重复标识','2030-01-15',{level:2}),item('已完成','2030-01-14',{completed:true})]}
+  ];
+  const result=projectAcrossLists(lists,{...options,view:'today'});
+  assert.deepEqual(result.counts,{today:2,scheduled:2,pending:4,flagged:0,overdue:1,completed:1});
+  assert.equal(result.unknown.today,1);
+  assert.deepEqual(result.rows.map(entry=>[entry.list.id,entry.heading,entry.context]),[['one','逾期',false],['two','全天',true],['two','',false]]);
+  assert.deepEqual(result.rows.map(entry=>entry.overdue),[true,false,false]);
+  assert.equal(new Set(result.rows.map(entry=>entry.key)).size,3);
+  assert.equal(projectAcrossLists(lists,{...options,view:'today',query:'找不到'}).matchCount,0);
+});
+
+test('跨清单计划按日期合并，旗标、待办和完成各用自己的条件，搜索不改卡片计数',()=>{
+  const lists=[
+    {list:{id:'one'},items:[item('未来','2030-02-01',{flagged:true}),item('明天甲','2030-01-16'),item('完成',null,{completed:true})]},
+    {list:{id:'two'},items:[item('无日期'),item('今天','2030-01-15'),item('明天乙','2030-01-16')]}
+  ];
+  const scheduled=projectAcrossLists(lists,{...options,tomorrow:'2030-01-16',view:'scheduled'});
+  assert.deepEqual(scheduled.rows.map(row=>[row.item.id,row.heading]),[['今天','今天'],['明天甲','明天'],['明天乙',''],['未来','2030-02-01']]);
+  const pending=projectAcrossLists(lists,{...options,view:'pending',query:'无日期'});
+  assert.equal(pending.matchCount,1);
+  assert.equal(pending.counts.pending,5);
+  assert.deepEqual(projectAcrossLists(lists,{...options,view:'flagged'}).rows.map(row=>row.item.id),['未来']);
+  assert.deepEqual(projectAcrossLists(lists,{...options,view:'completed'}).rows.map(row=>row.item.id),['完成']);
+});
+
 test('今天包括今天与逾期，计划包括有日期的待办，不从附注或不可读字段猜测',()=>{
   const items=[item('逾期','2030-01-14'),item('今天','2030-01-15'),item('将来','2030-01-16'),item('无日期'),item('未知',null,{schedule:null,metadata:'今天'}),item('非法',null,{schedule:{date:'2030-02-30',time:null,timeZone:null}}),item('已完成','2030-01-15',{completed:true})];
   const today=projectLoadedItems(items,{...options,view:'today'});
   assert.deepEqual(ids(today),['逾期','今天']);
-  assert.deepEqual(today.counts,{pending:6,today:2,scheduled:3,completed:1});
+  assert.deepEqual(today.counts,{pending:6,today:2,scheduled:3,completed:1,overdue:1,flagged:0});
+  assert.deepEqual([...today.overdueIds],['逾期']);
   assert.equal(today.unknownDates,2);assert.equal(today.unknownToday,2);
   assert.deepEqual(ids(projectLoadedItems(items,{...options,view:'scheduled'})),['逾期','今天','将来']);
+  assert.deepEqual(ids(projectLoadedItems(items,{...options,view:'overdue'})),['逾期']);
 });
 
 test('筛选与排序使用原记录引用，不改事项；子事项匹配时保留祖先但不计入匹配数',()=>{
@@ -29,6 +59,7 @@ test('搜索与旗标可组合，祖先只供定位且不引入不匹配的兄�
   const result=projectLoadedItems(items,{...options,view:'scheduled',flagOnly:true,query:'找得到'});
   assert.deepEqual(ids(result),['前主项','孙项父项','目标']);assert.equal(result.matchCount,1);
   assert.deepEqual([...result.contextIds],['前主项','孙项父项']);assert.equal(result.flaggedCount,2);
+  assert.equal(result.counts.flagged,2,'侧栏计数保持当前快照范围，不受搜索或日期视图影响');
 });
 
 test('已完成子事项可带未完成祖先作为只读上下文；缺主项的部分加载不虚构祖先',()=>{

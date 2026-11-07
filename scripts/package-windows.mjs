@@ -34,5 +34,5 @@ for (const relative of ['apps/desktop', 'apps/uni-app/static/icloud']) {
 }
 await fs.cp(path.join(root, frontend), path.join(appRoot, frontend), { recursive: true });
 await fs.copyFile(path.join(root, 'LICENSE'), path.join(destination, '项目许可证.txt'));
-await fs.writeFile(path.join(destination, '使用说明.txt'), '提醒事项·随行 '+metadata.version+' 最小验证版\r\n运行“提醒事项随行.exe”，在 iCloud 官方页面自行登录，返回主界面刷新。\r\n尚未签名；不包含任何登录会话或个人数据。\r\n');
+await fs.writeFile(path.join(destination, '使用说明.txt'), '提醒事项·随行 '+metadata.version+' 最小验证版\r\n运行“提醒事项随行.exe”，在 iCloud 官方页面自行登录。清单就绪后自动返回主界面并读取汇总。\r\n尚未签名；不包含任何登录会话或个人数据。\r\n');
 console.log('已生成 Windows 便携包：' + destination);

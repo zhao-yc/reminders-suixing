@@ -17,17 +17,30 @@ function browserUserAgent(chromiumVersion) {
   return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/' + chromiumVersion + ' Safari/537.36';
 }
 
+function validAppearance(selection) {
+  return !!selection && typeof selection.color==='string' && /^rgb\(\d{1,3}, \d{1,3}, \d{1,3}\)$/.test(selection.color) &&
+    typeof selection.iconKey==='string' && /^shape-[a-f0-9]+-[a-f0-9]+-\d{1,5}$/.test(selection.iconKey) &&
+    typeof selection.expectedAppearanceFingerprint==='string' && selection.expectedAppearanceFingerprint.length>0 && selection.expectedAppearanceFingerprint.length<=20000;
+}
+
 function validCommand(command) {
-  if (!command || typeof command !== 'object' || !['read','readLists','readList', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance','getSubtaskInfo','setSubtask', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return false;
-  if (['read','readLists'].includes(command.type)) return true;
+  if (!command || typeof command !== 'object' || !['read','readLists','readList','readSummary', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'getListCreateOptions', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance','getSubtaskInfo','setSubtask', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return false;
+  if (command.type === 'read') return true;
+  if (command.type === 'readLists') return command.background === undefined || typeof command.background === 'boolean';
   if (typeof command.pageId !== 'string' || command.pageId.length > 150 || typeof command.listId !== 'string' || command.listId.length > 150) return false;
-  if (['selectList', 'showCompleted','readList'].includes(command.type)) return command.type!=='readList' || !!command.pageId && !!command.listId && (command.background === undefined || typeof command.background === 'boolean');
-  if(['getListAppearance','setListAppearance'].includes(command.type))return typeof command.expectedListFingerprint==='string' && command.expectedListFingerprint.length>0 && command.expectedListFingerprint.length<=4000 &&
-    (command.type==='getListAppearance' || typeof command.color==='string' && /^rgb\(\d{1,3}, \d{1,3}, \d{1,3}\)$/.test(command.color) && typeof command.iconKey==='string' && /^shape-[a-f0-9]+-[a-f0-9]+-\d{1,5}$/.test(command.iconKey) && typeof command.expectedAppearanceFingerprint==='string' && command.expectedAppearanceFingerprint.length>0 && command.expectedAppearanceFingerprint.length<=20000 && typeof command.requestId==='string' && /^[a-z0-9-]{1,100}$/.test(command.requestId));
+  if (command.type === 'readSummary') return !!command.pageId;
+  if (command.type === 'selectList' && command.background === true) return !!command.pageId && !!command.listId &&
+    typeof command.fromListId === 'string' && command.fromListId.length > 0 && command.fromListId.length <= 150;
+  if (['selectList', 'showCompleted','readList'].includes(command.type)) return command.type!=='readList' || !!command.pageId && !!command.listId &&
+    (command.background === undefined || typeof command.background === 'boolean') &&
+    (command.reload === undefined || command.reload === true && command.background === true);
+  if(['getListCreateOptions','getListAppearance','setListAppearance'].includes(command.type))return typeof command.expectedListFingerprint==='string' && command.expectedListFingerprint.length>0 && command.expectedListFingerprint.length<=4000 &&
+    (command.type!=='setListAppearance' || validAppearance(command) && typeof command.requestId==='string' && /^[a-z0-9-]{1,100}$/.test(command.requestId));
   if(command.type==='deleteList') return command.confirmed===true && typeof command.expectedListFingerprint==='string' && command.expectedListFingerprint.length>0 && command.expectedListFingerprint.length<=4000 &&
     typeof command.requestId==='string' && /^[a-z0-9-]{1,100}$/.test(command.requestId);
   if(['createList','renameList'].includes(command.type)) return typeof command.expectedListFingerprint==='string' && command.expectedListFingerprint.length>0 && command.expectedListFingerprint.length<=4000 &&
-    typeof command.value==='string' && command.value.trim().length>0 && command.value.length<=100 && !/[\r\n]/.test(command.value) && typeof command.requestId==='string' && /^[a-z0-9-]{1,100}$/.test(command.requestId);
+    typeof command.value==='string' && command.value.trim().length>0 && command.value.length<=100 && !/[\r\n]/.test(command.value) && typeof command.requestId==='string' && /^[a-z0-9-]{1,100}$/.test(command.requestId) &&
+    (command.appearance===undefined || command.type==='createList' && validAppearance(command.appearance));
   if (command.type === 'createItem') return typeof command.title === 'string' && command.title.trim().length > 0 && command.title.length <= 1000 && !/[\r\n]/.test(command.title) &&
     typeof command.requestId === 'string' && /^[a-z0-9-]{1,100}$/.test(command.requestId);
   const target = typeof command.id === 'string' && command.id.length > 0 && command.id.length <= 1024 && typeof command.fingerprint === 'string' &&

@@ -8,7 +8,7 @@ function setup(read = async command => ({ ok:true, snapshot:{pageId:command.page
   const calls=[],received=[],failed=[];let starts=0,finishes=0;
   const monitor=monitorLoadedList({state:()=>({...current}),read:async (...args)=>{calls.push(args);return read(...args);},started:()=>{starts++;current.busy=true;},finished:()=>{finishes++;current.busy=false;},received:r=>received.push(r),failed:r=>{failed.push(r);current.live=false;}},
     {now:()=>clock,setInterval:(fn,delay)=>{assert.equal(delay,20000);tick=fn;return 'timer';},clearInterval:id=>{assert.equal(id,'timer');cleared=true;}});
-  return {current,calls,received,failed,monitor,tick:()=>tick(),advance:()=>clock+=4000,counts:()=>({starts,finishes}),cleared:()=>cleared};
+  return {current,calls,received,failed,monitor,tick:()=>tick(),advance:(ms=4000)=>clock+=ms,counts:()=>({starts,finishes}),cleared:()=>cleared};
 }
 
 test('自动更新只发同页同清单的只读命令，不在启动时读取账户',async()=>{
@@ -60,4 +60,43 @@ test('销毁后清理定时器并忽略成功、错误及抛异常的迟到回�
 
 test('读取异常不泄漏底层内容，且不自动尝试重连或再次读取',async()=>{
   const s=setup(async()=>{throw Error('synthetic-private');});await s.tick();assert.equal(s.failed[0].code,'CONNECTION_FAILED');assert.doesNotMatch(JSON.stringify(s.failed),/synthetic-private/);s.advance();await s.tick();assert.equal(s.calls.length,1);s.monitor.stop();
+});
+
+test('Windows 当前清单满两分钟才请求一次重载，已完成视图与新选区继续只读原页面',async()=>{
+  const s=setup();
+  s.current.allowReload=true;
+  await s.tick();
+  s.advance(119999);await s.tick();
+  s.current.allowReload=false;
+  s.advance(4000);await s.tick();
+  assert.ok(s.calls.every(([command])=>!command.reload));
+  s.current.allowReload=true;
+  s.advance();await s.tick();
+  assert.equal(s.calls.at(-1)[0].reload,true);
+  s.advance();await s.tick();
+  assert.equal(s.calls.at(-1)[0].reload,undefined);
+  s.current.snapshot={...s.current.snapshot,activeListId:'new-list'};
+  s.advance(120000);await s.tick();
+  assert.equal(s.calls.at(-1)[0].reload,undefined);
+  s.monitor.stop();
+});
+
+test('已重载后只接受原清单的新句柄，网络或身份有变化时等待明确选择',async()=>{
+  for(const change of ['hidden','network','different-list','missing']) {
+    let complete;
+    const s=setup(command=>command.reload?new Promise(resolve=>complete=resolve):{ok:true,snapshot:{pageId:command.pageId,activeListId:command.listId}});
+    s.current.allowReload=true;
+    s.current.snapshot.activeListTitle='随行验证';
+    await s.tick();s.advance(120000);
+    const pending=s.tick();
+    if(change==='hidden')s.current.visible=false;
+    if(change==='network'){s.current.revision++;s.current.recovery=true;}
+    complete(change==='missing'?{ok:false,reloaded:true,needsListSelection:true,code:'RELOAD_SELECT_LIST'}:
+      {ok:true,reloaded:true,snapshot:{pageId:'new-page',activeListId:'new-list',activeListTitle:change==='different-list'?'其他':'随行验证'}});
+    await pending;
+    assert.equal(s.received.length,change==='hidden'?2:1);
+    assert.equal(s.failed.length,change==='hidden'?0:1);
+    if(s.failed.length)assert.equal(s.failed[0].needsListSelection,true);
+    s.monitor.stop();
+  }
 });

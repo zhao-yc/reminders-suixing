@@ -1,5 +1,12 @@
+import { localDateString } from './schedule.js';
+
 /** 仅供用户主动选择的界面示例，数据不来自个人 iCloud 账户。 */
 export function demoSnapshot() {
+  const dateAt = offset => {
+    const date = new Date();
+    date.setDate(date.getDate() + offset);
+    return localDateString(date);
+  };
   return {
     pageId: 'demo', activeListId: 'demo-life', activeListTitle: '生活', capturedAt: new Date().toISOString(),
     coverage: '界面示例', partial: false,
@@ -14,6 +21,11 @@ export function demoSnapshot() {
       { id: 'demo-3', listId: 'demo-life', title: '买鲜花和水果', metadata: '明天', notes: '', completed: false },
       { id: 'demo-4', listId: 'demo-life', title: '整理书桌', metadata: '', notes: '', completed: false },
       { id: 'demo-5', listId: 'demo-life', title: '给自己留一点空闲', metadata: '', notes: '', completed: true }
-    ].map((item,index) => ({...item,flagged:index === 2,priority:['high','none','low','none','medium'][index]}))
+    ].map((item,index) => ({
+      ...item,
+      flagged:index === 2,
+      priority:['high','none','low','none','medium'][index],
+      schedule:{date:index < 3 ? dateAt(index - 1) : null,time:null,timeZone:null}
+    }))
   };
 }
