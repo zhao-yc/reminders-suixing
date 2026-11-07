@@ -45,7 +45,14 @@
           <view class="toolbar-search"><view class="search-mark"></view><input v-model="search" :disabled="!!editing" :focus="searchFocused" class="search" :placeholder="todayAcross ? '搜索今天' : '搜索当前清单'" :aria-label="todayAcross ? '搜索今天' : '搜索当前清单'" @blur="searchFocused = false" /></view>
         </view>
         <view class="toolbar-actions">
-          <picker :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || !!editing" @change="changeRegion"><view class="region-picker">{{ region === 'cn' ? '中国大陆' : '其他地区' }}⌄</view></picker>
+          <picker class="region-control" :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || !!editing" @change="changeRegion">
+            <button class="region-picker" role="button" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing"
+              :aria-label="'iCloud 地区，当前为' + (region === 'cn' ? '中国大陆' : '其他地区')">
+              <view class="region-globe" aria-hidden="true"></view>
+              <text>{{ region === 'cn' ? '中国大陆' : '其他地区' }}</text>
+              <view class="region-chevron" aria-hidden="true"></view>
+            </button>
+          </picker>
           <button class="quiet-button" :disabled="busy || (!!editing && !editing.blocked)" @click="connect">{{ snapshot && !isDemo ? '官方页面' : '登录 iCloud' }}</button>
           <button v-if="snapshot && !isDemo && bridge.capabilities?.reconnect" class="quiet-button reconnect-button" role="button" :tabindex="busy || editing || networkOffline ? -1 : 0" :disabled="busy || !!editing || networkOffline" title="重新打开官方页面并读取清单，复用现有会话" @click="reconnectClient">重新连接</button>
           <button class="primary-button refresh-button" :disabled="busy || (!!editing && !editing.blocked)" @click="refresh">{{ busy && !autoReading ? '处理中…' : '刷新' }}</button>
@@ -822,7 +829,7 @@ function workspaceKeydown(event) {
     const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(['ArrowLeft','ArrowUp'].includes(event.key)?-1:1)+buttons.length)%buttons.length;
     buttons[next].click();nextTick(()=>buttons[next].focus());return;
   }
-  const actionButton=event.target?.closest?.('.view-tab,.today-source-button,.flag-toggle-button,.flag-filter,.reconnect-button,.auto-read-toggle,.delete-item-button,.confirm-delete,.cancel-delete,.add-list-button,.rename-list-button,.save-list-edit,.cancel-list-edit,.delete-list-button,.confirm-list-delete,.cancel-list-delete,.list-appearance-button,.appearance-choice,.save-list-appearance,.cancel-list-appearance,.subtask-item-button,.confirm-subtask,.cancel-subtask');
+  const actionButton=event.target?.closest?.('.region-picker,.view-tab,.today-source-button,.flag-toggle-button,.flag-filter,.reconnect-button,.auto-read-toggle,.delete-item-button,.confirm-delete,.cancel-delete,.add-list-button,.rename-list-button,.save-list-edit,.cancel-list-edit,.delete-list-button,.confirm-list-delete,.cancel-list-delete,.list-appearance-button,.appearance-choice,.save-list-appearance,.cancel-list-appearance,.subtask-item-button,.confirm-subtask,.cancel-subtask');
   if (actionButton && ['Enter',' '].includes(event.key)) {
     event.preventDefault();
     if (!event.repeat && !actionButton.hasAttribute('disabled')) actionButton.click();
@@ -929,6 +936,23 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .inline-editor { display:flex; flex-direction:column; gap:9px; width:100%; }.editor-label { color:#8393a8; font-size:11px; }.edit-field { box-sizing:border-box; width:100%; height:38px; padding:8px 10px; color:#3d4859; font-size:14px; border:1px solid #a3caff; border-radius:7px; background:#fafcff; }.edit-notes { min-height:95px; line-height:1.7; }.editor-actions { display:flex; gap:10px; }.editor-actions button { margin:0; padding:6px 11px; font-size:12px; color:#8491a4; border-radius:6px; }.editor-actions .save-edit { color:#fff; background:#1687ff; }.editor-actions .save-edit[disabled] { background:#aebed2; }.edit-recovery { margin:8px 34px 0; display:flex; align-items:center; gap:12px; font-size:12px; color:#b36139; }.edit-recovery button { margin:0; padding:5px; font-size:12px; color:#1687ff; }.reminder-notes { overflow-wrap:anywhere; }
 @media (hover:none) { .row-actions { opacity:1; } }
 .toolbar { height:68px; gap:16px; }
+.region-control { flex-shrink:0; }
+.region-picker {
+  display:flex; align-items:center; gap:8px; min-height:36px; padding:0 10px;
+  border:1px solid #d9e2ed; border-radius:9px; background:#f6f8fb;
+  color:#455b75; font-size:12px; font-weight:550; line-height:1.4; white-space:nowrap; cursor:pointer;
+}
+.region-picker:hover:not([disabled]),.region-picker:active:not([disabled]) { background:#eaf3ff; border-color:#a8c5e5; color:#205d9e; }
+.region-picker:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
+.region-picker[disabled] { opacity:.55; cursor:default; }
+.region-globe { position:relative; width:14px; height:14px; border:1.3px solid currentColor; border-radius:50%; flex-shrink:0; }
+.region-globe::before { content:''; position:absolute; inset:0 3px; border:1px solid currentColor; border-block:0; border-radius:50%; }
+.region-globe::after { content:''; position:absolute; top:50%; left:0; right:0; border-top:1px solid currentColor; }
+.region-chevron { width:6px; height:6px; margin:0 1px 3px 2px; border:solid currentColor; border-width:0 1.5px 1.5px 0; transform:rotate(45deg); }
+@media (max-width:760px) {
+  .region-picker { padding-inline:8px; gap:6px; font-size:11px; }
+  .region-globe { display:none; }
+}
 .quick-tools { display:flex; align-items:center; gap:12px; flex:1; min-width:0; }
 .add-reminder-button { flex-shrink:0; width:36px; height:36px; margin:0; display:flex; align-items:center; justify-content:center; border-radius:9px; font-size:27px; line-height:1; color:#1687ff; background:#edf5ff; }
 .add-reminder-button:hover { background:#dfedff; }.add-reminder-button[disabled] { color:#a5b6cc; }
@@ -1027,7 +1051,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
   .app-shell .brand-icon view::after,.app-shell .welcome-line view { background:#747d89; }
   .app-shell .list-button.selected,.app-shell .list-button:hover:not([disabled]) { background:#374252; }
   .app-shell :is(.muted,.brand-caption,.sidebar-section,.sidebar-placeholder,.list-count,.footer-wordmark,.toolbar-label,
-    .region-picker,.quiet-button,.eyebrow,.heading-count,.source-chip,.current-scope,.date-view-description,.sort-description,
+    .quiet-button,.eyebrow,.heading-count,.source-chip,.current-scope,.date-view-description,.sort-description,
     .sort-picker-label,.reminder-notes,.reminder-metadata,.subtask-tag,.list-footer,.auto-read-toggle,.flag-filter,
     .empty-list,.editor-label,.editor-actions button,.schedule-toggle-row,.schedule-zone,.notifications-settings-button,
     .notification-state,.demo-link,.welcome-kicker,.welcome-description,.welcome-footnote) { color:var(--theme-muted); }
@@ -1044,6 +1068,9 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
   }
   .app-shell .toolbar-search .search { background:transparent; }
   .app-shell .toolbar-search:focus-within { border-color:#67b9ff; }
+  .app-shell .region-picker { background:var(--theme-surface); border-color:#4e5966; color:#d7e0eb; }
+  .app-shell .region-picker:hover:not([disabled]),.app-shell .region-picker:active:not([disabled]) { background:#293e54; border-color:#6c9ac7; color:#b6daff; }
+  .app-shell .region-picker:focus-visible { outline-color:#a9d9ff; }
   .app-shell .notice.error { background:#3b282c; color:#ffb8bb; }
   .app-shell .edit-recovery { color:#ffb8bb; }
   .app-shell :is(.sort-option:hover,.sort-option-focused,.row-actions button:hover,.flag-filter.flag-active,.icon-choice-selected,.view-context) { background:#343f50; }

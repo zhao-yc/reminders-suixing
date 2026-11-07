@@ -96,7 +96,14 @@ async function runSmoke({ frontendURL, root }) {
     // 区域设置保存在本地应用源，与远程账号会话分开；重建页面时恢复，避免回到另一区域。
     const displayedRegion = () => ui.webContents.executeJavaScript('document.querySelector(".region-picker")?.textContent');
     for (const [value, label] of [['global', '其他地区'], ['cn', '中国大陆']]) {
-      await ui.webContents.executeJavaScript('document.querySelector(".region-picker").click()');
+      if (value === 'global') {
+        assert.equal(await ui.webContents.executeJavaScript(`(() => {
+          const button=document.querySelector('.region-picker');
+          button.focus();
+          button.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
+          return document.activeElement===button;
+        })()`),true,'地区选择器可以聚焦并通过回车打开');
+      } else await ui.webContents.executeJavaScript('document.querySelector(".region-picker").click()');
       await ui.webContents.executeJavaScript('new Promise((resolve,reject)=>{const deadline=Date.now()+5000;const timer=setInterval(()=>{const option=[...document.querySelectorAll(".uni-picker-select .uni-picker-item")].find(node=>node.textContent===' + JSON.stringify(label) + ');if(option){clearInterval(timer);option.click();resolve(true)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("区域选项未出现"))}},50)})');
       const stored = await ui.webContents.executeJavaScript('localStorage.getItem("suixing.settings.region")');
       assert.equal(stored, value, '实际区域选择应通过 uni API 保存设置');
@@ -310,6 +317,8 @@ async function runSmoke({ frontendURL, root }) {
       ui.webContents.sendInputEvent({type:'keyUp',keyCode});
       await new Promise(resolve=>setTimeout(resolve,100));
     };
+    await press('Tab');
+    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".region-picker")'),true,'Tab 应先到达地区选择器');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".reconnect-button")'),true,'Tab 应能到达重新连接');
     await press('Tab');
