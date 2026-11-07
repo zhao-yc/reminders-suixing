@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('suixingDesktop', {
   capabilities: { editText: true, editSchedule: true, editFlag: true, deleteItem: true, manageLists: true, deleteList:true, listAppearance:true, editHierarchy:true, openNewItem: true, createItem: true, showCompleted: true, reconnect: true, loadedListRefresh: true, localNotifications:true },
   execute: (command, region) => ipcRenderer.invoke('suixing:execute', { command, region }),
   openSite: region => ipcRenderer.invoke('suixing:open-site', { region }),
+  openLogin: region => ipcRenderer.invoke('suixing:open-site', { region, login:true }),
   reloadSite: region => ipcRenderer.invoke('suixing:reload-site', { region }),
   reconnectSite: region => ipcRenderer.invoke('suixing:reconnect-site', { region }),
   connectionState: region => ipcRenderer.invoke('suixing:connection-state', { region }),

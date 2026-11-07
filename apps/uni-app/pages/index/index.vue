@@ -314,17 +314,44 @@ async function run(command) {
   finally { busy.value = false; }
 }
 
-async function connect() {
-  if (busy.value || (editing.value && !editing.value.blocked)) return;
-  const result = await bridge.openSite(region.value);
-  if (!result.ok) { accept(result); return; }
-  if (editing.value?.blocked) { notice.value = '请在官方页面核对修改结果，返回后刷新。'; return; }
+function resetLoginView(message, code = '') {
   isDemo.value = false;
   snapshot.value = null;
   listSelectionRequired.value = false;
   live.value = false;
-  notice.value = '请在官方页面完成登录，返回后点击“刷新”。';
+  notice.value = message;
+  noticeCode.value = code;
+  noticeStage.value = '';
   noticeError.value = false;
+}
+
+async function connect() {
+  if (busy.value || (editing.value && !editing.value.blocked)) return;
+  const openLogin = typeof bridge.openLogin === 'function';
+  if (openLogin && !editing.value && (!snapshot.value || isDemo.value)) {
+    const revision = networkRevision;
+    resetLoginView('请在官方页面完成登录，清单就绪后将自动返回。','LOGIN_WAITING');
+    busy.value = true;
+    try {
+      const result = await bridge.openLogin(region.value);
+      if (['LOGIN_CANCELLED','LOGIN_WAIT_TIMEOUT'].includes(result.code)) resetLoginView(result.message);
+      else accept(result,revision===networkRevision);
+    } catch {
+      accept({ok:false,code:'CONNECTION_FAILED',message:'连接暂时不可用，请重新打开官方页面核对。'});
+    } finally { busy.value = false; }
+    return;
+  }
+  const result = await bridge.openSite(region.value);
+  if (!result.ok) { accept(result); return; }
+  if (editing.value?.blocked) { notice.value = '请在官方页面核对修改结果，返回后刷新。'; return; }
+  if (openLogin && snapshot.value && !isDemo.value) {
+    live.value = false;
+    notice.value = '请在官方页面操作，返回后点击“刷新”核对。';
+    noticeCode.value = '';
+    noticeError.value = false;
+    return;
+  }
+  resetLoginView('请在官方页面完成登录，返回后点击“刷新”。');
 }
 
 async function refresh() {

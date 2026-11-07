@@ -7,7 +7,12 @@ function installDesktopIPC({ipcMain, controller, getMainWindow, notifications}) 
       if(args.command?.type==='readList' && args.command.reload===true)return controller.execute(args.command,args.region,()=>visible(window));
       return controller.execute(args.command,args.region);
     }],
-    ['suixing:open-site', args=>controller.openSite(args.region)],
+    ['suixing:open-site', async (args,window)=>{
+      if (args.login !== true) return controller.openSite(args.region);
+      const result = await controller.openLogin(args.region);
+      if (result.ok && visible(window)) window.focus?.();
+      return result;
+    }],
     ['suixing:reload-site', args=>controller.reloadSite(args.region)],
     ['suixing:reconnect-site', args=>controller.reconnectSite(args.region)],
     ['suixing:connection-state', args=>controller.connectionState(args.region)],

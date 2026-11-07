@@ -35,6 +35,7 @@ function createController(options = {}) {
   let automaticReadSequence=0,lastAutomaticReadOutcome=null;
   let lastReconnectOutcome = null;
   let reconnectSequence = 0;
+  let loginSequence = 0;
   let connectionCache=null,connectionFailures=0,connectionSuspended=false;
   const trace = [];
   const fixtureURL = options.fixtureURL;
@@ -177,7 +178,8 @@ function createController(options = {}) {
       }
       return result;
     };
-    const mayWait = command.type === 'read' || command.type === 'readLists';
+    const loginProbe = command.type === 'readLists' && command.background === true;
+    const mayWait = command.type === 'read' || command.type === 'readLists' && !loginProbe;
     const pageNotReady = {ok:false,code:'PAGE_NOT_READY',message:'官方页面或连接尚未就绪，请稍后重新读取。',dispatched:false,cloudConfirmed:false};
     let pendingPage = false;
     async function attempt(force, deadline = Infinity, request = command) {
@@ -259,7 +261,7 @@ function createController(options = {}) {
 
     try {
       if(command.type==='readList' && command.reload===true)return finish(await reloadSelectedList());
-      const reply=await attempt(write || mayWait || ['readList','selectList'].includes(command.type));
+      const reply=await attempt(write || mayWait || ['readList','selectList'].includes(command.type),loginProbe?performance.now()+3500:undefined);
       // 前台刷新可等待官方页面就绪。后台读、带页面绑定的命令和写入仍只执行一次。
       return finish(mayWait?await waitForPage(reply,command):reply);
     } catch {
@@ -278,6 +280,47 @@ function createController(options = {}) {
       lastReconnectOutcome={sequence,ok:result.ok,code:result.code,attempts:result.attempts || []};return result;
     }
     finally {busy=false;}
+  }
+
+  function openSite(region = 'cn') {
+    if (busy && region !== activeRegion) return { ok: false, code: 'BUSY', message: '请等待当前操作结束后再切换区域。' };
+    const window = ensure(region);
+    loginSequence++;
+    window.show();
+    return { ok:true };
+  }
+
+  /** 首次连接只等官方清单导航可读。隐藏窗口后继续复用原会话和页面。 */
+  async function openLogin(region = 'cn') {
+    const opened = openSite(region);
+    if (!opened.ok) return opened;
+    const window = site;
+    const sequence = loginSequence;
+    const destination = fixtureURL || ENTRY[region];
+    let cancelled = false;
+    const cancel = () => { cancelled = true; };
+    const current = () => !cancelled && sequence === loginSequence && site === window && !window.isDestroyed() && window.isVisible();
+    const canCheck = () => current() && !window.isMinimized() && !window.webContents.isLoading() &&
+      atRemindersEntry(window.webContents, destination) && !window.getChildWindows().some(child => child.isVisible());
+    window.once('hide', cancel);
+    try {
+      const deadline = performance.now() + 600000;
+      while (current() && performance.now() < deadline) {
+        if (canCheck()) {
+          const result = await execute({ type:'readLists', background:true }, region);
+          const snapshot = result.snapshot;
+          if (canCheck() && result.ok && result.needsListSelection && snapshot?.pageId &&
+              snapshot.activeListId === null && snapshot.items?.length === 0 && (snapshot.lists?.length || snapshot.emptyAccount)) {
+            window.hide();
+            return { ...result, code:'LOGIN_READY', message:snapshot.emptyAccount?'已连接 iCloud，可以新建第一份清单。':'已连接 iCloud，请选择清单。' };
+          }
+        }
+        if (current()) await delay(1000);
+      }
+      return { ok:false, code:current()?'LOGIN_WAIT_TIMEOUT':'LOGIN_CANCELLED', message:'请在官方页面完成登录，返回后点击“刷新”。' };
+    } finally {
+      window.removeListener('hide', cancel);
+    }
   }
 
   return {
@@ -315,10 +358,8 @@ function createController(options = {}) {
       if (!frame) return {ok:false,code:'PAGE_NOT_READY'};
       return inspectTestDetails(frame,action);
     },
-    openSite(region = 'cn') {
-      if (busy && region !== activeRegion) return { ok: false, code: 'BUSY', message: '请等待当前操作结束后再切换区域。' };
-      ensure(region).show(); return { ok: true };
-    },
+    openSite,
+    openLogin,
     /** 仅受限验收：通过公开页面导航核对刷新，不调用网页内部同步服务。 */
     async inspectSiteConnection(action) {
       if (!options.diagnostics) return {ok:false,code:'DIAGNOSTICS_DISABLED'};

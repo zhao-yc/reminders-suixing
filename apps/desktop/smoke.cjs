@@ -17,8 +17,17 @@ async function runSmoke({ frontendURL, root }) {
   console.log('正在验证桌面网页桥接和构建界面…');
   const html = fs.readFileSync(path.join(root, 'tests/fixtures/reminders.html'), 'utf8');
   let delayFirstReminderFrame = false;
+  let loginFixture = '';
   const server = http.createServer((request, response) => {
     response.setHeader('content-type', 'text/html; charset=utf-8');
+    if (request.url === '/frame' && loginFixture === 'waiting') {
+      response.end('<!doctype html><meta charset="utf-8"><title>合成认证等待</title><input type="password" aria-label="合成认证输入">');
+      return;
+    }
+    if (request.url === '/frame' && loginFixture === 'dialog') {
+      response.end(html.replace('</body>','<div id="login-fixture-dialog" role="dialog">合成编辑弹层</div></body>'));
+      return;
+    }
     if (request.url === '/frame' && delayFirstReminderFrame) {
       delayFirstReminderFrame = false;
       setTimeout(() => response.end(html), 500);
@@ -96,6 +105,47 @@ async function runSmoke({ frontendURL, root }) {
       assert.ok((await displayedRegion()).includes(label), '重建页面必须恢复保存的区域');
     }
     console.log('构建界面服务区域恢复验证通过。');
+    const officialWindow = controller.window();
+    const fixtureEntry = officialWindow.webContents.getURL();
+    const writeBeforeLogin = controller.lastWriteOutcome()?.sequence;
+    const waitForLoginState = async predicate => {
+      const deadline = Date.now()+6000;
+      while (Date.now()<deadline) {
+        if (await ui.webContents.executeJavaScript(predicate)) return;
+        await new Promise(resolve=>setTimeout(resolve,50));
+      }
+      assert.fail('随行未进入预期的登录界面状态');
+    };
+    const clickLogin = () => ui.webContents.executeJavaScript('document.querySelector(".welcome-connect").click()');
+    loginFixture = 'waiting';
+    await officialWindow.webContents.loadURL(fixtureEntry);
+    ui.show();
+    await Promise.all([once(officialWindow,'show'),clickLogin()]);
+    await waitForLoginState('document.querySelector(".notice")?.dataset.code === "LOGIN_WAITING"');
+    assert.equal(officialWindow.isVisible(),true);
+    officialWindow.close();
+    await waitForLoginState('!document.querySelector(".welcome-connect")?.hasAttribute("disabled")');
+    assert.equal(officialWindow.isVisible(),false);
+
+    await Promise.all([once(officialWindow,'show'),clickLogin()]);
+    await waitForLoginState('document.querySelector(".notice")?.dataset.code === "LOGIN_WAITING"');
+    loginFixture = 'dialog';
+    await officialWindow.webContents.loadURL(fixtureEntry);
+    await new Promise(resolve=>setTimeout(resolve,1250));
+    assert.equal(officialWindow.isVisible(),true,'官方编辑弹层可见时保留登录窗口');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".notice")?.dataset.code'),'LOGIN_WAITING');
+    await officialWindow.webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("#login-fixture-dialog").remove()');
+    await waitForLoginState('document.querySelector(".notice")?.dataset.code === "LOGIN_READY"');
+    assert.equal(officialWindow.isVisible(),false);
+    assert.deepEqual(await ui.webContents.executeJavaScript('[document.querySelectorAll(".list-button").length,document.querySelectorAll(".reminder-row").length,document.querySelector(".list-content").dataset.live]'),[2,0,'false']);
+    await ui.webContents.executeJavaScript('document.querySelector(".toolbar-actions .quiet-button").click()');
+    await new Promise(resolve=>setTimeout(resolve,1100));
+    assert.equal(officialWindow.isVisible(),true,'手动打开官方页面仍由用户关闭');
+    assert.equal(controller.lastWriteOutcome()?.sequence,writeBeforeLogin);
+    officialWindow.hide();
+    loginFixture = '';
+    await ui.loadURL(frontendURL);
+    console.log('合成登录取消、官方弹层保护、清单就绪后自动隐藏及手动重开通过。');
     const ipcRead = await ui.webContents.executeJavaScript('window.suixingDesktop.execute({type:"read"},"cn").then(r=>({ok:r.ok,count:r.snapshot?.items.length}))');
     assert.equal(ipcRead.ok, true);
     assert.equal(ipcRead.count, 2);
@@ -865,6 +915,7 @@ async function runSmoke({ frontendURL, root }) {
     report.checks.push('本地清单排序、原顺序恢复、设置恢复及窄屏入口');
     report.checks.push('排序下拉框 Tab 聚焦、回车展开、方向键选择和 Esc 取消');
     report.checks.push('旗标空格操作、正式 IPC 单次保存、移除及本地筛选');
+    report.checks.push('登录就绪后自动隐藏官方窗口、保留会话和清单导航');
     report.checks.push('系统浅色／深色实时切换与清单状态保持');
     report.checks.push('普通模式重新连接、同名清单只读保护与新页面句柄');
     report.checks.push('服务不可达时保留草稿、禁止写入与导航，恢复后手动刷新且不重放');

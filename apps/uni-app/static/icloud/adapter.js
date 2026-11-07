@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.20') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.21') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -152,9 +152,26 @@
     lastSnapshot=snapshot;return snapshot;
   }
 
-  function readLists() {
+  /** 自动交接和读取共用官方编辑保护，保留焦点和草稿。 */
+  function deferredWhileEditing(doc, preservedCreation) {
+    var focused=doc.activeElement;
+    var editing=focused && focused.closest('[contenteditable="true"],input,textarea') && !preservedCreation;
+    var panels=Array.from(doc.querySelectorAll('.reminder-list-detail,.details-popover,[role="dialog"],[role="alertdialog"],[role="menu"]')).some(visibleControl);
+    var markers=Array.from(doc.querySelectorAll('[data-edit="true"]')).some(function(node){
+      return visibleControl(node) && !(preservedCreation && (node===preservedCreation.row || preservedCreation.row.contains(node) && node.contains(preservedCreation.editor)));
+    });
+    if(editing || panels || markers)return result(false,'AUTO_READ_DEFERRED','正在官方页面编辑，自动读取暂缓。',{
+      reason:editing?'focused-field':panels?'open-panel':'active-marker'
+    });
+  }
+
+  function readLists(command) {
     var doc=application();
     if(!doc || isLoading(doc)) {lastSnapshot=null;return result(false,'PAGE_NOT_READY','官方清单尚未就绪，请稍后读取。');}
+    if(command.background===true) {
+      var deferred=deferredWhileEditing(doc);
+      if(deferred)return deferred;
+    }
     var lists=listNodes(doc).map(readList);
     return result(true,'SELECT_A_LIST','请选择清单后继续。',{snapshot:navigationSnapshot(doc,lists),needsListSelection:true});
   }
@@ -174,12 +191,8 @@
       // 新增成功后保留官方输入焦点；只放行本次已观察且未再次输入的同一字段。
       var known=command.reload!==true && settledCreation && settledCreation.epoch===connectionEpoch && settledCreation.listId===command.listId && settledCreation.row.isConnected && settledCreation.editor.isConnected &&
         doc.getElementById(settledCreation.id)===settledCreation.row && focused===settledCreation.editor && text(focused)===settledCreation.title;
-      var editing=focused && focused.closest('[contenteditable="true"],input,textarea') && !known;
-      var panels=Array.from(doc.querySelectorAll('.reminder-list-detail,.details-popover,[role="dialog"],[role="alertdialog"],[role="menu"]')).some(visibleControl);
-      var markers=Array.from(doc.querySelectorAll('[data-edit="true"]')).some(function(node){return visibleControl(node) && !(known && (node===settledCreation.row || settledCreation.row.contains(node) && node.contains(settledCreation.editor)));});
-      if(editing || panels || markers)return result(false,'AUTO_READ_DEFERRED','正在官方页面编辑，自动更新暂缓。',{
-        reason:editing?'focused-field':panels?'open-panel':'active-marker'
-      });
+      var deferred=deferredWhileEditing(doc,known && settledCreation);
+      if(deferred)return deferred;
     }
     return read();
   }
@@ -1388,7 +1401,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.20',
+    version: '0.3.21',
     dispose:function(){clearSettledCreation();root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
@@ -1407,7 +1420,7 @@
       if (command.type === 'createItem') { creationDiagnosticSequence = root.__suixingDiagnosticWriteSequence; setCreationStage('preflight'); }
       try {
         if (command.type === 'read') return read();
-        if (command.type === 'readLists') return readLists();
+        if (command.type === 'readLists') return readLists(command);
         if (command.type === 'readList') return readSelectedList(command);
         if (command.type === 'selectList') return await selectList(command);
         if (command.type === 'showCompleted') return await showCompleted(command);
