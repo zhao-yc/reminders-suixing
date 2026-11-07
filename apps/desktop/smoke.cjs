@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { once } = require('node:events');
-const { BrowserWindow, ipcMain } = require('electron');
+const { BrowserWindow, ipcMain, nativeTheme } = require('electron');
 const { createController, allowedURL, validCommand } = require('./controller.cjs');
 const { browserUserAgent } = require('./policy.cjs');
 const { installDesktopIPC } = require('./ipc.cjs');
@@ -11,6 +11,9 @@ const { clickTestCompletion, editTestText, createTestItem, showTestCompleted, ed
 
 /** 真实 Electron + 合成网页，验证 iframe 读取、IPC、同名事项写回与重载后的状态保持。 */
 async function runSmoke({ frontendURL, root }) {
+  const originalTheme = nativeTheme.themeSource;
+  // 仅切换合成验证进程的配色来源，不更改操作系统设置。
+  nativeTheme.themeSource = 'light';
   console.log('正在验证桌面网页桥接和构建界面…');
   const html = fs.readFileSync(path.join(root, 'tests/fixtures/reminders.html'), 'utf8');
   let delayFirstReminderFrame = false;
@@ -164,7 +167,7 @@ async function runSmoke({ frontendURL, root }) {
     assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".desktop-view-card")].map(card=>card.dataset.status)'),['today','scheduled','pending','flagged','overdue','completed']);
     await chooseView('flagged');assert.deepEqual(await displayedIds(),['view-root','view-child']);
     await chooseView('overdue');assert.deepEqual(await displayedIds(),['view-overdue']);
-    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".list-title").textContent.trim()'),'逾期');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".list-title").textContent.trim()'),viewSnapshot.activeListTitle,'侧栏筛选不改写原事项区的清单标题');
     await chooseView('today');
     assert.deepEqual(await displayedIds(),['view-overdue','view-root','view-child','view-morning','view-afternoon','view-evening']);
     assert.deepEqual(await dateHeadings(),['逾期','全天','上午','下午','今晚']);
@@ -181,6 +184,28 @@ async function runSmoke({ frontendURL, root }) {
     ui.show();ui.focus();ui.webContents.focus();
     await ui.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
     fs.writeFileSync(path.join(root,'.local/date-views-desktop-preview.png'),(await ui.webContents.capturePage()).toPNG());
+    const themeState=()=>ui.webContents.executeJavaScript('(()=>{const root=document.querySelector(".app-shell"),title=document.querySelector(".list-title");return {dark:matchMedia("(prefers-color-scheme: dark)").matches,background:getComputedStyle(root).backgroundColor,titleSize:getComputedStyle(title).fontSize,pageId:document.querySelector(".list-content").dataset.pageId,ids:[...document.querySelectorAll(".reminder-row")].map(row=>row.dataset.recordId)};})()');
+    const lightState=await themeState();
+    assert.equal(lightState.background,'rgb(255, 255, 255)');
+    assert.equal(lightState.titleSize,'32px','事项区沿用原字号');
+    fs.writeFileSync(path.join(root,'.local/sidebar-layout-light.png'),(await ui.webContents.capturePage()).toPNG());
+    for(const theme of ['dark','light']) {
+      nativeTheme.themeSource=theme;
+      let current;
+      for(let attempt=0;attempt<30;attempt++) {
+        await new Promise(resolve=>setTimeout(resolve,20));
+        current=await themeState();
+        if(current.dark===(theme==='dark') && current.background===(theme==='dark'?'rgb(28, 29, 30)':'rgb(255, 255, 255)'))break;
+      }
+      assert.equal(current.dark,theme==='dark');
+      assert.equal(current.background,theme==='dark'?'rgb(28, 29, 30)':'rgb(255, 255, 255)');
+      assert.equal(current.titleSize,lightState.titleSize);
+      assert.equal(current.pageId,lightState.pageId,'配色切换不重载清单');
+      assert.deepEqual(current.ids,lightState.ids);
+      await ui.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+      if(theme==='dark')fs.writeFileSync(path.join(root,'.local/sidebar-layout-dark.png'),(await ui.webContents.capturePage()).toPNG());
+    }
+    console.log('系统浅色／深色实时切换、原事项区字号与清单状态保持通过。');
     const viewSize=ui.getSize();ui.setSize(430,932);
     await new Promise(resolve=>setTimeout(resolve,300));
     assert.equal(await ui.webContents.executeJavaScript('document.documentElement.scrollWidth<=window.innerWidth+2'),true,'日期视图说明和四个入口在窄屏不得横向溢出');
@@ -204,7 +229,8 @@ async function runSmoke({ frontendURL, root }) {
       ui.webContents.sendInputEvent({type:'keyUp',keyCode});
       await new Promise(resolve=>setTimeout(resolve,100));
     };
-    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".reconnect-button").tabIndex'),0,'重新连接应在键盘顺序内');
+    await press('Tab');
+    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".reconnect-button")'),true,'Tab 应能到达重新连接');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".rename-list-button")'),true,'Tab 应能到达清单重命名');
     await press('Tab');
@@ -839,6 +865,7 @@ async function runSmoke({ frontendURL, root }) {
     report.checks.push('本地清单排序、原顺序恢复、设置恢复及窄屏入口');
     report.checks.push('排序下拉框 Tab 聚焦、回车展开、方向键选择和 Esc 取消');
     report.checks.push('旗标空格操作、正式 IPC 单次保存、移除及本地筛选');
+    report.checks.push('系统浅色／深色实时切换与清单状态保持');
     report.checks.push('普通模式重新连接、同名清单只读保护与新页面句柄');
     report.checks.push('服务不可达时保留草稿、禁止写入与导航，恢复后手动刷新且不重放');
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });
@@ -847,6 +874,7 @@ async function runSmoke({ frontendURL, root }) {
   } catch(error) {
     console.error(error.stack || error.message);throw error;
   } finally {
+    nativeTheme.themeSource=originalTheme;
     stopIPC?.();
     ui?.destroy();
     normalUI?.destroy();
