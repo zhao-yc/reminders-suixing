@@ -10,7 +10,7 @@ const { inspectTestListDelete } = require('./list-delete-diagnostics.cjs');
 const { summarizeWriteOutcome, parseCreationStage, applyCreationStage } = require('./operation-diagnostics.cjs');
 const { reopenOfficial, reloadOfficial } = require('./site-navigation.cjs');
 const { readConnectionStatus,probePublicConnection } = require('./connection.cjs');
-const { collectToday } = require('./collect-today.cjs');
+const { collectSummary } = require('./collect-summary.cjs');
 
 const ROOT = path.resolve(__dirname, '../..');
 const SOURCE = fs.readFileSync(path.join(ROOT, 'apps/uni-app/static/icloud/adapter.js'), 'utf8');
@@ -29,7 +29,7 @@ function createController(options = {}) {
   let site = null;
   let activeRegion = '';
   let busy = false;
-  let gatheringToday = false;
+  let gatheringSummary = false;
   let closing = false;
   let writeSequence = 0;
   let lastWriteAt = -Infinity;
@@ -262,13 +262,14 @@ function createController(options = {}) {
     }
 
     try {
-      if (command.type==='readToday') {
-        gatheringToday=true;
+      if (command.type==='readSummary') {
+        if (options.allowSummary===false) return {ok:false,code:'SUMMARY_UNAVAILABLE',message:'当前验证只允许读取专用清单。'};
+        gatheringSummary=true;
         const window=site;
         const destination=fixtureURL || ENTRY[region];
         const canRead=()=>window && site===window && !window.isDestroyed() && activeRegion===region && !window.isVisible() &&
           !window.getChildWindows().some(child=>child.isVisible()) && !window.webContents.isLoading() && atRemindersEntry(window.webContents,destination);
-        return await collectToday(command,{canRead,read:(request,deadline)=>attempt(false,deadline,request)});
+        return await collectSummary(command,{canRead,read:(request,deadline)=>attempt(false,deadline,request)});
       }
       if(command.type==='readList' && command.reload===true)return finish(await reloadSelectedList());
       const reply=await attempt(write || mayWait || ['readList','selectList'].includes(command.type),loginProbe?performance.now()+3500:undefined);
@@ -277,7 +278,7 @@ function createController(options = {}) {
     } catch {
       if(navigationStarted)return finish(selectAgain);
       return finish({ ok: false, code: write ? 'UNCERTAIN_WRITE' : 'PAGE_NOT_READY', message: '请在官方页面完成登录，等待清单显示后重新读取。', cloudConfirmed: false });
-    } finally { gatheringToday=false;busy = false; }
+    } finally { gatheringSummary=false;busy = false; }
   }
 
   async function reconnectSite(region='cn') {
@@ -293,7 +294,7 @@ function createController(options = {}) {
   }
 
   function openSite(region = 'cn') {
-    if (gatheringToday) return {ok:false,code:'BUSY',message:'正在汇总“今天”，请稍后打开官方页面。'};
+    if (gatheringSummary) return {ok:false,code:'BUSY',message:'正在汇总清单，请稍后打开官方页面。'};
     if (busy && region !== activeRegion) return { ok: false, code: 'BUSY', message: '请等待当前操作结束后再切换区域。' };
     const window = ensure(region);
     loginSequence++;

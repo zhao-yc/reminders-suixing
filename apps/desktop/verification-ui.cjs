@@ -5,7 +5,7 @@ async function clickTestCompletion(expected) {
     const list = document.querySelector('.list-content');
     if (list?.dataset.pageId === expected.pageId && list.dataset.listId === expected.listId) {
       // uni-app H5 的 button 会生成 uni-button；用业务属性定位，避免依赖生成标签和页签顺序。
-      const tab = document.querySelector(`:is(.tabs,.desktop-view-grid) [data-status="${expected.completed ? 'completed' : 'pending'}"]`);
+      const tab = document.querySelector(`:is(.tabs,.desktop-view-grid:not([data-scope=summary])) [data-status="${expected.completed ? 'completed' : 'pending'}"]`);
       if (!tab) return false;
       if (!tab.classList.contains('active')) tab.click();
       await pause();
@@ -31,7 +31,7 @@ async function editTestText(expected) {
   for (let attempt = 0; attempt < 50; attempt++) {
     const list = document.querySelector('.list-content');
     if (list?.dataset.pageId !== expected.pageId || list.dataset.listId !== expected.listId) { await pause(); continue; }
-    const tab = document.querySelector(`:is(.tabs,.desktop-view-grid) [data-status="${expected.completed ? 'completed' : 'pending'}"]`);
+    const tab = document.querySelector(`:is(.tabs,.desktop-view-grid:not([data-scope=summary])) [data-status="${expected.completed ? 'completed' : 'pending'}"]`);
     if (!tab) return false;
     if (!tab.classList.contains('active')) { tab.click(); await pause(); }
     const rows = [...document.querySelectorAll('.reminder-row')].filter(row => row.dataset.recordId === expected.id);
@@ -81,14 +81,14 @@ async function createTestItem(expected) {
 /** 显示完成项也走正式页签，只激活一次，等待异步显示请求结束后才返回。 */
 async function showTestCompleted(expected) {
   const list=document.querySelector('.list-content');
-  const tab=document.querySelector(':is(.tabs,.desktop-view-grid) [data-status="completed"]');
+  const tab=document.querySelector(':is(.tabs,.desktop-view-grid:not([data-scope=summary])) [data-status="completed"]');
   if (list?.dataset.pageId !== expected.pageId || list.dataset.listId !== expected.listId || !tab || tab.disabled || ['true',''].includes(tab.getAttribute('disabled'))) return false;
   tab.click();
   await new Promise(resolve=>setTimeout(resolve,100));
   for(let attempt=0;attempt<80;attempt++) {
     const current=document.querySelector('.list-content');
     if (current?.dataset.pageId !== expected.pageId || current.dataset.listId !== expected.listId) return false;
-    const currentTab=document.querySelector(':is(.tabs,.desktop-view-grid) [data-status="completed"]');
+    const currentTab=document.querySelector(':is(.tabs,.desktop-view-grid:not([data-scope=summary])) [data-status="completed"]');
     if (currentTab?.classList.contains('active') && !currentTab.disabled && !['true',''].includes(currentTab.getAttribute('disabled'))) return !document.querySelector('.notice.error');
     await new Promise(resolve=>setTimeout(resolve,100));
   }
@@ -103,7 +103,7 @@ async function editTestSchedule(expected) {
   for(let attempt=0;attempt<80;attempt++) {
     const list=document.querySelector('.list-content');
     if (list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId) {await pause();continue;}
-    const tab=document.querySelector(':is(.tabs,.desktop-view-grid) [data-status="'+(expected.completed?'completed':'pending')+'"]');
+    const tab=document.querySelector(':is(.tabs,.desktop-view-grid:not([data-scope=summary])) [data-status="'+(expected.completed?'completed':'pending')+'"]');
     if (!tab) return false;
     if (!tab.classList.contains('active') && !disabled(tab)) {tab.click();await pause();}
     const rows=[...document.querySelectorAll('.reminder-row')].filter(node=>node.dataset.recordId===expected.id);
@@ -181,7 +181,7 @@ async function clickTestFlag(expected) {
   for(let attempt=0;attempt<50;attempt++) {
     const list=document.querySelector('.list-content');
     if(list?.dataset.pageId!==expected.pageId || list.dataset.listId!==expected.listId) {await pause();continue;}
-    const tab=document.querySelector(':is(.tabs,.desktop-view-grid) [data-status="'+(expected.completed?'completed':'pending')+'"]');
+    const tab=document.querySelector(':is(.tabs,.desktop-view-grid:not([data-scope=summary])) [data-status="'+(expected.completed?'completed':'pending')+'"]');
     if(!tab || tab.hasAttribute('disabled')) return false;
     if(!tab.classList.contains('active')) {tab.click();await pause();continue;}
     const rows=[...document.querySelectorAll('.reminder-row')].filter(row=>row.dataset.recordId===expected.id);

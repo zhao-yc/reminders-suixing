@@ -1,6 +1,6 @@
 /** 逐份读取官方已加载清单，始终核对页面和选区，并尝试恢复原清单。 */
-async function collectToday(command, { read, canRead }) {
-  const unavailable = {ok:false,code:'TODAY_UNAVAILABLE',message:'请先收起官方页面，再刷新“今天”。'};
+async function collectSummary(command, { read, canRead }) {
+  const unavailable = {ok:false,code:'SUMMARY_UNAVAILABLE',message:'请先收起官方页面，再刷新汇总。'};
   const reselect = {ok:false,code:'STALE_VIEW',needsListSelection:true,message:'官方页面或选区已变化，请刷新清单后重新选择。'};
   const readSafely = async (request,deadline) => {
     try { return await read(request,deadline); } catch { return reselect; }
@@ -13,7 +13,7 @@ async function collectToday(command, { read, canRead }) {
   const {pageId,lists,emptyAccount} = before.snapshot;
   const original = before.selectedListId;
   if (pageId!==command.pageId || command.listId && command.listId!==original) return reselect;
-  if (!emptyAccount && !lists.some(list=>list.id===original)) return {...reselect,message:'请先选择一份清单，再打开“今天”。'};
+  if (!emptyAccount && !lists.some(list=>list.id===original)) return {...reselect,message:'请先选择一份清单，再打开汇总。'};
 
   const readList = listId => ({type:'readList',pageId,listId,background:true});
   const selectList = (listId,fromListId) => ({type:'selectList',pageId,listId,fromListId,background:true});
@@ -56,11 +56,11 @@ async function collectToday(command, { read, canRead }) {
   if (!collected.length && !emptyAccount) return {...reselect,message:'暂未读到清单，请刷新后重新选择。'};
   const needsListSelection = !!original && !originalSnapshot;
   return {
-    ok:true,code:'TODAY_READY',needsListSelection,
+    ok:true,code:'SUMMARY_READY',needsListSelection,
     message:needsListSelection?'原清单选区待核对，请刷新后重新选择。':'',
     snapshot:command.listId?originalSnapshot:undefined,
-    today:{lists:collected,totalLists:lists.length,capturedAt:new Date().toISOString()}
+    summary:{lists:collected,totalLists:lists.length,capturedAt:new Date().toISOString()}
   };
 }
 
-module.exports = {collectToday};
+module.exports = {collectSummary};

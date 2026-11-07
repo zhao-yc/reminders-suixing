@@ -8,7 +8,7 @@ function inspectClient(expected) {
   const root=document.querySelector('.list-content');
   if(root?.dataset.pageId!==expected.pageId || root.dataset.listId!==expected.listId || root.dataset.live!=='true' ||
     document.querySelector('.inline-editor') || document.querySelector('.toolbar-search input')?.value || document.querySelector('.flag-filter[aria-pressed=true]') ||
-    document.querySelector('.view-tab[data-status=pending]')?.getAttribute('aria-pressed')!=='true')return {ready:false};
+    document.querySelector('.view-tab:not([data-scope=summary] .view-tab)[data-status=pending]')?.getAttribute('aria-pressed')!=='true')return {ready:false};
   const rows=[...root.querySelectorAll('.reminder-row[data-record-id]')];
   const extras=rows.filter(row=>!expected.ids.includes(row.dataset.recordId));
   return {ready:true,capturedAt:root.dataset.capturedAt,basePresent:expected.ids.every(id=>rows.some(row=>row.dataset.recordId===id)),

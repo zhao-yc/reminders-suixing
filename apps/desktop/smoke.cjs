@@ -115,10 +115,10 @@ async function runSmoke({ frontendURL, root }) {
     const officialWindow = controller.window();
     const fixtureEntry = officialWindow.webContents.getURL();
     const writeBeforeLogin = controller.lastWriteOutcome()?.sequence;
-    const waitForRenderer = async predicate => {
+    const waitForRenderer = async (predicate,window=ui) => {
       const deadline = Date.now()+6000;
       while (Date.now()<deadline) {
-        if (await ui.webContents.executeJavaScript(predicate)) return;
+        if (await window.webContents.executeJavaScript(predicate)) return;
         await new Promise(resolve=>setTimeout(resolve,50));
       }
       assert.fail('随行未进入预期界面状态');
@@ -164,17 +164,29 @@ async function runSmoke({ frontendURL, root }) {
     await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+').focus()');
     ui.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});
     ui.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
-    await waitForRenderer('document.querySelector(".across-today .today-row") !== null');
-    assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".today-row .reminder-title")].map(node=>node.textContent.trim())'),['随行验证 · 第二个同名清单']);
+    await waitForRenderer('document.querySelector(".across-lists .summary-row") !== null');
+    assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".summary-row .reminder-title")].map(node=>node.textContent.trim())'),['随行验证 · 第二个同名清单']);
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+'+" .desktop-card-count").textContent.trim()'),'1+');
-    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".across-today .date-view-description").textContent.includes("部分内容尚未读取")'),true);
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".across-lists .date-view-description").textContent.includes("部分内容尚未读取")'),true);
     assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".network-notice")'),false,'导航状态下成功汇总后也应收起联网提示');
-    assert.match(await ui.webContents.executeJavaScript('document.querySelector(".across-today .list-footer").textContent.trim()'),/^汇总于 \d{2}:\d{2}$/);
+    assert.match(await ui.webContents.executeJavaScript('document.querySelector(".across-lists .list-footer").textContent.trim()'),/^汇总于 \d{2}:\d{2}$/);
     const officialSelected=()=>officialWindow.webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("[role=treeitem][aria-selected=true]").dataset.list');
     assert.equal(await officialSelected(),'one','汇总完成后恢复原选区');
-    await ui.webContents.executeJavaScript('document.querySelector(".today-source-button").click()');
+    const summaryCounts=()=>ui.webContents.executeJavaScript('[...document.querySelectorAll(".desktop-card-count")].map(node=>node.textContent.trim())');
+    const crossCounts=await summaryCounts();
+    assert.equal(crossCounts[1],'1+');assert.equal(crossCounts[2],'3+');
+    await ui.webContents.executeJavaScript('document.querySelector(".desktop-view-card[data-status=scheduled]").click()');
+    await waitForRenderer('document.querySelector(".across-lists .list-title")?.textContent === "计划"');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".summary-row").length'),1);
+    await ui.webContents.executeJavaScript('document.querySelector(".desktop-view-card[data-status=pending]").click()');
+    await waitForRenderer('document.querySelector(".across-lists .list-title")?.textContent === "待办"');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".summary-row").length'),3);
+    await ui.webContents.executeJavaScript('document.querySelector(".desktop-view-card[data-status=scheduled]").click()');
+    await waitForRenderer('document.querySelectorAll(".summary-row").length === 1');
+    await ui.webContents.executeJavaScript('document.querySelector(".summary-source-button").click()');
     await waitForRenderer('document.querySelector(".list-content[data-live=true] .reminder-title")?.textContent.includes("第二个同名清单")');
     assert.equal(await officialSelected(),'two');
+    assert.deepEqual(await summaryCounts(),crossCounts,'切换清单后卡片仍按跨清单结果计数');
     await ui.webContents.executeJavaScript('document.querySelector(".list-button").click()');
     await waitForRenderer('document.querySelectorAll(".list-content[data-live=true] .reminder-row").length===2');
     await officialWindow.webContents.executeJavaScript(`(()=>{const w=document.querySelector('iframe').contentWindow;w.renderFixture=w.fixtureBeforeTodayRender;delete w.fixtureBeforeTodayRender;w.sessionStorage.removeItem('fixture-schedule-reminder-item-fixture-two-0');})()`);
@@ -254,7 +266,11 @@ async function runSmoke({ frontendURL, root }) {
     ]};
     ui.webContents.send('suixing:snapshot',{region:'cn',result:{ok:true,code:'READY',snapshot:viewSnapshot}});
     await new Promise(resolve=>setTimeout(resolve,80));
-    const chooseView=async view=>{const selector=view==='today'?'.local-today-button':'.view-tab[data-status="'+view+'"]';await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(selector)+').click()');await new Promise(resolve=>setTimeout(resolve,80));};
+    const chooseView=async view=>{
+      const selector=view==='flagged'?'.flag-filter':'.tabs .view-tab[data-status="'+view+'"]';
+      await ui.webContents.executeJavaScript('(()=>{if('+JSON.stringify(view)+'!=="flagged")document.querySelector(".flag-filter[aria-pressed=true]")?.click();document.querySelector('+JSON.stringify(selector)+').click()})()');
+      await new Promise(resolve=>setTimeout(resolve,80));
+    };
     const dateHeadings=()=>ui.webContents.executeJavaScript('[...document.querySelectorAll(".date-section-heading[role=heading]")].map(node=>node.textContent.trim())');
     assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".desktop-view-card")].map(card=>card.dataset.status)'),['today','scheduled','pending','flagged','overdue','completed']);
     await chooseView('flagged');assert.deepEqual(await displayedIds(),['view-root','view-child']);
@@ -299,7 +315,7 @@ async function runSmoke({ frontendURL, root }) {
     }
     console.log('系统浅色／深色实时切换、原事项区字号与清单状态保持通过。');
     const viewSize=ui.getSize();ui.setSize(430,932);
-    await new Promise(resolve=>setTimeout(resolve,300));
+    await waitForRenderer('matchMedia("(max-width:760px)").matches && document.querySelector(".sidebar").getBoundingClientRect().right<=1');
     assert.equal(await ui.webContents.executeJavaScript('document.documentElement.scrollWidth<=window.innerWidth+2'),true,'日期视图说明和四个入口在窄屏不得横向溢出');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".sidebar").getBoundingClientRect().right<=1'),true,'等待抽屉收起动画后再核对与截图');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".tabs .view-tab").length'),4);
@@ -332,13 +348,13 @@ async function runSmoke({ frontendURL, root }) {
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".delete-list-button")'),true,'Tab 应能到达清单删除');
     await press('Tab');
-    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".flag-filter")'),true,'Tab 应先到达旗标筛选');
-    await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="today"]\').focus()');
+    assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".tabs .view-tab[data-status=pending]")'),true,'Tab 应先到达当前清单筛选');
+    await ui.webContents.executeJavaScript('document.querySelector(\'.desktop-view-card[data-status="today"]\').focus()');
     for(const view of ['today','scheduled','pending','flagged','overdue','completed']) {
       assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(\'.view-tab[data-status="'+view+'"]\')'),true,'Tab 应能到达各清单视图');
       if(view!=='completed')await press('Tab');
     }
-    await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="pending"]\').click()');
+    await ui.webContents.executeJavaScript('document.querySelector(\'.tabs .view-tab[data-status="pending"]\').click()');
     await ui.webContents.executeJavaScript('document.querySelector(".flag-filter").focus()');
     await press('Tab');
     assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(".desktop-sort .sort-picker-label")'),true,'Tab 应能到达排序菜单');
@@ -596,6 +612,7 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(normalController.window().webContents.getBackgroundThrottling(),false);
     stopIPC();
     normalUI = new BrowserWindow({show:false,webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}});
+    const waitForNormalReady=()=>waitForRenderer('document.querySelector(".list-content")?.dataset.live==="true" && !document.querySelector(".network-notice,.refresh-button[disabled]")',normalUI);
     normalUI.webContents.on('console-message',event=>{if(event.level==='error')uiErrors.push(event.message);});
     stopIPC=installDesktopIPC({ipcMain,controller:normalController,getMainWindow:()=>normalUI});
     await normalUI.loadURL(frontendURL);
@@ -692,7 +709,7 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'false');
     assert.deepEqual(await normalController.window().webContents.executeJavaScript(offlineCountsScript),beforeOfflineCounts);
     assert.equal(await normalUI.webContents.executeJavaScript('(()=>{const end=document.querySelector(".end-blocked-edit"),refresh=document.querySelector(".refresh-button");if(!end || !refresh)return false;end.click();refresh.click();return true;})()'),true);
-    assert.equal(await normalUI.webContents.executeJavaScript('new Promise(resolve=>{const deadline=Date.now()+5000;const timer=setInterval(()=>{if(document.querySelector(".list-content")?.dataset.live==="true" && !document.querySelector(".network-notice")){clearInterval(timer);resolve(true)}else if(Date.now()>deadline){clearInterval(timer);resolve(false)}},50)})'),true);
+    await waitForNormalReady();
     normalSnapshot=await normalController.execute({type:'read'},'cn');
     assert.notEqual(normalSnapshot.snapshot.pageId,beforeOffline.pageId);assert.equal(normalSnapshot.snapshot.items.filter(item=>item.title===normalTitle).length,1);
     assert.deepEqual(await normalController.window().webContents.executeJavaScript(offlineCountsScript),beforeOfflineCounts);
@@ -710,7 +727,7 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'false','同名清单不能自动猜测身份并开放写入');
     assert.ok((await normalUI.webContents.executeJavaScript('document.querySelector(".notice").textContent')).includes('重新选择清单'));
     await normalUI.webContents.executeJavaScript('document.querySelector(".list-button").click()');
-    await new Promise(resolve=>setTimeout(resolve,150));
+    await waitForNormalReady();
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'true','用户明确选定新清单后才恢复写入');
     console.log('普通模式重新连接经键盘与正式 IPC 完成，同名清单只读保护及新句柄选择通过，事项内容未变。');
     const beforeUnloadCheck=await normalController.execute({type:'read'},'cn');normalUI.webContents.send('suixing:snapshot',{region:'cn',result:beforeUnloadCheck});await new Promise(resolve=>setTimeout(resolve,100));
@@ -719,7 +736,7 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(unloadResult.reason,'UI_ERROR');assert.equal(unloadResult.kind,'OFFICIAL_PAGE_BUSY');assert.equal(unloadResult.stage,'home');
     assert.equal(normalController.window().isDestroyed(),false);assert.equal((await normalController.execute({type:'read'},'cn')).snapshot.pageId,beforeUnloadCheck.snapshot.pageId);
     await normalController.window().webContents.executeJavaScript('removeEventListener("beforeunload",window.fixtureBeforeUnload);delete window.fixtureBeforeUnload;');
-    await normalUI.webContents.executeJavaScript('document.querySelector(".refresh-button").click()');await new Promise(resolve=>setTimeout(resolve,150));
+    await normalUI.webContents.executeJavaScript('document.querySelector(".refresh-button").click()');await waitForNormalReady();
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'true');
     console.log('官方 beforeunload 阻止离开时保留原窗口、固定阶段及只读状态，不强制忽略或继续导航，结束阻止后刷新恢复通过。');
     const hierarchyBefore=await normalController.execute({type:'read'},'cn'),hierarchyTarget=hierarchyBefore.snapshot.items.find(item=>item.title===normalTitle);
@@ -879,7 +896,7 @@ async function runSmoke({ frontendURL, root }) {
     await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelectorAll(".reminder-item").forEach(row=>{row.querySelector=row.fixtureOriginalQuery;delete row.fixtureOriginalQuery;})');
     const nextList=navigation.snapshot.lists[0];
     await normalUI.webContents.executeJavaScript('document.querySelector('+JSON.stringify('.list-button[data-list-id="'+nextList.id+'"]')+').click()');
-    await new Promise(resolve=>setTimeout(resolve,150));
+    await waitForNormalReady();
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'true','明确选择另一清单后恢复编辑');
     // 合成空账户场景；只改变本地固定夹具，不删除真实清单。
     await normalController.window().webContents.executeJavaScript('(()=>{const w=document.querySelector("iframe").contentWindow;w.sessionStorage.setItem("fixture-deleted-lists",JSON.stringify(["one","two"]));w.document.querySelector("[role=tree]").remove();w.document.querySelector("[role=treegrid]").innerHTML="";const note=w.document.createElement("div");note.className="no-lists-note";w.document.body.append(note)})()');

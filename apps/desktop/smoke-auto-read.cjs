@@ -76,7 +76,10 @@ async function runSmoke({frontendURL,root}) {
     await ui.webContents.executeJavaScript('window.dispatchEvent(new Event("offline"));window.dispatchEvent(new Event("online"))');
     await title('随行验证 · 网络恢复待核对');await pause(3100);await focus();await pause(150);assert.equal(commands.length,7);assert.equal(await visibleTitle('随行验证 · 官方编辑后更新'),true);
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live'),'false');
-    await click('.refresh-button');await waitFor(()=>visibleTitle('随行验证 · 网络恢复待核对'),'手动核对未恢复');assert.equal(commands.at(-1).type,'read');
+    await click('.refresh-button');await waitFor(()=>visibleTitle('随行验证 · 网络恢复待核对'),'手动核对未恢复');
+    await waitFor(()=>ui.webContents.executeJavaScript('!document.querySelector(".refresh-button[disabled]")'),'手动刷新后未完成首次汇总');
+    assert.deepEqual(commands.slice(7).map(command=>command.type),['read','readSummary']);
+    assert.notEqual(await ui.webContents.executeJavaScript('document.querySelector(".desktop-view-card[data-status=pending] .desktop-card-count").textContent.trim()'),'—');
     await click('.auto-read-toggle');
     console.log('官方编辑期间只暂缓，网络恢复后保持只读并等待手动核对通过。');
 
@@ -87,7 +90,7 @@ async function runSmoke({frontendURL,root}) {
     await click('.auto-read-toggle');await focus();await waitFor(()=>ui.webContents.executeJavaScript('document.querySelector(".list-content").dataset.live==="false"'),'官方选区改变后未停止');
     assert.equal(await visibleTitle('随行验证 · 网络恢复待核对'),true,'官方选区改变后保留原内容，不读其他清单');
     const writes=await official('return {completion:w.fixtureClicks,text:w.fixtureTextSaves,dates:w.fixtureScheduleSaves,flag:w.fixtureFlagSaves,creation:w.fixtureCreationClicks,deletion:w.fixtureDeleteKeys,lists:w.fixtureListSaves};');
-    assert.ok(Object.values(writes).every(value=>value===0),JSON.stringify(writes));assert.ok(commands.every(command=>['read','readList'].includes(command.type)));assert.deepEqual(errors,[]);
+    assert.ok(Object.values(writes).every(value=>value===0),JSON.stringify(writes));assert.ok(commands.slice(9).every(command=>command.type==='readList'));assert.deepEqual(errors,[]);
     console.log('自动读取选区保护、窄屏和零业务写入通过；本专项仅为合成网页证据。');
 
     // 模拟其他设备写入后，旧官方页面只在下一次导航时取得更新。

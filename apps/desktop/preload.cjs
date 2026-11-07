@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('suixingDesktop', {
   platform: 'Windows',
   capabilities: { editText: true, editSchedule: true, editFlag: true, deleteItem: true, manageLists: true, deleteList:true, listAppearance:true, editHierarchy:true, openNewItem: true, createItem: true, showCompleted: true, reconnect: true, loadedListRefresh: true, localNotifications:true },
   execute: (command, region) => ipcRenderer.invoke('suixing:execute', { command, region }),
-  readToday: (pageId, listId, region) => ipcRenderer.invoke('suixing:execute', { command:{type:'readToday',pageId,listId}, region }),
+  readSummary: (pageId, listId, region) => ipcRenderer.invoke('suixing:execute', { command:{type:'readSummary',pageId,listId}, region }),
   openSite: region => ipcRenderer.invoke('suixing:open-site', { region }),
   openLogin: region => ipcRenderer.invoke('suixing:open-site', { region, login:true }),
   reloadSite: region => ipcRenderer.invoke('suixing:reload-site', { region }),
