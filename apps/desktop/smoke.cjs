@@ -108,36 +108,67 @@ async function runSmoke({ frontendURL, root }) {
     const officialWindow = controller.window();
     const fixtureEntry = officialWindow.webContents.getURL();
     const writeBeforeLogin = controller.lastWriteOutcome()?.sequence;
-    const waitForLoginState = async predicate => {
+    const waitForRenderer = async predicate => {
       const deadline = Date.now()+6000;
       while (Date.now()<deadline) {
         if (await ui.webContents.executeJavaScript(predicate)) return;
         await new Promise(resolve=>setTimeout(resolve,50));
       }
-      assert.fail('随行未进入预期的登录界面状态');
+      assert.fail('随行未进入预期界面状态');
     };
     const clickLogin = () => ui.webContents.executeJavaScript('document.querySelector(".welcome-connect").click()');
     loginFixture = 'waiting';
     await officialWindow.webContents.loadURL(fixtureEntry);
     ui.show();
     await Promise.all([once(officialWindow,'show'),clickLogin()]);
-    await waitForLoginState('document.querySelector(".notice")?.dataset.code === "LOGIN_WAITING"');
+    await waitForRenderer('document.querySelector(".notice")?.dataset.code === "LOGIN_WAITING"');
     assert.equal(officialWindow.isVisible(),true);
     officialWindow.close();
-    await waitForLoginState('!document.querySelector(".welcome-connect")?.hasAttribute("disabled")');
+    await waitForRenderer('!document.querySelector(".welcome-connect")?.hasAttribute("disabled")');
     assert.equal(officialWindow.isVisible(),false);
 
     await Promise.all([once(officialWindow,'show'),clickLogin()]);
-    await waitForLoginState('document.querySelector(".notice")?.dataset.code === "LOGIN_WAITING"');
+    await waitForRenderer('document.querySelector(".notice")?.dataset.code === "LOGIN_WAITING"');
     loginFixture = 'dialog';
     await officialWindow.webContents.loadURL(fixtureEntry);
     await new Promise(resolve=>setTimeout(resolve,1250));
     assert.equal(officialWindow.isVisible(),true,'官方编辑弹层可见时保留登录窗口');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".notice")?.dataset.code'),'LOGIN_WAITING');
     await officialWindow.webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("#login-fixture-dialog").remove()');
-    await waitForLoginState('document.querySelector(".notice")?.dataset.code === "LOGIN_READY"');
+    await waitForRenderer('document.querySelector(".notice")?.dataset.code === "LOGIN_READY"');
     assert.equal(officialWindow.isVisible(),false);
     assert.deepEqual(await ui.webContents.executeJavaScript('[document.querySelectorAll(".list-button").length,document.querySelectorAll(".reminder-row").length,document.querySelector(".list-content").dataset.live]'),[2,0,'false']);
+
+    // 原清单没有已知的今天事项，另一份同名清单有一条且标记为部分加载。
+    await officialWindow.webContents.executeJavaScript(`(()=>{
+      const w=document.querySelector('iframe').contentWindow;
+      const date=new Date(),day=[date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');
+      w.sessionStorage.setItem('fixture-complete','false');
+      w.sessionStorage.setItem('fixture-schedule-reminder-item-fixture-two-0',JSON.stringify({date:day,time:null,timeZone:null}));
+      w.fixtureBeforeTodayRender=w.renderFixture;
+      w.renderFixture=list=>{w.fixtureBeforeTodayRender(list);if(list==='two')w.document.querySelector('.reminder-item').setAttribute('aria-setsize','2');};
+      w.renderFixture('one');
+    })()`);
+    const todayCard='.desktop-view-card[data-status="today"]';
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+'+" .desktop-card-count").textContent.trim()'),'—');
+    ui.focus();ui.webContents.focus();
+    await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+').focus()');
+    ui.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});
+    ui.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
+    await waitForRenderer('document.querySelector(".across-today .today-row") !== null');
+    assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".today-row .reminder-title")].map(node=>node.textContent.trim())'),['随行验证 · 第二个同名清单']);
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+'+" .desktop-card-count").textContent.trim()'),'1+');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".across-today .date-view-description").textContent.includes("部分内容尚未读取")'),true);
+    const officialSelected=()=>officialWindow.webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("[role=treeitem][aria-selected=true]").dataset.list');
+    assert.equal(await officialSelected(),'one','汇总完成后恢复原选区');
+    await ui.webContents.executeJavaScript('document.querySelector(".today-source-button").click()');
+    await waitForRenderer('document.querySelector(".list-content[data-live=true] .reminder-title")?.textContent.includes("第二个同名清单")');
+    assert.equal(await officialSelected(),'two');
+    await ui.webContents.executeJavaScript('document.querySelector(".list-button").click()');
+    await waitForRenderer('document.querySelectorAll(".list-content[data-live=true] .reminder-row").length===2');
+    await officialWindow.webContents.executeJavaScript(`(()=>{const w=document.querySelector('iframe').contentWindow;w.renderFixture=w.fixtureBeforeTodayRender;delete w.fixtureBeforeTodayRender;w.sessionStorage.removeItem('fixture-schedule-reminder-item-fixture-two-0');})()`);
+    console.log('跨清单今天经键盘和正式 IPC 读到另一清单的事项，提示部分加载，恢复原选区并可打开来源。');
+
     await ui.webContents.executeJavaScript('document.querySelector(".toolbar-actions .quiet-button").click()');
     await new Promise(resolve=>setTimeout(resolve,1100));
     assert.equal(officialWindow.isVisible(),true,'手动打开官方页面仍由用户关闭');
@@ -212,7 +243,7 @@ async function runSmoke({ frontendURL, root }) {
     ]};
     ui.webContents.send('suixing:snapshot',{region:'cn',result:{ok:true,code:'READY',snapshot:viewSnapshot}});
     await new Promise(resolve=>setTimeout(resolve,80));
-    const chooseView=async view=>{await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="'+view+'"]\').click()');await new Promise(resolve=>setTimeout(resolve,80));};
+    const chooseView=async view=>{const selector=view==='today'?'.local-today-button':'.view-tab[data-status="'+view+'"]';await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(selector)+').click()');await new Promise(resolve=>setTimeout(resolve,80));};
     const dateHeadings=()=>ui.webContents.executeJavaScript('[...document.querySelectorAll(".date-section-heading[role=heading]")].map(node=>node.textContent.trim())');
     assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".desktop-view-card")].map(card=>card.dataset.status)'),['today','scheduled','pending','flagged','overdue','completed']);
     await chooseView('flagged');assert.deepEqual(await displayedIds(),['view-root','view-child']);
@@ -292,9 +323,6 @@ async function runSmoke({ frontendURL, root }) {
     await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="today"]\').focus()');
     for(const view of ['today','scheduled','pending','flagged','overdue','completed']) {
       assert.equal(await ui.webContents.executeJavaScript('document.activeElement.matches(\'.view-tab[data-status="'+view+'"]\')'),true,'Tab 应能到达各清单视图');
-      if(view==='today') {
-        await press('Enter');assert.equal(await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="today"]\').getAttribute("aria-pressed")'),'true');
-      }
       if(view!=='completed')await press('Tab');
     }
     await ui.webContents.executeJavaScript('document.querySelector(\'.view-tab[data-status="pending"]\').click()');
@@ -916,6 +944,7 @@ async function runSmoke({ frontendURL, root }) {
     report.checks.push('排序下拉框 Tab 聚焦、回车展开、方向键选择和 Esc 取消');
     report.checks.push('旗标空格操作、正式 IPC 单次保存、移除及本地筛选');
     report.checks.push('登录就绪后自动隐藏官方窗口、保留会话和清单导航');
+    report.checks.push('跨清单今天读取、部分加载提示、原选区恢复与来源跳转');
     report.checks.push('系统浅色／深色实时切换与清单状态保持');
     report.checks.push('普通模式重新连接、同名清单只读保护与新页面句柄');
     report.checks.push('服务不可达时保留草稿、禁止写入与导航，恢复后手动刷新且不重放');

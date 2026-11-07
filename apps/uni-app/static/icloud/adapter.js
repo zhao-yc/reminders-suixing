@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.21') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.22') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -173,7 +173,12 @@
       if(deferred)return deferred;
     }
     var lists=listNodes(doc).map(readList);
-    return result(true,'SELECT_A_LIST','请选择清单后继续。',{snapshot:navigationSnapshot(doc,lists),needsListSelection:true});
+    var navigation={snapshot:navigationSnapshot(doc,lists),needsListSelection:true};
+    if(command.background===true) {
+      var selected=lists.filter(function(list){return list.selected;});
+      navigation.selectedListId=selected.length===1?selected[0].id:null;
+    }
+    return result(true,'SELECT_A_LIST','请选择清单后继续。',navigation);
   }
 
   /** 等待指定清单时先核对页面和官方选区，不能读取自动改选的其他事项。 */
@@ -361,7 +366,14 @@
   async function selectList(command) {
     var doc = application();
     if (!doc || command.pageId !== pageId) return result(false, 'STALE_VIEW', '页面已变化，请先刷新列表。');
-    var target = listNodes(doc).find(function (node) { return handle(node) === command.listId; });
+    var nodes = listNodes(doc);
+    if(command.background===true) {
+      var selected=nodes.filter(function(node){return node.getAttribute('aria-selected')==='true';});
+      if(isLoading(doc) || selected.length!==1 || handle(selected[0])!==command.fromListId)return result(false,'STALE_VIEW','官方选区已变化，请刷新清单。');
+      var deferred=deferredWhileEditing(doc);
+      if(deferred)return deferred;
+    }
+    var target = nodes.find(function (node) { return handle(node) === command.listId; });
     if (!target) return result(false, 'STALE_VIEW', '清单已变化，请先刷新列表。');
     if (target.getAttribute('aria-selected') === 'true') return read();
     var oldIds = rowNodes(doc).map(function (row) { return row.id; }).join('|');
@@ -379,6 +391,7 @@
       return stable >= 3;
     }, 8000);
     if (!loaded) { lastSnapshot = null; return result(false, 'LIST_LOADING', '列表尚未加载完成，请稍后重新读取。'); }
+    if(command.background===true)return readSelectedList(command);
     return read();
   }
 
@@ -1401,7 +1414,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.21',
+    version: '0.3.22',
     dispose:function(){clearSettledCreation();root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */

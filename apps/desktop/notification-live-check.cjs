@@ -40,7 +40,7 @@ async function setTestNotificationPreference(enabled) {
 
 /** 只切换本地视图。正式网页读回和写入序号由调用方核对。 */
 async function inspectTestDateSections(expected) {
-  const tab = name => document.querySelector('.view-tab[data-status="'+name+'"]');
+  const tab = name => (name==='today' && document.querySelector('.local-today-button')) || document.querySelector('.view-tab[data-status="'+name+'"]');
   const scope = () => {
     const list = document.querySelector('.list-content');
     return list?.dataset.pageId === expected.pageId && list.dataset.listId === expected.listId &&

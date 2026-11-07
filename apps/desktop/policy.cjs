@@ -18,10 +18,13 @@ function browserUserAgent(chromiumVersion) {
 }
 
 function validCommand(command) {
-  if (!command || typeof command !== 'object' || !['read','readLists','readList', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance','getSubtaskInfo','setSubtask', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return false;
+  if (!command || typeof command !== 'object' || !['read','readLists','readList','readToday', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance','getSubtaskInfo','setSubtask', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return false;
   if (command.type === 'read') return true;
   if (command.type === 'readLists') return command.background === undefined || typeof command.background === 'boolean';
   if (typeof command.pageId !== 'string' || command.pageId.length > 150 || typeof command.listId !== 'string' || command.listId.length > 150) return false;
+  if (command.type === 'readToday') return !!command.pageId;
+  if (command.type === 'selectList' && command.background === true) return !!command.pageId && !!command.listId &&
+    typeof command.fromListId === 'string' && command.fromListId.length > 0 && command.fromListId.length <= 150;
   if (['selectList', 'showCompleted','readList'].includes(command.type)) return command.type!=='readList' || !!command.pageId && !!command.listId &&
     (command.background === undefined || typeof command.background === 'boolean') &&
     (command.reload === undefined || command.reload === true && command.background === true);

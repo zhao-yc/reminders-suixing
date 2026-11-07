@@ -9,13 +9,13 @@
         <view class="brand-icon"><view></view><view></view><view></view></view>
         <view><text class="brand-name">提醒事项·随行</text><text class="brand-caption">让每一件事，随身而行</text></view>
       </view>
-      <view v-if="desktopWide && snapshot?.activeListId" class="desktop-view-grid" role="group" aria-label="当前清单已加载内容的视图">
+      <view v-if="desktopWide && snapshot && (snapshot.activeListId || canReadToday)" class="desktop-view-grid" role="group" aria-label="快捷视图">
         <button v-for="card in desktopCards" :key="card.value" class="view-tab desktop-view-card" role="button" :data-status="card.value"
-          :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing" :class="{ active: tab === card.value }" :aria-pressed="String(activeDesktopCard === card.value)"
-          :aria-label="card.label + '，当前清单已加载 ' + viewProjection.counts[card.value] + ' 项' + (unknownForView(card.value) ? '，另有状态待核对' : '')"
+          :tabindex="desktopCardDisabled(card.value) ? -1 : 0" :disabled="desktopCardDisabled(card.value)" :class="{ active: todayAcross ? card.value === 'today' : tab === card.value && (card.value !== 'today' || !canReadToday) }" :aria-pressed="String(activeDesktopCard === card.value)"
+          :aria-label="card.label + (card.value === 'today' && canReadToday ? '，跨清单' : '，当前清单') + '，' + desktopCardCount(card.value)"
           @click="selectDesktopCard(card.value)">
           <view class="desktop-card-top"><image class="desktop-icon" :src="'/static/desktop-icons/' + card.icon + '.svg'" mode="aspectFit" aria-hidden="true" />
-            <text class="desktop-card-count">{{ viewProjection.counts[card.value] }}{{ unknownForView(card.value) ? '+' : '' }}</text></view>
+            <text class="desktop-card-count">{{ desktopCardCount(card.value) }}</text></view>
           <text class="desktop-card-label">{{ card.label }}</text>
         </button>
       </view>
@@ -41,8 +41,8 @@
         <button class="mobile-menu" aria-label="显示清单" @click="sidebarOpen = true">☰</button>
         <text v-if="!snapshot" class="toolbar-label">你的清单，随时在身边</text>
         <view v-if="snapshot" class="quick-tools">
-          <button v-if="canCreate" class="add-reminder-button" :disabled="busy || !!editing || (!live && !isDemo)" aria-label="新增提醒事项" title="新增提醒事项（Ctrl+N）" @click="startCreate"><text>＋</text></button>
-          <view class="toolbar-search"><view class="search-mark"></view><input v-model="search" :disabled="!!editing" :focus="searchFocused" class="search" placeholder="搜索当前清单" aria-label="搜索当前清单" @blur="searchFocused = false" /></view>
+          <button v-if="canCreate" class="add-reminder-button" :disabled="todayAcross || busy || !!editing || (!live && !isDemo)" aria-label="新增提醒事项" title="新增提醒事项（Ctrl+N）" @click="startCreate"><text>＋</text></button>
+          <view class="toolbar-search"><view class="search-mark"></view><input v-model="search" :disabled="!!editing" :focus="searchFocused" class="search" :placeholder="todayAcross ? '搜索今天' : '搜索当前清单'" :aria-label="todayAcross ? '搜索今天' : '搜索当前清单'" @blur="searchFocused = false" /></view>
         </view>
         <view class="toolbar-actions">
           <picker :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || !!editing" @change="changeRegion"><view class="region-picker">{{ region === 'cn' ? '中国大陆' : '其他地区' }}⌄</view></picker>
@@ -71,6 +71,24 @@
         <button class="demo-link" :disabled="busy" @click="showDemo">先看看界面示例 →</button>
         <text class="welcome-footnote">登录在 iCloud 官方页面完成</text>
       </view>
+      <view v-else-if="todayAcross" class="list-content across-today">
+        <view class="list-heading"><view><text class="eyebrow">跨清单 · 今天与逾期</text><view class="title-line"><text class="list-title" role="heading" aria-level="1">今天</text><text v-if="todayData" class="heading-count">{{ todayProjection.matchCount }}</text></view></view></view>
+        <text v-if="todayData" class="date-view-description" role="status">已读取 {{ todayData.lists.length }} / {{ todayData.totalLists }} 份清单的已加载事项{{ todayPartial ? ' · 部分内容尚未读取' : '' }}{{ todayProjection.unknown ? ' · ' + todayProjection.unknown + ' 项日期待核对' : '' }}</text>
+        <scroll-view class="items-scroll" scroll-y>
+          <template v-for="entry in todayProjection.rows" :key="entry.key">
+            <view v-if="entry.heading" class="date-section-heading" role="heading" aria-level="2">{{ entry.heading }}</view>
+            <view class="reminder-row today-row" :class="{ 'view-context': entry.context, 'is-subtask': entry.item.level > 1 }">
+              <view class="completion-button" aria-hidden="true"></view>
+              <view class="reminder-copy">
+                <text class="reminder-title">{{ entry.item.title }}</text>
+                <view class="today-row-meta"><button class="today-source-button" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" :aria-label="'打开清单：' + entry.list.title" @click="selectList(entry.list)">{{ entry.list.title }}</button><text v-if="entry.item.metadata" class="reminder-metadata">{{ entry.item.metadata }}</text></view>
+              </view>
+            </view>
+          </template>
+          <view v-if="!todayProjection.rows.length" class="empty-list"><text>{{ busy ? '正在逐份读取清单…' : !todayData ? '点击刷新重新读取清单。' : todayPartial || todayProjection.unknown ? '已确认的内容中没有符合条件的事项。' : search ? '没有找到相关事项。' : '已加载内容中没有今天或逾期的待办。' }}</text></view>
+        </scroll-view>
+        <view v-if="todayData" class="list-footer"><text>点击来源清单可编辑事项</text><text>汇总于 {{ todayReadTime }}</text></view>
+      </view>
       <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-list-title="snapshot.activeListTitle" :data-captured-at="snapshot.capturedAt" :data-live="String(live)">
         <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title" role="heading" aria-level="1">{{ snapshot.activeListTitle || (snapshot.emptyAccount ? '还没有清单' : '选择清单') }}</text><text v-if="snapshot.activeListId" class="heading-count">{{ incompleteCount }}</text><button v-if="canManageLists && snapshot.activeListId" class="rename-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="重命名清单" title="重命名当前清单" @click="startListEdit('rename')">✎</button><button v-if="canEditListAppearance && snapshot.activeListId" class="list-appearance-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="清单颜色与图标" title="清单颜色与图标" @click="startListAppearance">◉</button><button v-if="canDeleteList && snapshot.activeListId" class="delete-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="删除清单" title="删除当前清单" @click="startListDeletion">⌫</button></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : !snapshot.activeListId ? '清单导航' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
         <view v-if="editing?.field === 'list-delete'" class="inline-editor list-delete-confirmation" role="alertdialog" aria-label="确认删除清单"><text class="delete-title">删除清单“{{ editing.title }}”？</text><text>清单及其中的全部事项都会从 iCloud 和同步设备移除，包括当前尚未加载的内容。</text><text class="muted small">共享清单请在官方页面处理。</text><view class="editor-actions"><button class="confirm-list-delete" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '删除中…' : '确认删除清单' }}</button><button class="cancel-list-delete" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view></view>
@@ -91,6 +109,7 @@
             <!-- #ifndef H5 -->
             <picker class="sort-picker" :range="sortLabels" :value="sortIndex" :disabled="busy || !!editing" @change="changeSort"><view class="sort-picker-label" role="button" :aria-label="'显示排序：' + sortLabels[sortIndex]">{{ sortLabels[sortIndex] }} ⌄</view></picker>
             <!-- #endif -->
+            <button v-if="desktopWide && canReadToday && snapshot.activeListId" class="local-today-button view-tab" role="button" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing" :aria-pressed="String(tab === 'today')" @click="selectTab('today')">本清单今天</button>
           </view>
         </view>
         <text v-if="dateViewLabel" class="date-view-description" :data-view="tab" :data-matches="viewProjection.matchCount" :data-unknown="unknownForView(tab)">{{ dateViewLabel }} · 当前清单已加载 · {{ viewProjection.matchCount }} 项{{ unknownForView(tab) ? '；另有 ' + unknownForView(tab) + ' 项日期或时区待核对，未计入' : '' }}{{ viewContext.size ? '；灰色主事项仅供定位，不计入数量' : '' }}</text>
@@ -150,7 +169,7 @@ import { validSchedule, localDateString } from '../../lib/schedule.js';
 import { SORT_OPTIONS, readSortPreference, saveSortPreference, sortLoadedItems } from '../../lib/list-sort.js';
 import { reconnectLoadedList } from '../../lib/reconnect.js';
 import { listIconURL, appearanceColorLabel } from '../../lib/list-appearance.js';
-import { VIEW_OPTIONS, groupLoadedDateView, projectLoadedItems } from '../../lib/list-views.js';
+import { VIEW_OPTIONS, groupLoadedDateView, projectLoadedItems, projectTodayAcrossLists } from '../../lib/list-views.js';
 import { monitorConnection, connectionResult } from '../../lib/connection.js';
 import { monitorLoadedList } from '../../lib/loaded-list-monitor.js';
 // #ifdef APP-HARMONY
@@ -222,6 +241,9 @@ const accountConnected = computed(() => !isDemo.value && !networkOffline.value &
 const sidebarOpen = ref(false);
 const tab = ref('pending');
 const flagOnly = ref(false);
+const todayAcross = ref(false);
+const todayCache = ref(null);
+const canReadToday = computed(()=>!isDemo.value && typeof bridge.readToday==='function');
 const desktopWide = ref(false);
 const mobileViewOptions = VIEW_OPTIONS.filter(option => !option.desktopOnly);
 const desktopCards = [
@@ -232,11 +254,12 @@ const desktopCards = [
   { value:'overdue', label:'逾期', icon:'alarm' },
   { value:'completed', label:'完成', icon:'check2' }
 ];
-const activeDesktopCard = computed(() => tab.value === 'pending' && flagOnly.value ? 'flagged' : tab.value);
+const activeDesktopCard = computed(() => todayAcross.value?'today':tab.value==='today' && canReadToday.value?null:tab.value === 'pending' && flagOnly.value?'flagged':tab.value);
 // #ifdef H5
 const desktopViewport = typeof window === 'undefined' ? null : window.matchMedia('(min-width:761px)');
 function updateDesktopWidth() {
   desktopWide.value = desktopViewport?.matches === true;
+  if (!desktopWide.value && todayAcross.value) { todayAcross.value=false;tab.value='today'; }
   if (!desktopWide.value && tab.value === 'overdue') tab.value = 'pending';
 }
 updateDesktopWidth();
@@ -259,6 +282,18 @@ const viewProjection=computed(()=>projectLoadedItems(sortLoadedItems(snapshot.va
 const viewContext=computed(()=>viewProjection.value.contextIds);
 const dateView=computed(()=>groupLoadedDateView(viewProjection.value,{view:tab.value,...viewDates.value,descending:sortMode.value==='date-descending'}));
 const visibleItems=computed(()=>dateView.value.items);
+const todayData=computed(()=>todayCache.value?.pageId===snapshot.value?.pageId && todayCache.value?.region===region.value?todayCache.value.report:null);
+const todayProjection=computed(()=>projectTodayAcrossLists(todayData.value?.lists || [],{...viewDates.value,query:search.value}));
+const todayPartial=computed(()=>!!todayData.value && (todayData.value.lists.length<todayData.value.totalLists || todayData.value.lists.some(entry=>entry.partial)));
+const todayReadTime=computed(()=>todayData.value?new Date(todayData.value.capturedAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'');
+function desktopCardDisabled(view) {
+  return busy.value || !!editing.value || (!(view==='today' && canReadToday.value) && !snapshot.value?.activeListId);
+}
+function desktopCardCount(view) {
+  if (view==='today' && canReadToday.value) return todayData.value?todayProjection.value.count+((todayPartial.value || todayProjection.value.unknown)?'+':''):'—';
+  if (!snapshot.value?.activeListId) return '—';
+  return viewProjection.value.counts[view]+(unknownForView(view)?'+':'');
+}
 const dateViewLabel = computed(() => ({ today:'今天与逾期', scheduled:'已安排日期', overdue:'早于今天' })[tab.value]);
 const emptyViewMessage = computed(() => {
   if (!snapshot.value?.activeListId) return snapshot.value?.emptyAccount ? '还没有清单，先新建一份。' : '请选择一份清单继续。';
@@ -307,6 +342,7 @@ function accept(result,readRecovery=false) {
 
 async function run(command) {
   if (busy.value) return;
+  if (!['read','readLists','readList','selectList'].includes(command.type)) todayCache.value=null;
   busy.value = true;
   const revision=networkRevision;
   try { const result = connectionResult(await bridge.execute(command, region.value),command.type,revision!==networkRevision); accept(result,['read','readLists','readList','selectList'].includes(command.type) && revision===networkRevision); return result; }
@@ -315,6 +351,8 @@ async function run(command) {
 }
 
 function resetLoginView(message, code = '') {
+  todayAcross.value = false;
+  todayCache.value = null;
   isDemo.value = false;
   snapshot.value = null;
   listSelectionRequired.value = false;
@@ -345,6 +383,7 @@ async function connect() {
   if (!result.ok) { accept(result); return; }
   if (editing.value?.blocked) { notice.value = '请在官方页面核对修改结果，返回后刷新。'; return; }
   if (openLogin && snapshot.value && !isDemo.value) {
+    todayAcross.value = false;
     live.value = false;
     notice.value = '请在官方页面操作，返回后点击“刷新”核对。';
     noticeCode.value = '';
@@ -355,6 +394,7 @@ async function connect() {
 }
 
 async function refresh() {
+  if (todayAcross.value) return refreshAcrossToday();
   if (isDemo.value) { showDemo(); return; }
   const result = await run({ type: listSelectionRequired.value ? 'readLists' : 'read' });
   if (result?.ok && !listSelectionRequired.value && tab.value === 'completed') await selectTab('completed');
@@ -363,6 +403,8 @@ async function refresh() {
 async function reconnectClient() {
   if(busy.value || editing.value || isDemo.value || networkOffline.value || !bridge.capabilities?.reconnect) return;
   const revision=networkRevision;
+  todayAcross.value=false;
+  todayCache.value=null;
   const previous={title:snapshot.value?.activeListTitle,pageId:snapshot.value?.pageId};
   live.value=false;busy.value=true;notice.value='正在重新连接 iCloud…';noticeCode.value='RECONNECTING';noticeError.value=false;
   let result;
@@ -373,6 +415,7 @@ async function reconnectClient() {
 
 async function selectTab(next) {
   if (busy.value || editing.value || !VIEW_OPTIONS.some(option=>option.value===next)) return;
+  todayAcross.value=false;
   updateViewClock();
   tab.value = next;
   if (next !== 'completed' || isDemo.value || !snapshot.value || !live.value) return;
@@ -385,13 +428,42 @@ async function selectTab(next) {
 }
 
 function selectDesktopCard(view) {
-  if (busy.value || editing.value) return;
+  if (desktopCardDisabled(view)) return;
+  if (view==='today' && canReadToday.value) {
+    if(!todayAcross.value) search.value='';
+    todayAcross.value=true;
+    return refreshAcrossToday();
+  }
   flagOnly.value = view === 'flagged';
   return selectTab(flagOnly.value ? 'pending' : view);
 }
 
+async function refreshAcrossToday() {
+  if (busy.value || editing.value || !snapshot.value?.pageId) return;
+  const {pageId,activeListId} = snapshot.value;
+  const currentRegion = region.value;
+  const revision = networkRevision;
+  busy.value=true;
+  notice.value='正在逐份读取清单，汇总“今天”…';
+  noticeCode.value='TODAY_LOADING';
+  noticeError.value=false;
+  try {
+    const result=await bridge.readToday(pageId,activeListId || '',currentRegion);
+    accept(result,result.ok && revision===networkRevision);
+    if(result.needsListSelection)live.value=false;
+    if(result.ok) todayCache.value={pageId,region:currentRegion,report:result.today};
+    else if(result.needsListSelection) {
+      todayAcross.value=false;
+      todayCache.value=null;
+    }
+  } catch {
+    accept({ok:false,code:'CONNECTION_FAILED',message:'汇总暂时不可用，请稍后刷新。'});
+  } finally { busy.value=false; }
+}
+
 async function selectList(list) {
   if (busy.value || editing.value) return;
+  if (todayAcross.value) { todayAcross.value=false;tab.value='pending';flagOnly.value=false; }
   sidebarOpen.value = false;
   search.value = '';
   if (isDemo.value) {
@@ -493,6 +565,7 @@ async function saveListAppearance(current) {
 
 function startListEdit(operation) {
   if(!canManageLists.value || (!live.value && !(operation==='create' && canCreateFirstList.value)) || busy.value || editing.value || !['create','rename'].includes(operation)) return;
+  if (todayAcross.value) { todayAcross.value=false;tab.value='pending';flagOnly.value=false;search.value=''; }
   const list=snapshot.value.lists.find(list=>list.id===snapshot.value.activeListId);
   if(!list?.fingerprint && !canCreateFirstList.value) {notice.value='请先刷新，再编辑清单。';noticeError.value=true;return;}
   sidebarOpen.value=false;
@@ -525,6 +598,8 @@ async function saveListDeletion(current) {
 
 function showDemo() {
   if (busy.value || editing.value) return;
+  todayAcross.value=false;
+  todayCache.value=null;
   snapshot.value = demoSnapshot();
   listSelectionRequired.value = false;
   isDemo.value = true;
@@ -543,6 +618,8 @@ function changeRegion(event) {
   const next = index === 0 ? 'cn' : 'global';
   if (next === region.value) return;
   region.value = next;
+  todayAcross.value = false;
+  todayCache.value = null;
   listSelectionRequired.value = false;
   flagOnly.value = false;
   snapshot.value = null;
@@ -624,6 +701,7 @@ async function saveSchedule(current) {
 }
 
 async function startCreate() {
+  if (todayAcross.value) return;
   if (!canCreate.value || !snapshot.value || busy.value || editing.value || (!live.value && !isDemo.value)) return;
   if (!isDemo.value && bridge.capabilities?.createItem !== true) {
     const result = await bridge.openSite(region.value);
@@ -744,7 +822,7 @@ function workspaceKeydown(event) {
     const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(['ArrowLeft','ArrowUp'].includes(event.key)?-1:1)+buttons.length)%buttons.length;
     buttons[next].click();nextTick(()=>buttons[next].focus());return;
   }
-  const actionButton=event.target?.closest?.('.view-tab,.flag-toggle-button,.flag-filter,.reconnect-button,.auto-read-toggle,.delete-item-button,.confirm-delete,.cancel-delete,.add-list-button,.rename-list-button,.save-list-edit,.cancel-list-edit,.delete-list-button,.confirm-list-delete,.cancel-list-delete,.list-appearance-button,.appearance-choice,.save-list-appearance,.cancel-list-appearance,.subtask-item-button,.confirm-subtask,.cancel-subtask');
+  const actionButton=event.target?.closest?.('.view-tab,.today-source-button,.flag-toggle-button,.flag-filter,.reconnect-button,.auto-read-toggle,.delete-item-button,.confirm-delete,.cancel-delete,.add-list-button,.rename-list-button,.save-list-edit,.cancel-list-edit,.delete-list-button,.confirm-list-delete,.cancel-list-delete,.list-appearance-button,.appearance-choice,.save-list-appearance,.cancel-list-appearance,.subtask-item-button,.confirm-subtask,.cancel-subtask');
   if (actionButton && ['Enter',' '].includes(event.key)) {
     event.preventDefault();
     if (!event.repeat && !actionButton.hasAttribute('disabled')) actionButton.click();
@@ -795,7 +873,7 @@ const checkLoadedList=()=>loadedListMonitor?.check();
 onMounted(()=>{
   if(!canAutoRead)return;
   loadedListMonitor=monitorLoadedList({
-    state:()=>({enabled:autoReadEnabled.value,visible:document.visibilityState==='visible',busy:busy.value,editing:!!editing.value || sortMenuOpen.value || notificationsPanelOpen.value,
+    state:()=>({enabled:autoReadEnabled.value && !todayAcross.value,visible:document.visibilityState==='visible',busy:busy.value,editing:!!editing.value || sortMenuOpen.value || notificationsPanelOpen.value,
       recovery:networkOffline.value || networkNeedsRead.value || listSelectionRequired.value,live:live.value,demo:isDemo.value,region:region.value,revision:networkRevision,snapshot:snapshot.value,
       allowReload:tab.value!=='completed'}),
     read:(command,currentRegion)=>bridge.execute(command,currentRegion),
@@ -925,6 +1003,10 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .desktop-sidebar-layout .list-count { color:#607083; font-variant-numeric:tabular-nums; }
 .desktop-sidebar-layout .sidebar-footer { gap:5px; padding:18px 8px 0; }
 .desktop-sidebar-layout .list-view-tools { margin-left:auto; }
+.today-row-meta { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; }
+.today-source-button,.local-today-button { margin:0; color:#2872ba; font-size:11px; text-align:left; }
+.local-today-button[aria-pressed='true'] { font-weight:650; }
+.today-source-button:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
 
 /* #ifdef H5 */
 /* 系统配色只改变颜色，桌面与窄屏共用同一套事项区布局和编辑状态。 */
@@ -952,6 +1034,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
   .app-shell :is(.reminder-title,.delete-title,.delete-confirmation,.notification-heading,.welcome-title,.sort-option,.edit-field,.search) { color:var(--theme-text); }
   .app-shell .completed .reminder-title,.app-shell .view-context .reminder-title { color:#a3aebb; }
   .app-shell .list-title,.app-shell .empty-add,.app-shell .edit-recovery button { color:#67b9ff; }
+  .app-shell .today-source-button,.app-shell .local-today-button { color:#67b9ff; }
   .app-shell :is(.toolbar,.list-controls,.reminder-row,.list-footer,.source-chip,.empty-circle,.date-section-heading,.reminder-row.is-subtask) { border-color:var(--theme-border); }
   .app-shell :is(.account-card,.notice,.notification-panel,.list-editor,.list-delete-confirmation,.appearance-editor,.edit-field,
     .sort-menu,.new-reminder-row,.icon-choice,.toolbar-search,.welcome-art,.search,.notification-time-picker) {

@@ -45,6 +45,27 @@ export function projectLoadedItems(items,options={}) {
 const TODAY_SECTIONS = ['逾期','全天','上午','下午','今晚'];
 const UNKNOWN_ZONE = '时区待核对';
 
+/** 各清单独立筛选父子事项，再合并日期分组，避免不同清单的记录或层级混在一起。 */
+export function projectTodayAcrossLists(lists, options) {
+  const sections = new Map(TODAY_SECTIONS.map(label=>[label,[]]));
+  const filters = {today:localDateString(),...options,view:'today'};
+  let count = 0, matchCount = 0, unknown = 0;
+  for (const {list,items} of lists) {
+    const projected = projectLoadedItems(items,filters);
+    const grouped = groupLoadedDateView(projected,filters);
+    count += projected.counts.today;
+    matchCount += projected.matchCount;
+    unknown += projected.unknownToday;
+    let heading;
+    for (const item of grouped.items) {
+      heading = grouped.headings.get(item.id) || heading;
+      const section = sections.get(heading);
+      section.push({key:JSON.stringify([list.id,item.id]),list,item,heading:section.length?'':heading,context:projected.contextIds.has(item.id)});
+    }
+  }
+  return {rows:[...sections.values()].flat(),count,matchCount,unknown};
+}
+
 /** 只重排已筛出的行。每组主子事项以首个匹配事项为归组依据，保留原行引用与层级。 */
 export function groupLoadedDateView({items,contextIds},{view,today,tomorrow,timeZone,descending=false}) {
   const headings = new Map();

@@ -1,11 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { groupLoadedDateView, projectLoadedItems } from '../apps/uni-app/lib/list-views.js';
+import { groupLoadedDateView, projectLoadedItems, projectTodayAcrossLists } from '../apps/uni-app/lib/list-views.js';
 
 const none={date:null,time:null,timeZone:null};
 const item=(id,date=null,extra={})=>({id,title:id,notes:'',completed:false,level:1,flagged:false,schedule:date?{date,time:null,timeZone:null}:none,...extra});
 const options={today:'2030-01-15',timeZone:'Asia/Shanghai'};
 const ids=result=>result.items.map(item=>item.id);
+
+test('跨清单今天合并日期组，重复记录标识和父子上下文仍分属来源清单',()=>{
+  const lists=[
+    {list:{id:'one',title:'合成清单一'},items:[item('重复标识','2030-01-14'),item('日期待核对',null,{schedule:null})]},
+    {list:{id:'two',title:'合成清单二'},items:[item('第二清单主项'),item('重复标识','2030-01-15',{level:2}),item('已完成','2030-01-14',{completed:true})]}
+  ];
+  const result=projectTodayAcrossLists(lists,options);
+  assert.equal(result.count,2);
+  assert.equal(result.unknown,1);
+  assert.deepEqual(result.rows.map(entry=>[entry.list.id,entry.heading,entry.context]),[['one','逾期',false],['two','全天',true],['two','',false]]);
+  assert.equal(new Set(result.rows.map(entry=>entry.key)).size,3);
+  assert.equal(projectTodayAcrossLists(lists,{...options,query:'找不到'}).matchCount,0);
+});
 
 test('今天包括今天与逾期，计划包括有日期的待办，不从附注或不可读字段猜测',()=>{
   const items=[item('逾期','2030-01-14'),item('今天','2030-01-15'),item('将来','2030-01-16'),item('无日期'),item('未知',null,{schedule:null,metadata:'今天'}),item('非法',null,{schedule:{date:'2030-02-30',time:null,timeZone:null}}),item('已完成','2030-01-15',{completed:true})];
