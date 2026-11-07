@@ -169,7 +169,7 @@ async function runSmoke({ frontendURL, root }) {
     assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".summary-row .reminder-title")].map(node=>node.textContent.trim())'),['随行验证 · 第二个同名清单']);
     assert.equal(await ui.webContents.executeJavaScript('getComputedStyle(document.querySelector(".summary-row .reminder-metadata")).color'),'rgb(209, 46, 60)','跨清单的逾期日期应标红');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+'+" .desktop-card-count").textContent.trim()'),'1+');
-    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".across-lists .date-view-description").textContent.includes("部分内容尚未读取")'),true);
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".across-lists .date-view-description").textContent.trim()'),'部分内容尚未读取');
     assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".network-notice")'),false,'导航状态下成功汇总后也应收起联网提示');
     assert.match(await ui.webContents.executeJavaScript('document.querySelector(".across-lists .list-footer").textContent.trim()'),/^汇总于 \d{2}:\d{2}$/);
     const officialSelected=()=>officialWindow.webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("[role=treeitem][aria-selected=true]").dataset.list');
@@ -189,9 +189,13 @@ async function runSmoke({ frontendURL, root }) {
     await waitForRenderer('document.querySelector(".list-content[data-live=true] .reminder-title")?.textContent.includes("第二个同名清单")');
     assert.equal(await officialSelected(),'two');
     assert.deepEqual(await summaryCounts(),crossCounts,'切换清单后卡片仍按跨清单结果计数');
+    await officialWindow.webContents.executeJavaScript(`(()=>{const w=document.querySelector('iframe').contentWindow;w.renderFixture=w.fixtureBeforeTodayRender;delete w.fixtureBeforeTodayRender;w.renderFixture('two');})()`);
+    await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+').click();document.querySelector(".refresh-button").click()');
+    await waitForRenderer('document.querySelector(".across-lists .summary-row") && !document.querySelector(".across-lists .date-view-description,.refresh-button[disabled]")');
+    assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".across-lists .eyebrow")'),false,'汇总标题上方不再显示范围说明');
     await ui.webContents.executeJavaScript('document.querySelector(".list-button").click()');
     await waitForRenderer('document.querySelectorAll(".list-content[data-live=true] .reminder-row").length===2');
-    await officialWindow.webContents.executeJavaScript(`(()=>{const w=document.querySelector('iframe').contentWindow;w.renderFixture=w.fixtureBeforeTodayRender;delete w.fixtureBeforeTodayRender;w.sessionStorage.removeItem('fixture-schedule-reminder-item-fixture-two-0');})()`);
+    await officialWindow.webContents.executeJavaScript(`document.querySelector('iframe').contentWindow.sessionStorage.removeItem('fixture-schedule-reminder-item-fixture-two-0');`);
     console.log('跨清单今天经键盘和正式 IPC 读到另一清单的事项，提示部分加载，恢复原选区并可打开来源。');
 
     await ui.webContents.executeJavaScript('document.querySelector(".toolbar-actions .quiet-button").click()');

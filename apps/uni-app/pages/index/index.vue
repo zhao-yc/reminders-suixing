@@ -79,8 +79,8 @@
         <text class="welcome-footnote">登录在 iCloud 官方页面完成</text>
       </view>
       <view v-else-if="summaryView" class="list-content across-lists">
-        <view class="list-heading"><view><text class="eyebrow">{{ summaryView === 'today' ? '跨清单 · 今天与逾期' : '跨清单' }}</text><view class="title-line"><text class="list-title" role="heading" aria-level="1">{{ summaryTitle }}</text><text v-if="summaryData" class="heading-count">{{ summaryProjection.matchCount }}</text></view></view></view>
-        <text v-if="summaryData" class="date-view-description" role="status">已读取 {{ summaryData.lists.length }} / {{ summaryData.totalLists }} 份清单的已加载事项{{ summaryPartial ? ' · 部分内容尚未读取' : '' }}{{ summaryUnknown ? ' · ' + summaryUnknown + (summaryView === 'flagged' ? ' 项旗标待核对' : ' 项日期待核对') : '' }}{{ summaryView === 'completed' ? ' · 网页隐藏的完成事项未计入' : '' }}</text>
+        <view class="list-heading"><view class="title-line"><text class="list-title" role="heading" aria-level="1">{{ summaryTitle }}</text><text v-if="summaryData" class="heading-count">{{ summaryProjection.matchCount }}</text></view></view>
+        <text v-if="summaryNotice" class="date-view-description" role="status">{{ summaryNotice }}</text>
         <scroll-view class="items-scroll" scroll-y>
           <template v-for="entry in summaryProjection.rows" :key="entry.key">
             <view v-if="entry.heading" class="date-section-heading" role="heading" aria-level="2">{{ entry.heading }}</view>
@@ -296,8 +296,18 @@ const dateView=computed(()=>groupLoadedDateView(viewProjection.value,{view:tab.v
 const visibleItems=computed(()=>dateView.value.items);
 const summaryData=computed(()=>summaryCache.value?.pageId===snapshot.value?.pageId && summaryCache.value?.region===region.value?summaryCache.value.report:null);
 const summaryProjection=computed(()=>projectAcrossLists(summaryData.value?.lists || [],{...viewDates.value,view:summaryView.value || 'pending',query:summaryView.value?search.value:''}));
-const summaryUnknown=computed(()=>summaryProjection.value.unknown[summaryView.value] || 0);
 const summaryPartial=computed(()=>!!summaryData.value && (summaryData.value.lists.length<summaryData.value.totalLists || summaryData.value.lists.some(entry=>entry.partial)));
+const summaryNotice=computed(()=>{
+  const data=summaryData.value;
+  if(!data) return '';
+  const messages=[];
+  if(data.lists.length<data.totalLists) messages.push(`已读取 ${data.lists.length} / ${data.totalLists} 份清单`);
+  if(summaryPartial.value) messages.push('部分内容尚未读取');
+  const unknown=summaryProjection.value.unknown[summaryView.value];
+  if(unknown) messages.push(unknown+(summaryView.value==='flagged'?' 项旗标待核对':' 项日期待核对'));
+  if(summaryView.value==='completed') messages.push('网页隐藏的完成事项未计入');
+  return messages.join(' · ');
+});
 const summaryReadTime=computed(()=>summaryData.value?new Date(summaryData.value.capturedAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'');
 const desktopCardsDisabled=computed(()=>busy.value || !!editing.value || (!canReadSummary.value && !snapshot.value?.activeListId));
 function desktopCardCount(view) {
