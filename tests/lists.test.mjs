@@ -33,6 +33,40 @@ test('新建允许同名清单，按新增句柄识别，不把已有同名清�
   assert.ok(!snapshot.lists.some(list=>list.id===result.snapshot.activeListId));
 });
 
+test('新建弹窗读取草稿选项后取消，名称和选定外观通过同一次完成提交',async t=>{
+  const {window,execute,snapshot}=await setup(t);
+  const request=command(snapshot);
+  const options={type:'getListCreateOptions',pageId:request.pageId,listId:request.listId,expectedListFingerprint:request.expectedListFingerprint};
+  assert.equal(validCommand(options),true);
+  const reply=await execute(options);
+  assert.equal(reply.code,'LIST_CREATE_OPTIONS');assert.equal(reply.dispatched,false);
+  assert.equal(window.fixtureListCancels,1);assert.equal(window.fixtureListInputs,0);assert.equal(window.fixtureListSaves,0);
+  assert.equal(window.document.querySelector('.reminder-list-detail'),null);
+  const {colors,icons,fingerprint}=reply.appearance;
+  const appearance={color:colors[1].key,iconKey:icons[1].key,expectedAppearanceFingerprint:fingerprint};
+  assert.equal(validCommand({...request,appearance}),true);
+  const result=await execute({...request,appearance});
+  assert.equal(result.code,'WEB_STATE_OBSERVED');
+  const added=result.snapshot.lists.find(list=>list.id===result.snapshot.activeListId);
+  assert.equal(added.title,request.value);assert.equal(added.color,appearance.color);assert.equal(added.icon.key,appearance.iconKey);
+  assert.equal(window.fixtureAppearanceClicks,2);assert.equal(window.fixtureListInputs,1);assert.equal(window.fixtureListSaves,1);
+  assert.equal((await execute({...request,appearance})).code,'ALREADY_SUBMITTED');assert.equal(window.fixtureListSaves,1);
+  const renamed=await execute({...command(result.snapshot,'renameList','随行验证 · 新建后改名'),requestId:'synthetic-list-rename-once'});
+  assert.equal(renamed.code,'WEB_STATE_OBSERVED');
+  const afterRename=renamed.snapshot.lists.find(list=>list.id===added.id);
+  assert.equal(afterRename.color,appearance.color);assert.equal(afterRename.icon.key,appearance.iconKey);
+});
+
+test('新建草稿外观选项变化时取消，名称和完成均不提交',async t=>{
+  const {window,execute,snapshot}=await setup(t);
+  const request=command(snapshot);
+  const {appearance}=await execute({...request,type:'getListCreateOptions'});
+  window.fixtureAfterAppearanceOpen=panel=>panel.querySelector('.color-picker button:last-child').remove();
+  const result=await execute({...request,appearance:{color:appearance.colors[1].key,iconKey:appearance.icons[1].key,expectedAppearanceFingerprint:appearance.fingerprint}});
+  assert.equal(result.code,'STALE_VIEW');assert.equal(result.dispatched,false);
+  assert.equal(window.fixtureListCancels,2);assert.equal(window.fixtureListInputs,0);assert.equal(window.fixtureListSaves,0);
+});
+
 test('同名清单只重命名当前句柄，其他清单、颜色与事项指纹保持',async t=>{
   const {window,execute,snapshot}=await setup(t);const result=await execute(command(snapshot,'renameList','随行验证 · 新名称'));
   assert.equal(result.code,'WEB_STATE_OBSERVED');assert.equal(result.snapshot.activeListId,snapshot.activeListId);

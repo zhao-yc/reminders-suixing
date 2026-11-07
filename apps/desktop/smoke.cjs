@@ -824,10 +824,32 @@ async function runSmoke({ frontendURL, root }) {
     await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("[role=treeitem][aria-selected=true] .inline-editable-label").textContent="随行验证 · 合成原清单"');
     const listBefore=await normalController.execute({type:'read'},'cn'),listTitle='随行验证 · 普通模式新清单',renamedListTitle=listTitle+' · 改名';
     normalUI.webContents.send('suixing:snapshot',{region:'cn',result:listBefore});await new Promise(resolve=>setTimeout(resolve,100));
+    const extraColors=['255, 149, 0','255, 204, 0','81, 170, 242','88, 86, 214','234, 66, 106','192, 119, 219','162, 132, 94','91, 103, 112','217, 166, 159'].map(color=>'rgb('+color+')');
+    await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.eval('+JSON.stringify('fixtureAppearanceColors.push(...'+JSON.stringify(extraColors)+')')+')');
     const listExpected={pageId:listBefore.snapshot.pageId,listId:listBefore.snapshot.activeListId,title:listBefore.snapshot.activeListTitle,operation:'create',value:listTitle};
     assert.equal(await normalUI.webContents.executeJavaScript('('+editTestList.toString()+')('+JSON.stringify({...listExpected,cancel:true})+')',true),true);
     assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureListSaves'),0);
     assert.equal(await normalUI.webContents.executeJavaScript('('+editTestList.toString()+')('+JSON.stringify({...listExpected,preview:true})+')',true),true);
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".create-list-dialog").getAttribute("aria-modal")'), 'true');
+    assert.equal(await normalUI.webContents.executeJavaScript('document.querySelectorAll(".create-list-swatches .color-choice").length'),12);
+    const changeDraftName=value=>normalUI.webContents.executeJavaScript('(()=>{const input=document.querySelector(".create-list-dialog input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,'+JSON.stringify(value)+');input.dispatchEvent(new Event("input",{bubbles:true}));input.focus();})()');
+    await changeDraftName('');
+    await waitForRenderer('document.querySelector(".create-list-dialog .save-list-edit[disabled]") && document.querySelector(".create-list-badge uni-image > div")?.style.backgroundImage.startsWith("url(")',normalUI);
+    fs.writeFileSync(path.join(root,'.local/list-create-dialog-light.png'),(await normalUI.webContents.capturePage()).toPNG());
+    nativeTheme.themeSource='dark';
+    await waitForRenderer('getComputedStyle(document.querySelector(".create-list-dialog")).backgroundColor==="rgb(39, 41, 44)"',normalUI);
+    await normalUI.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
+    fs.writeFileSync(path.join(root,'.local/list-create-dialog-dark.png'),(await normalUI.webContents.capturePage()).toPNG());
+    nativeTheme.themeSource='light';
+    await changeDraftName(listTitle);
+    assert.equal(await normalUI.webContents.executeJavaScript('(()=>{document.activeElement.dispatchEvent(new KeyboardEvent("keydown",{key:"Tab",shiftKey:true,bubbles:true,cancelable:true}));return document.activeElement.matches(".save-list-edit");})()'),true,'焦点应保持在新建弹窗内');
+    const createdAppearance=await normalUI.webContents.executeJavaScript(`(()=>{
+      const color=document.querySelectorAll('.create-list-swatches .color-choice')[2];color.click();
+      document.querySelector('.create-list-icon-toggle').click();return color.style.backgroundColor;
+    })()`);
+    await waitForRenderer('document.querySelectorAll(".create-list-icons .icon-choice").length>1',normalUI);
+    const createdIcon=await normalUI.webContents.executeJavaScript('(()=>{const icon=document.querySelectorAll(".create-list-icons .icon-choice")[1];icon.click();document.querySelector(".create-list-icon-toggle").click();return icon.dataset.key;})()');
+    await normalUI.webContents.executeJavaScript('document.querySelector(".create-list-dialog input").focus()');
     await normalUI.webContents.executeJavaScript('document.querySelector(".list-name-input input").dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",isComposing:true,bubbles:true,cancelable:true}))');
     assert.equal(await normalUI.webContents.executeJavaScript('!!document.querySelector(".list-editor")'),true);
     normalUI.setContentSize(390,780);await new Promise(resolve=>setTimeout(resolve,150));
@@ -838,11 +860,16 @@ async function runSmoke({ frontendURL, root }) {
     let listCreated;
     for(let attempt=0;attempt<50;attempt++){await new Promise(resolve=>setTimeout(resolve,100));listCreated=await normalController.execute({type:'read'},'cn');if(listCreated.snapshot?.activeListTitle===listTitle)break;}
     assert.equal(listCreated.snapshot.activeListTitle,listTitle);assert.equal(listCreated.snapshot.items.length,0);assert.equal(listCreated.snapshot.lists.length,listBefore.snapshot.lists.length+1);
+    const createdList=listCreated.snapshot.lists.find(list=>list.id===listCreated.snapshot.activeListId);
+    assert.equal(createdList.color,createdAppearance);assert.equal(createdList.icon.key,createdIcon);
+    assert.equal(await normalController.window().webContents.executeJavaScript('document.querySelector("iframe").contentWindow.fixtureListSaves'),1,'名称和外观应随新建一起提交一次');
     for(const old of listBefore.snapshot.lists)assert.ok(listCreated.snapshot.lists.some(list=>list.fingerprint===old.fingerprint));
     normalUI.setContentSize(1160,830);await new Promise(resolve=>setTimeout(resolve,100));
     let listChanged=listCreated;
     for(const value of [renamedListTitle,listTitle]) {
-      assert.equal(await normalUI.webContents.executeJavaScript('('+editTestList.toString()+')('+JSON.stringify({pageId:listChanged.snapshot.pageId,listId:listChanged.snapshot.activeListId,title:listChanged.snapshot.activeListTitle,operation:'rename',value})+')',true),true);
+      await waitForRenderer('document.querySelector(".list-content")?.dataset.listTitle==='+JSON.stringify(listChanged.snapshot.activeListTitle)+' && document.querySelector(".rename-list-button:not([disabled])") && !document.querySelector(".list-editor")',normalUI);
+      const renamed=await normalUI.webContents.executeJavaScript('('+editTestList.toString()+')('+JSON.stringify({pageId:listChanged.snapshot.pageId,listId:listChanged.snapshot.activeListId,title:listChanged.snapshot.activeListTitle,operation:'rename',value})+')',true);
+      assert.equal(renamed,true,'新建后应可进入重命名编辑');
       for(let attempt=0;attempt<50;attempt++){await new Promise(resolve=>setTimeout(resolve,100));listChanged=await normalController.execute({type:'read'},'cn');if(listChanged.snapshot?.activeListTitle===value)break;}
       assert.equal(listChanged.snapshot.activeListId,listCreated.snapshot.activeListId);assert.equal(listChanged.snapshot.activeListTitle,value);assert.equal(listChanged.snapshot.items.length,0);
     }
@@ -923,7 +950,8 @@ async function runSmoke({ frontendURL, root }) {
     normalUI.webContents.send('suixing:snapshot',{region:'cn',result:emptyAccount});await new Promise(resolve=>setTimeout(resolve,100));
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".account-title").textContent'),'已连接 iCloud');
     assert.equal(await normalUI.webContents.executeJavaScript('document.querySelector(".add-list-button").hasAttribute("disabled")'),false);
-    await normalUI.webContents.executeJavaScript('document.querySelector(".empty-add").click()');await new Promise(resolve=>setTimeout(resolve,100));
+    await normalUI.webContents.executeJavaScript('document.querySelector(".empty-add").click()');
+    await waitForRenderer('document.querySelector(".create-list-dialog input:not([disabled])")',normalUI);
     const firstListTitle='随行验证 · 空账户首份清单';
     await normalUI.webContents.executeJavaScript('(()=>{const input=document.querySelector(".list-name-input input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,'+JSON.stringify(firstListTitle)+');input.dispatchEvent(new Event("input",{bubbles:true}))})()');
     normalUI.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});normalUI.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});

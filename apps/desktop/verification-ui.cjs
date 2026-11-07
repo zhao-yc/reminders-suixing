@@ -266,7 +266,7 @@ async function editTestList(expected) {
     (list?.dataset.listTitle ?? document.querySelector('.list-title')?.textContent.trim())!==expected.title || !expected.title?.startsWith('随行验证') || document.querySelector('.inline-editor')) return false;
   const button=document.querySelector(expected.operation==='create'?'.add-list-button':'.rename-list-button');
   if(disabled(button)) return false;button.click();
-  for(let attempt=0;attempt<35 && !document.querySelector('.list-editor');attempt++) await pause();
+  for(let attempt=0;attempt<35 && disabled(document.querySelector('.list-editor input'));attempt++) await pause();
   const editor=document.querySelector('.list-editor'),current=document.querySelector('.list-content');
   if(!editor || editor.dataset.operation!==expected.operation || current?.dataset.pageId!==expected.pageId || current.dataset.listId!==expected.listId) return false;
   const input=editor.querySelector('.list-name-input input,input.list-name-input');
