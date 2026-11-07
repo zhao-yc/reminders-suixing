@@ -16,6 +16,7 @@ test('跨清单今天合并日期组，重复记录标识和父子上下文仍�
   assert.deepEqual(result.counts,{today:2,scheduled:2,pending:4,flagged:0,overdue:1,completed:1});
   assert.equal(result.unknown.today,1);
   assert.deepEqual(result.rows.map(entry=>[entry.list.id,entry.heading,entry.context]),[['one','逾期',false],['two','全天',true],['two','',false]]);
+  assert.deepEqual(result.rows.map(entry=>entry.overdue),[true,false,false]);
   assert.equal(new Set(result.rows.map(entry=>entry.key)).size,3);
   assert.equal(projectAcrossLists(lists,{...options,view:'today',query:'找不到'}).matchCount,0);
 });
@@ -39,6 +40,7 @@ test('今天包括今天与逾期，计划包括有日期的待办，不从附�
   const today=projectLoadedItems(items,{...options,view:'today'});
   assert.deepEqual(ids(today),['逾期','今天']);
   assert.deepEqual(today.counts,{pending:6,today:2,scheduled:3,completed:1,overdue:1,flagged:0});
+  assert.deepEqual([...today.overdueIds],['逾期']);
   assert.equal(today.unknownDates,2);assert.equal(today.unknownToday,2);
   assert.deepEqual(ids(projectLoadedItems(items,{...options,view:'scheduled'})),['逾期','今天','将来']);
   assert.deepEqual(ids(projectLoadedItems(items,{...options,view:'overdue'})),['逾期']);

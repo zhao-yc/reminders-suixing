@@ -151,7 +151,8 @@ async function runSmoke({ frontendURL, root }) {
     // 原清单没有已知的今天事项，另一份同名清单有一条且标记为部分加载。
     await officialWindow.webContents.executeJavaScript(`(()=>{
       const w=document.querySelector('iframe').contentWindow;
-      const date=new Date(),day=[date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');
+      const date=new Date();date.setDate(date.getDate()-1);
+      const day=[date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');
       w.sessionStorage.setItem('fixture-complete','false');
       w.sessionStorage.setItem('fixture-schedule-reminder-item-fixture-two-0',JSON.stringify({date:day,time:null,timeZone:null}));
       w.fixtureBeforeTodayRender=w.renderFixture;
@@ -166,6 +167,7 @@ async function runSmoke({ frontendURL, root }) {
     ui.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
     await waitForRenderer('document.querySelector(".across-lists .summary-row") !== null');
     assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".summary-row .reminder-title")].map(node=>node.textContent.trim())'),['随行验证 · 第二个同名清单']);
+    assert.equal(await ui.webContents.executeJavaScript('getComputedStyle(document.querySelector(".summary-row .reminder-metadata")).color'),'rgb(209, 46, 60)','跨清单的逾期日期应标红');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+'+" .desktop-card-count").textContent.trim()'),'1+');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".across-lists .date-view-description").textContent.includes("部分内容尚未读取")'),true);
     assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".network-notice")'),false,'导航状态下成功汇总后也应收起联网提示');
@@ -254,7 +256,7 @@ async function runSmoke({ frontendURL, root }) {
       schedule:{date:calendarDay(0),time,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},metadata:time
     });
     const viewItems=[viewItem('view-root','随行验证 · 日期父项',null),viewItem('view-child','随行验证 · 日期子项',calendarDay(0),{level:2,flagged:true}),
-      timedViewItem('view-evening','随行验证 · 今晚事项','18:00'),viewItem('view-overdue','随行验证 · 逾期',calendarDay(-1),{metadata:calendarDay(-1)}),
+      timedViewItem('view-evening','随行验证 · 今晚事项','18:00'),viewItem('view-overdue','随行验证 · 逾期',calendarDay(-1),{metadata:calendarDay(-1)+'，每月'}),
       timedViewItem('view-morning','随行验证 · 上午事项','09:30'),viewItem('view-future','随行验证 · 将来',calendarDay(1)),
       timedViewItem('view-afternoon','随行验证 · 下午事项','12:00'),viewItem('view-completed','随行验证 · 完成',calendarDay(0),{completed:true}),
       viewItem('view-unknown','随行验证 · 日期未知',null,{schedule:null,metadata:'今天（合成文案，不得用于猜测）'})];
@@ -279,6 +281,9 @@ async function runSmoke({ frontendURL, root }) {
     await chooseView('today');
     assert.deepEqual(await displayedIds(),['view-overdue','view-root','view-child','view-morning','view-afternoon','view-evening']);
     assert.deepEqual(await dateHeadings(),['逾期','全天','上午','下午','今晚']);
+    const overdueColor=()=>ui.webContents.executeJavaScript('getComputedStyle(document.querySelector(\'[data-record-id="view-overdue"] .reminder-metadata\')).color');
+    assert.equal(await overdueColor(),'rgb(209, 46, 60)');
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".reminder-metadata.is-overdue").length'),1,'当天事项不使用逾期色');
     assert.deepEqual(await ui.webContents.executeJavaScript('(()=>{const n=document.querySelector(".date-view-description");return [n.dataset.matches,n.dataset.unknown,n.textContent.includes("当前清单已加载")];})()'),['5','1',true]);
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(\'[data-record-id="view-root"] .completion-button\').hasAttribute("disabled")'),true);
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(\'[data-record-id="view-root"] .row-actions\')===null'),true);
@@ -307,6 +312,7 @@ async function runSmoke({ frontendURL, root }) {
       }
       assert.equal(current.dark,theme==='dark');
       assert.equal(current.background,theme==='dark'?'rgb(28, 29, 30)':'rgb(255, 255, 255)');
+      assert.equal(await overdueColor(),theme==='dark'?'rgb(255, 120, 131)':'rgb(209, 46, 60)');
       assert.equal(current.titleSize,lightState.titleSize);
       assert.equal(current.pageId,lightState.pageId,'配色切换不重载清单');
       assert.deepEqual(current.ids,lightState.ids);

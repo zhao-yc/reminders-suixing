@@ -25,11 +25,12 @@ export function projectLoadedItems(items,options={}) {
   const dueToday=item=>dated(item) && dayKnown(item) && item.schedule.date<=today;
   const overdue=item=>dueToday(item) && item.schedule.date<today;
   const pending=items.filter(item=>item.completed===false);
+  const overdueIds=new Set(pending.filter(overdue).map(item=>item.id));
   const counts={pending:pending.length,today:pending.filter(dueToday).length,scheduled:pending.filter(dated).length,
-    completed:items.filter(item=>item.completed===true).length,overdue:pending.filter(overdue).length,flagged:pending.filter(item=>item.flagged===true).length};
+    completed:items.filter(item=>item.completed===true).length,overdue:overdueIds.size,flagged:pending.filter(item=>item.flagged===true).length};
   const unknownDates=pending.filter(item=>!valid(item)).length;
   const unknownToday=pending.filter(item=>!dayKnown(item)).length;
-  const matchesDate={today:dueToday,scheduled:dated,overdue};
+  const matchesDate={today:dueToday,scheduled:dated,overdue:item=>overdueIds.has(item.id)};
   const base=view==='completed' ? items.filter(item=>item.completed===true) : pending.filter(item=>matchesDate[view]?.(item) ?? true);
   const matches=new Set(base.filter(item=>(!options.flagOnly || item.flagged===true) && (!query || (item.title+' '+(item.notes || '')).toLocaleLowerCase().includes(query))).map(item=>item.id));
   const included=new Set(matches),ancestors=[];
@@ -39,7 +40,7 @@ export function projectLoadedItems(items,options={}) {
     if(matches.has(item.id))for(const ancestor of ancestors)included.add(ancestor.id);
     ancestors.push({id:item.id,level});
   }
-  return {items:items.filter(item=>included.has(item.id)),contextIds:new Set([...included].filter(id=>!matches.has(id))),matchCount:matches.size,counts,unknownDates,unknownToday,flaggedCount:base.filter(item=>item.flagged===true).length};
+  return {items:items.filter(item=>included.has(item.id)),contextIds:new Set([...included].filter(id=>!matches.has(id))),overdueIds,matchCount:matches.size,counts,unknownDates,unknownToday,flaggedCount:base.filter(item=>item.flagged===true).length};
 }
 
 const TODAY_SECTIONS = ['逾期','全天','上午','下午','今晚'];
@@ -67,7 +68,7 @@ export function projectAcrossLists(lists, options) {
       heading = grouped.headings.get(item.id) || heading;
       if (!sections.has(heading)) sections.set(heading,[]);
       const section = sections.get(heading);
-      section.push({key:JSON.stringify([list.id,item.id]),list,item,heading:section.length?'':heading,context:projected.contextIds.has(item.id)});
+      section.push({key:JSON.stringify([list.id,item.id]),list,item,heading:section.length?'':heading,context:projected.contextIds.has(item.id),overdue:projected.overdueIds.has(item.id)});
     }
   }
   let headings = [...sections.keys()];
