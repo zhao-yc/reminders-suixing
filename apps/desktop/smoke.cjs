@@ -145,6 +145,8 @@ async function runSmoke({ frontendURL, root }) {
     await waitForRenderer('document.querySelector(".notice")?.dataset.code === "LOGIN_READY"');
     assert.equal(officialWindow.isVisible(),false);
     assert.deepEqual(await ui.webContents.executeJavaScript('[document.querySelectorAll(".list-button").length,document.querySelectorAll(".reminder-row").length,document.querySelector(".list-content").dataset.live]'),[2,0,'false']);
+    await ui.webContents.executeJavaScript('window.dispatchEvent(new Event("offline"));window.dispatchEvent(new Event("online"));');
+    await waitForRenderer('document.querySelector(".network-notice")?.dataset.state === "read-required"');
 
     // 原清单没有已知的今天事项，另一份同名清单有一条且标记为部分加载。
     await officialWindow.webContents.executeJavaScript(`(()=>{
@@ -166,6 +168,8 @@ async function runSmoke({ frontendURL, root }) {
     assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".today-row .reminder-title")].map(node=>node.textContent.trim())'),['随行验证 · 第二个同名清单']);
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+'+" .desktop-card-count").textContent.trim()'),'1+');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".across-today .date-view-description").textContent.includes("部分内容尚未读取")'),true);
+    assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".network-notice")'),false,'导航状态下成功汇总后也应收起联网提示');
+    assert.match(await ui.webContents.executeJavaScript('document.querySelector(".across-today .list-footer").textContent.trim()'),/^汇总于 \d{2}:\d{2}$/);
     const officialSelected=()=>officialWindow.webContents.executeJavaScript('document.querySelector("iframe").contentDocument.querySelector("[role=treeitem][aria-selected=true]").dataset.list');
     assert.equal(await officialSelected(),'one','汇总完成后恢复原选区');
     await ui.webContents.executeJavaScript('document.querySelector(".today-source-button").click()');

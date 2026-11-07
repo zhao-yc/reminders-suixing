@@ -94,7 +94,7 @@
           </template>
           <view v-if="!todayProjection.rows.length" class="empty-list"><text>{{ busy ? '正在逐份读取清单…' : !todayData ? '点击刷新重新读取清单。' : todayPartial || todayProjection.unknown ? '已确认的内容中没有符合条件的事项。' : search ? '没有找到相关事项。' : '已加载内容中没有今天或逾期的待办。' }}</text></view>
         </scroll-view>
-        <view v-if="todayData" class="list-footer"><text>点击来源清单可编辑事项</text><text>汇总于 {{ todayReadTime }}</text></view>
+        <view v-if="todayData" class="list-footer today-footer"><text>汇总于 {{ todayReadTime }}</text></view>
       </view>
       <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-list-title="snapshot.activeListTitle" :data-captured-at="snapshot.capturedAt" :data-live="String(live)">
         <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title" role="heading" aria-level="1">{{ snapshot.activeListTitle || (snapshot.emptyAccount ? '还没有清单' : '选择清单') }}</text><text v-if="snapshot.activeListId" class="heading-count">{{ incompleteCount }}</text><button v-if="canManageLists && snapshot.activeListId" class="rename-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="重命名清单" title="重命名当前清单" @click="startListEdit('rename')">✎</button><button v-if="canEditListAppearance && snapshot.activeListId" class="list-appearance-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="清单颜色与图标" title="清单颜色与图标" @click="startListAppearance">◉</button><button v-if="canDeleteList && snapshot.activeListId" class="delete-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="删除清单" title="删除当前清单" @click="startListDeletion">⌫</button></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : !snapshot.activeListId ? '清单导航' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
@@ -335,8 +335,11 @@ function accept(result,readRecovery=false) {
   noticeCode.value = result.code || '';
   noticeStage.value = ['home','reminders','opening','waiting-navigation','selecting-list','waiting-selected'].includes(result.reconnectStage)?result.reconnectStage:'';
   if(result.needsListSelection) listSelectionRequired.value=true;
+  // 跨清单汇总可在清单导航状态下确认连接，但只有单个清单快照能恢复编辑。
+  if(readRecovery && result.ok && (result.snapshot || (result.code==='TODAY_READY' && !result.needsListSelection))) {
+    networkOffline.value=false;networkNeedsRead.value=false;explicitReadGeneration.value++;
+  }
   if (result.ok && result.snapshot) {
-    if(readRecovery){networkOffline.value=false;networkNeedsRead.value=false;explicitReadGeneration.value++;}
     snapshot.value = result.snapshot;
     live.value = !listSelectionRequired.value && !networkOffline.value && !networkNeedsRead.value;
     isDemo.value = false;
@@ -1028,6 +1031,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .desktop-sidebar-layout .sidebar-footer { gap:5px; padding:18px 8px 0; }
 .desktop-sidebar-layout .list-view-tools { margin-left:auto; }
 .today-row-meta { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; }
+.today-footer { justify-content:flex-end; }
 .today-source-button,.local-today-button { margin:0; color:#2872ba; font-size:11px; text-align:left; }
 .local-today-button[aria-pressed='true'] { font-weight:650; }
 .today-source-button:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
