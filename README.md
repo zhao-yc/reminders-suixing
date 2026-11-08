@@ -39,7 +39,7 @@
 | 目标 | 当前范围 |
 | --- | --- |
 | Windows | 真实新增经官方重载和用户独立苹果客户端核对；独立包登录、完成状态、标题、备注与单个普通测试事项删除通过，删除经另一 Windows 会话冷启动读回；Mac/iPhone 删除、完整日常功能与长期会话待验 |
-| Android | uni-app 资源构建、5+ WebView 桥接及生命周期合成回归通过；独立 APK 与真机另行验收 |
+| Android | uni-app 资源构建和 5+ WebView 合成回归通过；已生成并核验 0.1.0 签名测试 APK，真机安装、登录及读写待验 |
 | HarmonyOS NEXT | ArkWeb 桥接已接入共用页面，9 项逻辑层回归及 HBuilderX 资源导出通过；原生 ETS/HAP 编译、官方登录与真机仍待验 |
 | 普通网页 | 仅界面预览；不使用跨域 iframe 绕过 iCloud 限制 |
 
