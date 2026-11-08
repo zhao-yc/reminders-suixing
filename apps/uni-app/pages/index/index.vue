@@ -29,7 +29,7 @@
           aria-label="新建清单" title="新建清单" @click="startListEdit('create', $event)"><image class="desktop-icon" src="/static/desktop-icons/journal-plus.svg" mode="aspectFit" aria-hidden="true" /></button>
       </view>
       <view v-if="!snapshot" class="sidebar-placeholder">连接后，你的清单会显示在这里。</view>
-      <button v-for="list in snapshot?.lists || []" :key="list.id" class="list-button" :data-list-id="list.id" :class="{ selected: list.id === snapshot.activeListId }" :disabled="busy || !!editing" @click="selectList(list)">
+      <button v-for="list in snapshot?.lists || []" :key="list.id" class="list-button" :data-list-id="list.id" :class="{ selected: list.id === snapshot.activeListId }" :disabled="busy || !!editing" @click="selectList(list)" @dblclick.stop="renameListFromSidebar(list)">
         <view class="list-symbol" :style="{ background: list.color }"><image v-if="listIconURL(list.icon)" class="list-glyph" :src="listIconURL(list.icon)" mode="aspectFit" aria-hidden="true" /><image v-else-if="desktopWide" class="desktop-icon" src="/static/desktop-icons/list-ul.svg" mode="aspectFit" aria-hidden="true" /><text v-else>≡</text></view><text class="list-name">{{ list.title }}</text>
         <text v-if="list.id === snapshot.activeListId" class="list-count">{{ incompleteCount }}</text>
       </button>
@@ -97,7 +97,7 @@
         <view v-if="summaryData" class="list-footer summary-footer"><text>汇总于 {{ summaryReadTime }}</text></view>
       </view>
       <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-list-title="snapshot.activeListTitle" :data-captured-at="snapshot.capturedAt" :data-live="String(live)">
-        <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title" role="heading" aria-level="1">{{ snapshot.activeListTitle || (snapshot.emptyAccount ? '还没有清单' : '选择清单') }}</text><text v-if="snapshot.activeListId" class="heading-count">{{ incompleteCount }}</text><button v-if="canManageLists && snapshot.activeListId" class="rename-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="重命名清单" title="重命名当前清单" @click="startListEdit('rename')">✎</button><button v-if="canEditListAppearance && snapshot.activeListId" class="list-appearance-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="清单颜色与图标" title="清单颜色与图标" @click="startListAppearance">◉</button><button v-if="canDeleteList && snapshot.activeListId" class="delete-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="删除清单" title="删除当前清单" @click="startListDeletion">⌫</button></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : !snapshot.activeListId ? '清单导航' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
+        <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title" role="heading" aria-level="1" tabindex="-1" @click="$event.currentTarget.focus()" @dblclick="canManageLists && snapshot.activeListId ? startListEdit('rename') : undefined" @keydown="listTitleKeydown">{{ snapshot.activeListTitle || (snapshot.emptyAccount ? '还没有清单' : '选择清单') }}</text><text v-if="snapshot.activeListId" class="heading-count">{{ incompleteCount }}</text><button v-if="canManageLists && snapshot.activeListId" class="rename-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="重命名清单" title="重命名当前清单" @click="startListEdit('rename')">✎</button><button v-if="canEditListAppearance && snapshot.activeListId" class="list-appearance-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="清单颜色与图标" title="清单颜色与图标" @click="startListAppearance">◉</button><button v-if="canDeleteList && snapshot.activeListId" class="delete-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="删除清单" title="删除当前清单" @click="startListDeletion">⌫</button></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : !snapshot.activeListId ? '清单导航' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
         <view v-if="editing?.field === 'list-delete'" class="inline-editor list-delete-confirmation" role="alertdialog" aria-label="确认删除清单"><text class="delete-title">删除清单“{{ editing.title }}”？</text><text>清单及其中的全部事项都会从 iCloud 和同步设备移除，包括当前尚未加载的内容。</text><text class="muted small">共享清单请在官方页面处理。</text><view class="editor-actions"><button class="confirm-list-delete" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '删除中…' : '确认删除清单' }}</button><button class="cancel-list-delete" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view></view>
         <view v-if="editing?.field === 'list-appearance'" class="inline-editor appearance-editor" role="group" aria-label="清单颜色与图标"><text class="editor-label">{{ editing.title }} · 颜色与图标</text><view class="appearance-colors" role="radiogroup" aria-label="清单颜色"><button v-for="(option,index) in editing.colors" :key="option.key" class="appearance-choice color-choice" :data-key="option.key" role="radio" :aria-checked="String(editing.color === option.key)" :aria-label="appearanceColorLabel(option.color,index)" :title="appearanceColorLabel(option.color,index)" :tabindex="busy || editing.blocked || editing.color !== option.key ? -1 : 0" :disabled="busy || editing.blocked" :style="{background:option.color}" @click="editing.color = option.key"><text v-if="editing.color === option.key">✓</text></button></view><scroll-view class="appearance-icons-scroll" scroll-y><view class="appearance-icons" role="radiogroup" aria-label="清单图标"><button v-for="(option,index) in editing.icons" :key="option.key" class="appearance-choice icon-choice" :data-key="option.key" :class="{'icon-choice-selected':editing.iconKey === option.key}" role="radio" :aria-checked="String(editing.iconKey === option.key)" :aria-label="'图标 '+(index+1)" :title="'图标 '+(index+1)" :tabindex="busy || editing.blocked || editing.iconKey !== option.key ? -1 : 0" :disabled="busy || editing.blocked" @click="editing.iconKey = option.key"><image class="appearance-glyph" :src="listIconURL(option.icon)" mode="aspectFit" aria-hidden="true" /></button></view></scroll-view><text class="muted small">保存后同步到使用此清单的设备。</text><view class="editor-actions"><button class="save-list-appearance" role="button" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '保存中…' : '保存外观' }}</button><button class="cancel-list-appearance" role="button" :disabled="busy" @click="endEdit">取消</button></view></view>
         <view v-if="editing?.listOperation === 'rename'" class="inline-editor list-editor" data-operation="rename"><text class="editor-label">重命名清单</text><input v-model="editing.value" class="edit-field list-name-input" :maxlength="100" :focus="true" :disabled="busy || editing.blocked" aria-label="清单名称" @confirm="confirmEdit" @keydown="editKeydown" /><text class="muted small">保存后可单独调整颜色与图标。</text><view class="editor-actions"><button class="save-edit save-list-edit" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '保存中…' : '保存名称' }}</button><button class="cancel-list-edit" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view></view>
@@ -123,11 +123,10 @@
         <text v-if="sortMode.startsWith('priority-')" class="sort-description">优先级仅查看，请在苹果设备上修改</text>
         <text v-if="flagOnly" class="sort-description">只显示当前清单已加载的旗标事项{{ unreadableFlags ? '；还有旗标状态不可读的事项，请在官方页面核对' : '' }}</text>
         <scroll-view class="items-scroll" scroll-y>
-          <view v-if="editing?.creating" class="reminder-row new-reminder-row"><view class="draft-circle"></view><view class="inline-editor"><text class="editor-label">新提醒事项 · {{ snapshot.activeListTitle }}</text><input v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" placeholder="提醒我…" aria-label="新事项标题" @confirm="confirmEdit" @keydown="editKeydown" /><view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '添加中…' : '添加' }}</button><button :disabled="busy" @click="endEdit">取消</button></view></view></view>
           <view v-if="!visibleItems.length && !editing?.creating" class="empty-list"><text class="empty-circle">✓</text><text>{{ emptyViewMessage }}</text><button v-if="canCreateFirstList" class="empty-add" :disabled="busy || !!editing" @click="startListEdit('create', $event)">新建清单</button><button v-else-if="flagOnly" class="empty-add" @click="flagOnly = false">显示全部事项</button><button v-else-if="snapshot.activeListId && canCreate && tab === 'pending' && !search" class="empty-add" :disabled="busy || !!editing || (!live && !isDemo)" @click="startCreate">添加提醒事项</button></view>
           <template v-for="item in visibleItems" :key="item.id">
           <view v-if="dateView.headings.has(item.id)" class="date-section-heading" role="heading" aria-level="2">{{ dateView.headings.get(item.id) }}</view>
-          <view class="reminder-row" :data-record-id="item.id" :data-priority="item.priority" :data-view-context="String(viewContext.has(item.id))" :class="{ completed: item.completed, 'is-subtask': item.level > 1, 'view-context': viewContext.has(item.id) }">
+          <view class="reminder-row" :data-record-id="item.id" :data-priority="item.priority" :data-view-context="String(viewContext.has(item.id))" :data-selected="String(selectedItemId === item.id)" tabindex="-1" role="listitem" :aria-selected="String(selectedItemId === item.id)" :class="{ completed: item.completed, 'is-subtask': item.level > 1, 'view-context': viewContext.has(item.id) }" @click="selectItem(item, $event)" @focus="selectedItemId = item.id" @keydown="itemKeydown(item, $event)">
             <button class="completion-button" :class="{ checked: item.completed }" :disabled="busy || !!editing || (!live && !isDemo) || item.disabled || viewContext.has(item.id)" :aria-label="(viewContext.has(item.id) ? '所属主事项，仅供定位：' : item.completed ? '取消完成：' : '完成：') + item.title" @click="toggle(item)"><text v-if="item.completed">✓</text></button>
             <view class="reminder-copy">
               <view v-if="editing?.id === item.id" class="inline-editor">
@@ -157,6 +156,7 @@
             <text v-if="item.level > 1" class="subtask-tag">子事项</text>
           </view>
           </template>
+          <view v-if="editing?.creating" class="reminder-row new-reminder-row" data-creation-mode="inline"><view class="draft-circle"></view><view class="inline-editor"><text class="editor-label">新提醒事项 · {{ snapshot.activeListTitle }}</text><input v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" placeholder="提醒我…" aria-label="新事项标题" @confirm="confirmEdit" @keydown="editKeydown" /><view class="editor-actions"><button class="save-edit" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '添加中…' : '添加' }}</button><button :disabled="busy" @click="endEdit">取消</button></view></view></view>
           <view class="list-bottom-space"></view>
         </scroll-view>
         <view class="list-footer"><text>{{ isDemo ? '此处操作只改变示例数据' : snapshot.coverage }}{{ snapshot.partial ? ' · 尚有内容未加载' : '' }}</text><view class="read-status"><button v-if="canAutoRead && !isDemo" class="auto-read-toggle" role="button" :aria-pressed="String(autoReadEnabled)" :disabled="autoReading" title="窗口可见且空闲时读取当前清单，定期重载官方页面以检查跨设备变更；网络恢复后请手动刷新。" @click="autoReadEnabled = !autoReadEnabled">{{ autoReading ? '更新中…' : autoReadEnabled ? '自动更新已开启' : '自动更新已暂停' }}</button><text>{{ formattedTime }}</text></view></view>
@@ -244,6 +244,8 @@ const networkReason = ref('offline');
 const networkNeedsRead = ref(false);
 let networkRevision = 0;
 const editing = ref(null);
+// 选中行沿用 macOS 提醒事项的“先选中、再用键盘操作”习惯；不把选中状态写入云端。
+const selectedItemId = ref(null);
 const creatingList = computed(()=>editing.value?.listOperation==='create');
 const createListIcon = computed(()=>{
   const appearance=editing.value?.appearance;
@@ -364,6 +366,9 @@ watch(snapshot,value=>{
   const prior=new Map(report.lists.map(entry=>[entry.list.id,entry]));
   const lists=value.lists.flatMap(list=>list.id===value.activeListId ? [{list,items:value.items,partial:value.partial}] : prior.has(list.id) ? [{...prior.get(list.id),list}] : []);
   summaryCache.value={...summaryCache.value,report:{...report,lists,totalLists:value.lists.length}};
+});
+watch(snapshot, value => {
+  if (selectedItemId.value && !value?.items?.some(item => item.id === selectedItemId.value)) selectedItemId.value = null;
 });
 const dateViewLabel = computed(() => ({ today:'今天与逾期', scheduled:'已安排日期', overdue:'早于今天' })[tab.value]);
 const emptyViewMessage = computed(() => {
@@ -578,6 +583,62 @@ async function selectList(list) {
   if (result?.ok) await loadInitialSummary();
 }
 
+async function renameListFromSidebar(list) {
+  if (!canManageLists.value || busy.value || editing.value || !live.value) return;
+  if (list.id !== snapshot.value?.activeListId) {
+    await selectList(list);
+    if (busy.value || editing.value || snapshot.value?.activeListId !== list.id) return;
+  }
+  startListEdit('rename');
+}
+
+function listTitleKeydown(event) {
+  if (event.isComposing || event.keyCode === 229 || !canManageLists.value || !snapshot.value?.activeListId) return;
+  if (event.key === 'Enter' && !busy.value && !editing.value && live.value) {
+    event.preventDefault();
+    startListEdit('rename');
+  }
+}
+
+function selectItem(item, event) {
+  if (editing.value || viewContext.value.has(item.id)) return;
+  if (event?.target?.closest?.('button,input,textarea,.inline-editor')) return;
+  selectedItemId.value = item.id;
+  event?.currentTarget?.focus?.();
+}
+
+function handleItemKeyboard(item, event) {
+  if (event.isComposing || event.keyCode === 229 || busy.value || editing.value || viewContext.value.has(item.id)) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    selectedItemId.value = null;
+    event.target?.blur?.();
+    return;
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    selectedItemId.value = item.id;
+    startEdit(item, 'title');
+    return;
+  }
+  if (event.key === ' ') {
+    event.preventDefault();
+    selectedItemId.value = item.id;
+    toggle(item);
+    return;
+  }
+  if (event.key === 'Backspace' || event.key === 'Delete') {
+    event.preventDefault();
+    selectedItemId.value = item.id;
+    startDelete(item);
+  }
+}
+
+function itemKeydown(item, event) {
+  if (event.target !== event.currentTarget) return;
+  handleItemKeyboard(item, event);
+}
+
 /** 写入传递记录 ID、目标状态和最新指纹，禁止用标题匹配或简单地重复点击。 */
 async function toggle(item) {
   if(viewContext.value.has(item.id))return;
@@ -597,6 +658,7 @@ async function toggleFlag(item) {
 
 async function startDelete(item) {
   if(!canDelete.value || busy.value || editing.value || item.disabled || (!live.value && !isDemo.value)) return;
+  selectedItemId.value = item.id;
   let target=item;
   if(!isDemo.value) {
     const result=await run({type:'getDeleteInfo',pageId:snapshot.value.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed});
@@ -612,10 +674,20 @@ async function startDelete(item) {
 }
 
 async function saveDeletion(current) {
-  if(isDemo.value) {snapshot.value.items=snapshot.value.items.filter(item=>item.id!==current.id);editing.value=null;return;}
+  if(isDemo.value) {
+    snapshot.value.items=snapshot.value.items.filter(item=>item.id!==current.id);
+    editing.value=null;
+    selectedItemId.value=null;
+    return;
+  }
   if(!live.value) return;
   const result=await run({type:'deleteItem',pageId:current.pageId,listId:current.listId,id:current.id,fingerprint:current.fingerprint,expectedCompleted:current.expectedCompleted,confirmed:true,requestId:current.requestId});
-  if(result?.ok) editing.value=null;
+  if(result?.ok) {
+    editing.value=null;
+    selectedItemId.value=null;
+    // 删除后把焦点交还给列表，避免 macOS 式连续清理时焦点落到页面顶部。
+    if (typeof document !== 'undefined') nextTick(()=>document.querySelector('.list-content .reminder-row[data-record-id]')?.focus());
+  }
   else current.blocked=true;
 }
 
@@ -780,6 +852,7 @@ function startEdit(item, field) {
   if(viewContext.value.has(item.id))return;
   if (!canEdit.value || busy.value || editing.value || item.disabled || (!live.value && !isDemo.value)) return;
   if (field === 'notes' && item.notesTruncated) return;
+  selectedItemId.value = item.id;
   editing.value = { id: item.id, field, value: item[field] || '', pageId: snapshot.value.pageId, listId: item.listId,
     fingerprint: item.fingerprint, expectedCompleted: item.completed, blocked: false };
 }
@@ -854,6 +927,7 @@ async function startCreate() {
   tab.value = 'pending';
   flagOnly.value = false;
   search.value = '';
+  selectedItemId.value = null;
   editing.value = { creating: true, field: 'title', value: '', pageId: snapshot.value.pageId, listId: snapshot.value.activeListId,
     requestId: 'create-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2), blocked: false };
 }
@@ -966,6 +1040,11 @@ function workspaceKeydown(event) {
   if(notificationsPanelOpen.value && event.key==='Escape'){event.preventDefault();notificationsPanelOpen.value=false;nextTick(()=>document.querySelector('.notifications-settings-button')?.focus());return;}
   if(!snapshot.value)return;
   if (event.target?.closest?.('.desktop-sort') && sortKeydown(event)) return;
+  const itemRow=event.target?.closest?.('.reminder-row[data-record-id]');
+  if(itemRow && event.target===itemRow && !editing.value) {
+    const item=visibleItems.value.find(candidate=>candidate.id===itemRow.dataset.recordId);
+    if(item) { selectedItemId.value=item.id; handleItemKeyboard(item,event); return; }
+  }
   if((creatingList.value || editing.value?.field==='list-appearance') && event.target?.closest?.('.appearance-choice') && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key)){
     event.preventDefault();if(busy.value || editing.value.blocked)return;
     const group=event.target.closest('[role="radiogroup"]'),buttons=[...group.querySelectorAll('.appearance-choice')],index=buttons.indexOf(event.target.closest('.appearance-choice'));
@@ -1075,9 +1154,9 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .welcome { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:36px 20px 60px; }.welcome-art { width:100px; height:115px; padding:22px 17px; border:1px solid #edf0f4; box-shadow:0 12px 35px #2d497017; border-radius:23px; margin-bottom:34px; transform:rotate(-6deg); display:flex; flex-direction:column; gap:15px; }.welcome-line { display:flex; align-items:center; gap:12px; height:14px; color:#1687ff; font-size:20px; }.welcome-line:nth-child(2) { color:#ed9659; }.welcome-line:nth-child(3) { color:#ac89d1; }.welcome-line view { height:4px; background:#e7eaf0; border-radius:2px; flex:1; }.welcome-kicker { font-size:11px; letter-spacing:2px; color:#8697ab; margin-bottom:16px; }.welcome-title { font-size:36px; font-weight:650; letter-spacing:-1.5px; line-height:1.5; color:#263247; }.welcome-description { font-size:13px; line-height:1.9; color:#9099a6; margin-top:17px; }.welcome-connect { margin-top:28px; padding:13px 28px; }.demo-link { color:#7f8b9d; font-size:12px; padding:18px 0; }.welcome-footnote { color:#afb5be; font-size:10px; margin-top:9px; }
 .list-content { flex:1; min-height:0; display:flex; flex-direction:column; padding:34px 44px 0; }.list-heading { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-bottom:27px; }.eyebrow { display:block; font-size:11px; letter-spacing:1.5px; color:#929ead; margin-bottom:8px; }.title-line { display:flex; align-items:baseline; gap:15px; }.list-title { font-size:35px; font-weight:650; letter-spacing:-1px; color:#1687ff; }.heading-count { font-size:30px; font-weight:350; color:#ced7e4; }.source-chip { display:flex; align-items:center; gap:6px; font-size:10px; color:#8592a3; padding:7px 10px; border:1px solid #edf0f4; border-radius:20px; }.source-chip view { width:5px; height:5px; background:#88b7e3; border-radius:50%; }
 .list-controls { display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #edf0f5; flex-shrink:0; gap:14px; }.tabs { display:flex; gap:24px; }.tabs button { padding:11px 0 14px; border-bottom:2px solid transparent; color:#9aa3b0; font-size:12px; border-radius:0; }.tabs button.active { border-bottom-color:#1687ff; color:#47566e; }.tabs text { color:#aeb6c1; margin-left:5px; font-size:10px; }.search { width:158px; font-size:11px; height:32px; padding:0 11px; background:#f5f7fa; border-radius:7px; color:#4d596a; }
-.items-scroll { flex:1; min-height:0; height:1px; }.reminder-row { display:flex; align-items:flex-start; gap:15px; border-bottom:1px solid #f0f2f5; padding:23px 2px; }.completion-button { width:22px; height:22px; border:1.5px solid #cbd4df; border-radius:50%; flex-shrink:0; margin-top:1px; color:#fff; display:flex; align-items:center; justify-content:center; font-size:13px; }.completion-button.checked { background:#a4b4c8; border-color:#a4b4c8; }.reminder-copy { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }.reminder-title { font-size:15px; color:#3d4859; line-height:1.6; word-break:break-word; }.completed .reminder-title { color:#a6afbb; text-decoration:line-through; }.reminder-notes { color:#8f9aaa; font-size:12px; line-height:1.6; white-space:pre-wrap; }.reminder-metadata { color:#9aa5b4; font-size:11px; line-height:1.6; }.subtask-tag { font-size:10px; color:#a3adba; padding-top:5px; }.list-footer { flex-shrink:0; border-top:1px solid #f1f3f7; padding:17px 0 20px; display:flex; justify-content:space-between; color:#a3adba; font-size:10px; gap:10px; }.list-bottom-space { height:30px; }.empty-list { display:flex; align-items:center; flex-direction:column; gap:18px; padding:85px 20px; font-size:12px; color:#9aa5b4; text-align:center; }.empty-circle { width:42px; height:42px; border:1px solid #dfe6ef; border-radius:50%; line-height:42px; color:#a6b8ce; font-size:22px; }
+.items-scroll { flex:1; min-height:0; height:1px; }.reminder-row { display:flex; align-items:flex-start; gap:15px; border-bottom:1px solid #f0f2f5; padding:23px 2px; border-radius:8px; transition:background .15s ease, box-shadow .15s ease; }.reminder-row[tabindex="-1"] { cursor:default; }.reminder-row[data-selected="true"],.reminder-row:focus-visible { background:#f2f7ff; box-shadow:inset 3px 0 #1687ff; outline:none; }.completion-button { width:22px; height:22px; border:1.5px solid #cbd4df; border-radius:50%; flex-shrink:0; margin-top:1px; color:#fff; display:flex; align-items:center; justify-content:center; font-size:13px; }.completion-button.checked { background:#a4b4c8; border-color:#a4b4c8; }.reminder-copy { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }.reminder-title { font-size:15px; color:#3d4859; line-height:1.6; word-break:break-word; }.completed .reminder-title { color:#a6afbb; text-decoration:line-through; }.reminder-notes { color:#8f9aaa; font-size:12px; line-height:1.6; white-space:pre-wrap; }.reminder-metadata { color:#9aa5b4; font-size:11px; line-height:1.6; }.subtask-tag { font-size:10px; color:#a3adba; padding-top:5px; }.list-footer { flex-shrink:0; border-top:1px solid #f1f3f7; padding:17px 0 20px; display:flex; justify-content:space-between; color:#a3adba; font-size:10px; gap:10px; }.list-bottom-space { height:30px; }.empty-list { display:flex; align-items:center; flex-direction:column; gap:18px; padding:85px 20px; font-size:12px; color:#9aa5b4; text-align:center; }.empty-circle { width:42px; height:42px; border:1px solid #dfe6ef; border-radius:50%; line-height:42px; color:#a6b8ce; font-size:22px; }
 .mobile-menu { display:none; }.sidebar-scrim { display:none; }
-.row-actions { display:flex; gap:3px; flex-shrink:0; opacity:0; transition:opacity .15s; }.reminder-row:hover .row-actions,.reminder-row:focus-within .row-actions { opacity:1; }.row-actions button { margin:0; padding:0; width:25px; height:28px; color:#8393a8; font-size:17px; }.row-actions button:hover { color:#1687ff; background:#eef5ff; border-radius:6px; }
+.row-actions { display:flex; gap:3px; flex-shrink:0; opacity:0; transition:opacity .15s; }.reminder-row:hover .row-actions,.reminder-row:focus-within .row-actions,.reminder-row[data-selected="true"] .row-actions { opacity:1; }.row-actions button { margin:0; padding:0; width:25px; height:28px; color:#8393a8; font-size:17px; }.row-actions button:hover { color:#1687ff; background:#eef5ff; border-radius:6px; }
 .flag-mark,.row-actions .flag-active { color:#ed9b38; }.flag-filter { margin:0; padding:8px 6px; color:#8492a5; background:transparent; font-size:11px; flex-shrink:0; }.flag-filter.flag-active { color:#b77d23; background:#fff5e5; border-radius:6px; }.flag-toggle-button:focus-visible,.flag-filter:focus-visible,.reconnect-button:focus-visible { outline:2px solid #1687ff; outline-offset:2px; border-radius:4px; }
 .reminder-title-line { display:flex; align-items:baseline; gap:5px; min-width:0; }.reminder-title-line .reminder-title { min-width:0; }.flag-mark { flex-shrink:0; }.priority-mark { color:#c67b22; font-size:15px; font-weight:700; letter-spacing:1px; flex-shrink:0; }
 .inline-editor { display:flex; flex-direction:column; gap:9px; width:100%; }.editor-label { color:#8393a8; font-size:11px; }.edit-field { box-sizing:border-box; width:100%; height:38px; padding:8px 10px; color:#3d4859; font-size:14px; border:1px solid #a3caff; border-radius:7px; background:#fafcff; }.edit-notes { min-height:95px; line-height:1.7; }.editor-actions { display:flex; gap:10px; }.editor-actions button { margin:0; padding:6px 11px; font-size:12px; color:#8491a4; border-radius:6px; }.editor-actions .save-edit { color:#fff; background:#1687ff; }.editor-actions .save-edit[disabled] { background:#aebed2; }.edit-recovery { margin:8px 34px 0; display:flex; align-items:center; gap:12px; font-size:12px; color:#b36139; }.edit-recovery button { margin:0; padding:5px; font-size:12px; color:#1687ff; }.reminder-notes { overflow-wrap:anywhere; }
@@ -1115,7 +1194,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 @media (max-width:760px) { .toolbar.with-tools { height:calc(114px + env(safe-area-inset-top)); padding-bottom:10px; flex-wrap:wrap; align-content:center; row-gap:10px; }.toolbar.with-tools .mobile-menu { order:1; }.toolbar-actions { order:2; margin-left:auto; }.quick-tools { order:3; flex-basis:100%; }.toolbar-search { flex:1; width:auto; }.list-content { padding-top:22px; }.new-reminder-row { padding:15px 10px; } }
 @media (max-width:760px) { .list-view-tools .current-scope { display:none; }.list-view-tools { gap:0; }.sort-picker { max-width:116px; }.sort-picker-label { font-size:10px; }.sort-description { font-size:9px; } }
 .delete-confirmation { display:flex; flex-direction:column; gap:8px; font-size:13px; line-height:1.6; color:#7d8795; }.delete-title { font-size:16px; color:#39475b; overflow-wrap:anywhere; }.editor-actions .confirm-delete { background:#ce5353; color:#fff; }.row-actions .delete-item-button { color:#bc7272; }.delete-item-button:focus-visible,.confirm-delete:focus-visible,.cancel-delete:focus-visible { outline:2px solid #1687ff; outline-offset:2px; border-radius:4px; }
-.add-list-button { margin:14px 0 0; padding:10px; color:#4f79b7; font-size:13px; text-align:left; border:1px solid #dce5f1; border-radius:8px; }.rename-list-button { margin:0; padding:2px 5px; color:#8b9bb1; font-size:17px; flex-shrink:0; }.list-heading > :first-child { min-width:0; }.title-line { flex-wrap:wrap; }.list-title { overflow-wrap:anywhere; }.list-editor { padding:15px; margin:0 0 16px; border:1px solid #dce6f4; border-radius:10px; background:#f8fbff; }.add-list-button:focus-visible,.rename-list-button:focus-visible,.save-list-edit:focus-visible,.cancel-list-edit:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
+.add-list-button { margin:14px 0 0; padding:10px; color:#4f79b7; font-size:13px; text-align:left; border:1px solid #dce5f1; border-radius:8px; }.rename-list-button { margin:0; padding:2px 5px; color:#8b9bb1; font-size:17px; flex-shrink:0; }.list-heading > :first-child { min-width:0; }.title-line { flex-wrap:wrap; }.list-title { overflow-wrap:anywhere; }.list-title:focus-visible { outline:2px solid #1687ff; outline-offset:3px; border-radius:4px; }.list-editor { padding:15px; margin:0 0 16px; border:1px solid #dce6f4; border-radius:10px; background:#f8fbff; }.add-list-button:focus-visible,.rename-list-button:focus-visible,.save-list-edit:focus-visible,.cancel-list-edit:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
 .list-delete-confirmation { padding:16px; margin-bottom:16px; border:1px solid #efdada; border-radius:10px; background:#fffafa; display:flex; flex-direction:column; gap:10px; font-size:13px; line-height:1.7; color:#69798b; }.editor-actions .confirm-list-delete { background:#ce5353; color:#fff; }.delete-list-button { margin:0; padding:2px 5px; color:#bd7a7a; font-size:17px; flex-shrink:0; }.delete-list-button:focus-visible,.confirm-list-delete:focus-visible,.cancel-list-delete:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
 .list-glyph { width:26px; height:26px; filter:brightness(0) invert(1); }.list-appearance-button { margin:0; padding:2px 5px; font-size:18px; color:#8198ba; }.appearance-editor { padding:16px; margin-bottom:16px; border:1px solid #dce6f4; border-radius:10px; background:#f8fbff; gap:14px; }.appearance-colors,.appearance-icons { display:flex; flex-wrap:wrap; gap:10px; }.appearance-choice { margin:0; padding:0; flex-shrink:0; }.color-choice { width:30px; height:30px; border-radius:50%; color:#fff; font-size:18px; text-shadow:0 1px 3px #0008; border:2px solid transparent; }.color-choice[aria-checked="true"] { outline:2px solid #718cb2; outline-offset:2px; }.appearance-icons-scroll { max-height:190px; height:190px; }.icon-choice { width:38px; height:38px; border-radius:8px; border:1px solid #d9e2ee; background:#fff; }.icon-choice-selected { border-color:#1687ff; background:#e6f2ff; }.appearance-glyph { width:36px; height:36px; }.appearance-choice:focus-visible,.list-appearance-button:focus-visible,.save-list-appearance:focus-visible,.cancel-list-appearance:focus-visible { outline:2px solid #1687ff; outline-offset:3px; }
 .editor-actions .save-list-appearance { background:#1687ff; color:#fff; padding:6px 12px; border-radius:6px; }.editor-actions .save-list-appearance[disabled] { opacity:.45; }
@@ -1236,6 +1315,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
   .app-shell .brand-icon { background:var(--theme-surface); box-shadow:none; }
   .app-shell .brand-icon view::after,.app-shell .welcome-line view { background:#747d89; }
   .app-shell .list-button.selected,.app-shell .list-button:hover:not([disabled]) { background:#374252; }
+  .app-shell .reminder-row[data-selected="true"],.app-shell .reminder-row:focus-visible { background:#293e54; box-shadow:inset 3px 0 #67b9ff; }
   .app-shell :is(.muted,.brand-caption,.sidebar-section,.sidebar-placeholder,.list-count,.footer-wordmark,.toolbar-label,
     .quiet-button,.eyebrow,.heading-count,.source-chip,.current-scope,.date-view-description,.sort-description,
     .sort-picker-label,.reminder-notes,.reminder-metadata,.subtask-tag,.list-footer,.auto-read-toggle,.flag-filter,

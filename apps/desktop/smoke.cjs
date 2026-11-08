@@ -642,6 +642,18 @@ async function runSmoke({ frontendURL, root }) {
     await normalUI.webContents.executeJavaScript('new Promise(resolve=>{const timer=setInterval(()=>{if(document.querySelector(".demo-link")){clearInterval(timer);resolve(true)}},30)})');
     normalUI.webContents.send('suixing:snapshot',{region:'cn',result:normalSnapshot});
     assert.equal(await normalUI.webContents.executeJavaScript('window.suixingDesktop.capabilities.createItem'),true);
+    const renameByDoubleClick=await normalUI.webContents.executeJavaScript(`(async()=>{
+      const title=document.querySelector('.list-title');
+      if(!title)return false;
+      title.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,cancelable:true}));
+      await new Promise(resolve=>setTimeout(resolve,80));
+      const editor=document.querySelector('.list-editor[data-operation="rename"]');
+      if(!editor)return false;
+      editor.querySelector('.cancel-list-edit')?.click();
+      await new Promise(resolve=>setTimeout(resolve,80));
+      return !document.querySelector('.list-editor[data-operation="rename"]');
+    })()`,true);
+    assert.equal(renameByDoubleClick,true,'双击清单标题应进入并退出重命名编辑');
     const normalTitle='随行验证 · 普通模式新增';
     assert.equal(await normalUI.webContents.executeJavaScript('('+createTestItem.toString()+')('+JSON.stringify({pageId:normalSnapshot.snapshot.pageId,listId:normalSnapshot.snapshot.activeListId,title:normalTitle})+')',true),true);
     for(let attempt=0;attempt<40;attempt++) {
@@ -993,6 +1005,33 @@ async function runSmoke({ frontendURL, root }) {
     // 读写回归已进入清单页，重新加载本地界面后再从欢迎页进入明确标识的示例模式。
     await ui.loadURL(frontendURL);
     await ui.webContents.executeJavaScript('new Promise((resolve,reject)=>{const deadline=Date.now()+8000;const timer=setInterval(()=>{const b=document.querySelector(".demo-link");if(b){clearInterval(timer);b.click();resolve(true)}else if(Date.now()>deadline){clearInterval(timer);reject(new Error("示例入口未完成加载"))}},50)})');
+    const nativeCrud=await ui.webContents.executeJavaScript(`(async()=>{
+      const pause=()=>new Promise(resolve=>setTimeout(resolve,80));
+      const key=(target,key,extra={})=>target.dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true,...extra}));
+      const first=document.querySelector('.reminder-row[data-record-id]');
+      if(!first)return {ok:false,reason:'no-row'};
+      first.focus();key(first,'Enter');await pause();
+      const openedEdit=!!first.querySelector('.inline-editor input');
+      const input=first.querySelector('.inline-editor input');if(input)key(input,'Escape');await pause();
+      first.focus();key(first,' ');await pause();
+      const completed=!first.isConnected || first.classList.contains('completed');
+      document.dispatchEvent(new KeyboardEvent('keydown',{key:'n',ctrlKey:true,bubbles:true,cancelable:true}));await pause();
+      const newInput=document.querySelector('.new-reminder-row input');if(!newInput)return {ok:false,reason:'no-create-row',openedEdit,completed};
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(newInput,'随行验证 · 键盘新增');
+      newInput.dispatchEvent(new Event('input',{bubbles:true}));await pause();key(newInput,'Enter');
+      for(let attempt=0;attempt<20;attempt++){await pause();if([...document.querySelectorAll('.reminder-row[data-record-id] .reminder-title')].some(node=>node.textContent.trim()==='随行验证 · 键盘新增'))break;}
+      const created=[...document.querySelectorAll('.reminder-row[data-record-id]')].find(row=>row.querySelector('.reminder-title')?.textContent.trim()==='随行验证 · 键盘新增');
+      if(!created)return {ok:false,reason:'create-not-visible',openedEdit,completed};
+      created.focus();key(created,'Backspace');await pause();
+      const deleteOpened=!!created.querySelector('.delete-confirmation');
+      created.querySelector('.cancel-delete')?.click();await pause();
+      const cancelled=!![...document.querySelectorAll('.reminder-row[data-record-id]')].find(row=>row.querySelector('.reminder-title')?.textContent.trim()==='随行验证 · 键盘新增');
+      const current=[...document.querySelectorAll('.reminder-row[data-record-id]')].find(row=>row.querySelector('.reminder-title')?.textContent.trim()==='随行验证 · 键盘新增');
+      current?.focus();if(current)key(current,'Delete');await pause();current?.querySelector('.confirm-delete')?.click();await pause();
+      const deleted=!([...document.querySelectorAll('.reminder-row[data-record-id]')].some(row=>row.querySelector('.reminder-title')?.textContent.trim()==='随行验证 · 键盘新增'));
+      return {ok:openedEdit && completed && created && deleteOpened && cancelled && deleted,openedEdit,completed,created:true,deleteOpened,cancelled,deleted};
+    })()`,true);
+    assert.deepEqual(nativeCrud,{ok:true,openedEdit:true,completed:true,created:true,deleteOpened:true,cancelled:true,deleted:true},'桌面事项应支持选中后 Enter 编辑、Space 完成、Delete/Backspace 删除确认及 Ctrl+N 新增');
     // 图形回归在真实窗口中刷新合成数据，避免隐藏窗口捕获到尺寸改变前的旧合成帧。
     ui.showInactive();
     await new Promise(resolve => setTimeout(resolve, 250));
@@ -1029,6 +1068,7 @@ async function runSmoke({ frontendURL, root }) {
     report.checks.push('系统浅色／深色实时切换与清单状态保持');
     report.checks.push('普通模式重新连接、同名清单只读保护与新页面句柄');
     report.checks.push('服务不可达时保留草稿、禁止写入与导航，恢复后手动刷新且不重放');
+    report.checks.push('清单标题双击重命名，以及事项行选中后的 Enter 编辑、Space 完成、Delete/Backspace 删除和 Ctrl+N 新增');
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });
     fs.writeFileSync(path.join(root, '.local/desktop-smoke.json'), JSON.stringify(report, null, 2));
     console.log('桌面合成验证通过：' + report.checks.join('、'));
