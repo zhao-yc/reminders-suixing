@@ -21,7 +21,7 @@ function setup(t, options = {}) {
   const runtime = { networkinfo: options.networkinfo, webview: { create(url, id, styles) {
     const listeners = new Map();
     const view = {
-      id, styles, scripts: [], calls: [], replies: [], loads: [], closed: 0, shown: 0, hidden: 0, reloads: 0, visible: false,
+      id, url, styles, scripts: [], calls: [], replies: [], loads: url ? [url] : [], closed: 0, shown: 0, hidden: 0, reloads: 0, visible: false,
       emit(event) { for (const listener of listeners.get(event) || []) listener(); },
       addEventListener(event, callback) { listeners.set(event, [...(listeners.get(event) || []), callback]); },
       overrideUrlLoading(policy, callback) {
@@ -29,7 +29,11 @@ function setup(t, options = {}) {
         this.policy = policy; this.receive = callback;
       },
       getURL() { return this.url; },
-      loadURL(value) { this.loads.push(value); this.url = value; this.emit('loading'); },
+      loadURL(value) {
+        // 在受影响的 Android WebView 中，空地址创建后调用 loadURL 不会开始首次导航。
+        if (!this.url) return;
+        this.loads.push(value); this.url = value; this.emit('loading');
+      },
       close() { this.closed++; this.emit('close'); },
       show() { this.shown++; this.visible = true; }, hide() { this.hidden++; this.visible = false; },
       isVisible() { return this.visible; },
@@ -71,6 +75,8 @@ test('Android 共享适配器在合成页面经 URL 传输读写，每个完成�
   assert.equal(view.window.fixtureClicks, 1);
   assert.equal(view.scripts.length, 2);
   assert.equal(view.styles.plusrequire, 'none');
+  assert.equal(view.styles.disablePlus, true);
+  assert.equal(view.styles['uni-app'], 'none');
   const allowed = new RegExp(view.policy.match);
   assert.equal(allowed.test('https://idmsa.apple.com/appleauth/'), true);
   for (const url of ['http://www.icloud.com/', 'https://icloud.com.evil.test/', 'https://www.icloud.com:8443/', 'file:///test']) assert.equal(allowed.test(url), false);

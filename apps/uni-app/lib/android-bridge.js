@@ -84,8 +84,10 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
     needsRead = true;
     if (previous) previous.close('none');
     activeRegion = region;
-    const view = runtime.webview.create('', 'suixing-icloud-' + region, {
-      plusrequire: 'none', top: '0px', bottom: '0px', popGesture: 'hide',
+    // 创建时传入已校验地区的固定入口。Android 的空白容器可能吞掉随后的首次导航。
+    const view = runtime.webview.create(REGIONS[region].url, 'suixing-icloud-' + region, {
+      'uni-app': 'none', plusrequire: 'none', disablePlus: true,
+      top: '0px', bottom: '0px', popGesture: 'hide',
       backButtonAutoControl: 'hide',
       titleNView: {
         titleText: 'iCloud 官方页面', titleColor: '#202735', backgroundColor: '#f6f7f9',
@@ -95,7 +97,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000 
       }
     });
     webview = view;
-    try { configure(view); view.loadURL(REGIONS[region].url); }
+    try { configure(view); }
     catch {
       webview = null;
       view.close('none');
