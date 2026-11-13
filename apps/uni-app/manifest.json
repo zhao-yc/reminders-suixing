@@ -13,7 +13,7 @@
     "usingComponents": true,
     "splashscreen": { "alwaysShowBeforeRender": true, "autoclose": true, "waiting": false },
     "modules": {},
-    "distribute": { "android": { "packagename": "io.github.zhaoyc.reminderssuixing", "permissions": ["<uses-permission android:name=\"android.permission.INTERNET\"/>"] } }
+    "distribute": { "android": { "packagename": "io.github.zhaoyc.reminderssuixing", "abiFilters": ["arm64-v8a", "x86"], "permissions": ["<uses-permission android:name=\"android.permission.INTERNET\"/>"] } }
   },
   "app-harmony": { "distribute": { "bundleName": "io.github.zhaoyc.reminderssuixing" } },
   "h5": {

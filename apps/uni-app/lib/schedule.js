@@ -14,3 +14,13 @@ export function validSchedule(value) {
 export function localDateString(date = new Date()) {
   return [String(date.getFullYear()).padStart(4,'0'),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');
 }
+
+/** 逻辑层取不到 IANA 时区时保留未知状态，避免按猜测的时区筛选实际事项。 */
+export function localTimeZone() {
+  return typeof Intl === 'undefined' ? undefined : Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+/** 读取时间只需要本机小时和分钟，兼容没有国际化 API 的逻辑层。 */
+export function localTimeString(date) {
+  return [date.getHours(), date.getMinutes()].map(part => String(part).padStart(2, '0')).join(':');
+}

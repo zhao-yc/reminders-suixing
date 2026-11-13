@@ -45,6 +45,26 @@ test('同一排序值保留原顺序，中文标题与数字使用自然顺序',
   assert.deepEqual(ids(sortLoadedItems(items,'date-descending')),ids(items));
 });
 
+test('缺少 Intl 的安卓逻辑层仍能加载模块、排序标题并筛选日期', async () => {
+  const intl = globalThis.Intl;
+  try {
+    delete globalThis.Intl;
+    const { sortLoadedItems: sortWithoutIntl } = await import('../apps/uni-app/lib/list-sort.js?without-intl');
+    const { projectLoadedItems, groupLoadedDateView } = await import('../apps/uni-app/lib/list-views.js');
+    assert.deepEqual(ids(sortWithoutIntl([item('任务10'), item('任务2')], 'title-ascending')), ['任务2', '任务10']);
+
+    const allDay = { ...item('全天', '2030-01-15'), completed: false };
+    const timed = { ...item('指定时间', '2030-01-15', '09:00'), completed: false };
+    const today = { view: 'today', today: '2030-01-15' };
+    const projected = projectLoadedItems([allDay, timed], today);
+    assert.deepEqual(ids(groupLoadedDateView(projected, today).items), ['全天']);
+    assert.equal(projected.counts.scheduled, 2);
+    assert.equal(projected.unknownToday, 1);
+  } finally {
+    globalThis.Intl = intl;
+  }
+});
+
 test('优先级升降序使用高、中、低等级，无优先级与不可读始终在后，同级保持原序',()=>{
   const items=[['未知',null],['无','none'],['低','low'],['高一','high'],['中','medium'],['高二','high'],['非法','urgent']].map(([id,priority])=>Object.freeze({...item(id),priority}));
   Object.freeze(items);

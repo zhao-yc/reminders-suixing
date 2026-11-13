@@ -1,4 +1,4 @@
-import { validSchedule, localDateString } from './schedule.js';
+import { validSchedule, localDateString, localTimeZone } from './schedule.js';
 
 export const VIEW_OPTIONS = [
   {value:'pending',label:'未完成'}, {value:'today',label:'今天'},
@@ -10,13 +10,15 @@ export const VIEW_OPTIONS = [
 export function projectLoadedItems(items,options={}) {
   const view=VIEW_OPTIONS.some(option=>option.value===options.view)?options.view:'pending';
   const today=options.today || localDateString();
-  const zone=options.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const zone=options.timeZone || localTimeZone();
   const query=(options.query || '').toLocaleLowerCase();
   const known=new Map();
   const valid=item=>{
     if(known.has(item))return known.get(item);
     let accepted=validSchedule(item.schedule);
-    if(accepted && item.schedule.time!==null)try{new Intl.DateTimeFormat('en',{timeZone:item.schedule.timeZone});}catch{accepted=false;}
+    if(accepted && item.schedule.time!==null && typeof Intl!=='undefined') {
+      try { new Intl.DateTimeFormat('en',{timeZone:item.schedule.timeZone}); } catch { accepted=false; }
+    }
     known.set(item,accepted);return accepted;
   };
   const dated=item=>valid(item) && item.schedule.date!==null;
@@ -85,7 +87,7 @@ export function projectAcrossLists(lists, options) {
 export function groupLoadedDateView({items,contextIds},{view,today,tomorrow,timeZone,descending=false}) {
   const headings = new Map();
   if (view !== 'today' && view !== 'scheduled') return {items,headings};
-  const zone = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const zone = timeZone || localTimeZone();
   const sections = new Map();
   let family = [], rootLevel = 1;
 

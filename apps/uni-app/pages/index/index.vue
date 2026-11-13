@@ -206,7 +206,7 @@ import { createBridge } from '../../lib/bridge.js';
 import { demoSnapshot } from '../../lib/demo.js';
 import { priorityInfo } from '../../lib/priority.js';
 import { readRegionPreference, saveRegionPreference } from '../../lib/region-preference.js';
-import { validSchedule, localDateString } from '../../lib/schedule.js';
+import { validSchedule, localDateString, localTimeZone, localTimeString } from '../../lib/schedule.js';
 import { SORT_OPTIONS, readSortPreference, saveSortPreference, sortLoadedItems } from '../../lib/list-sort.js';
 import { reconnectLoadedList } from '../../lib/reconnect.js';
 import { listIconURL, appearanceColorLabel } from '../../lib/list-appearance.js';
@@ -352,7 +352,7 @@ const summaryNotice=computed(()=>{
   if(summaryView.value==='completed') messages.push('网页隐藏的完成事项未计入');
   return messages.join(' · ');
 });
-const summaryReadTime=computed(()=>summaryData.value?new Date(summaryData.value.capturedAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'');
+const summaryReadTime=computed(()=>summaryData.value?localTimeString(new Date(summaryData.value.capturedAt)):'');
 const desktopCardsDisabled=computed(()=>busy.value || !!editing.value || (!canReadSummary.value && !snapshot.value?.activeListId));
 function desktopCardCount(view) {
   if (canReadSummary.value) return summaryData.value?summaryProjection.value.counts[view]+((summaryPartial.value || summaryProjection.value.unknown[view])?'+':''):'—';
@@ -395,7 +395,7 @@ onUnmounted(()=>clearInterval(viewClockTimer));
 onMounted(()=>window.addEventListener('focus',updateViewClock));
 onUnmounted(()=>window.removeEventListener('focus',updateViewClock));
 // #endif
-const formattedTime = computed(() => snapshot.value ? '读取于 ' + new Date(snapshot.value.capturedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '');
+const formattedTime = computed(() => snapshot.value ? '读取于 ' + localTimeString(new Date(snapshot.value.capturedAt)) : '');
 
 /** 只在成功取得新快照时允许写入；失败后保留展示，但将旧内容设为只读。 */
 function accept(result,readRecovery=false) {
@@ -879,7 +879,8 @@ async function startScheduleEdit(item) {
   if (!canEditSchedule.value || busy.value || editing.value || item.disabled || (!live.value && !isDemo.value)) return;
   let value=item.schedule || {date:null,time:null,timeZone:null};
   let target=item;
-  let zone=Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // 示例可使用固定时区。实际事项的编辑时区由官方 WebView 返回。
+  let zone=localTimeZone() || 'UTC';
   let dateFingerprint=item.scheduleFingerprint;
   if (!isDemo.value) {
     const result=await run({type:'getSchedule',pageId:snapshot.value.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,expectedCompleted:item.completed});

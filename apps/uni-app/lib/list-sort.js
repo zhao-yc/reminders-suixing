@@ -12,7 +12,25 @@ export const SORT_OPTIONS = [
   { value:'priority-ascending', label:'优先级：从低到高' }
 ];
 const validMode = mode => SORT_OPTIONS.some(option => option.value === mode);
-const titles = new Intl.Collator('zh-CN', { numeric:true, sensitivity:'base' });
+const titles = typeof Intl === 'undefined' ? null : new Intl.Collator('zh-CN', { numeric:true, sensitivity:'base' });
+
+/** 安卓逻辑层可能没有 Intl。保留标题中数字的自然顺序。 */
+function compareTitles(left, right) {
+  if (titles) return titles.compare(left, right);
+  const leftParts = left.toLowerCase().match(/\d+|\D+/g) || [];
+  const rightParts = right.toLowerCase().match(/\d+|\D+/g) || [];
+  for (let index = 0; index < Math.min(leftParts.length, rightParts.length); index++) {
+    let a = leftParts[index], b = rightParts[index];
+    if (/^\d/.test(a) && /^\d/.test(b)) {
+      a = a.replace(/^0+(?=\d)/, '');
+      b = b.replace(/^0+(?=\d)/, '');
+      if (a.length !== b.length) return a.length - b.length;
+    }
+    const order = a.localeCompare(b);
+    if (order) return order;
+  }
+  return leftParts.length - rightParts.length;
+}
 
 export function readSortPreference(storage) {
   try {
@@ -47,7 +65,7 @@ export function sortLoadedItems(items, mode) {
   const direction = mode.endsWith('descending') ? -1 : 1;
   groups.sort((left,right) => {
     let order;
-    if (mode.startsWith('title-')) order = titles.compare(left.root.title,right.root.title) * direction;
+    if (mode.startsWith('title-')) order = compareTitles(left.root.title,right.root.title) * direction;
     else if(mode.startsWith('priority-')) {
       const a=priorityInfo(left.root.priority).rank,b=priorityInfo(right.root.priority).rank;
       const rank=value=>value===null?2:value===0?1:0;
