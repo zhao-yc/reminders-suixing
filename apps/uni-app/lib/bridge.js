@@ -1,11 +1,14 @@
 // #ifdef APP-PLUS
 import adapterSource from '../static/icloud/adapter.js?raw';
 import { createAndroidBridge } from './android-bridge.js';
+import { createProfileRuntime } from './android-profiles.js';
+import { localRead, localWrite, localRemove, supportsProfiles, openProfile, profileAction, forgetProfile } from '@/uni_modules/suixing-local';
 // #endif
 // #ifdef APP-HARMONY
 import harmonyAdapterSource from '../static/icloud/adapter.js?raw';
 import { initializeICloudView } from '@/uni_modules/suixing-arkweb';
 import { createHarmonyBridge } from './harmony-bridge.js';
+import { localRead as harmonyRead, localWrite as harmonyWrite, localRemove as harmonyRemove, forgetHarmonySession } from '@/uni_modules/suixing-local';
 // #endif
 
 /** 普通浏览器只承担界面预览，明确拒绝把跨域 iframe 当成已连接的客户端。 */
@@ -20,11 +23,36 @@ export function createBridge() {
   if (typeof window !== 'undefined' && window.suixingDesktop) return window.suixingDesktop;
   // #endif
   // #ifdef APP-PLUS
-  return createAndroidBridge({ runtime: plus, adapterSource });
+  const profileRuntime=createProfileRuntime({openProfile,profileAction,forgetProfile});
+  const defaultBridge=createAndroidBridge({runtime:plus,adapterSource,profileRuntime});
+  const clients=new Map();
+  function client(accountId) {
+    if (!accountId || accountId.startsWith('legacy-')) return defaultBridge;
+    if (!clients.has(accountId)) clients.set(accountId,createAndroidBridge({runtime:plus,adapterSource,profileRuntime}));
+    return clients.get(accountId);
+  }
+  const accountMethods=Object.fromEntries(['execute','prepareSummary','readNavigation','readSummary','openSite','openLogin','reloadSite','reconnectSite','forgetAccount','connectionState'].map(method=>[
+    method,(...args)=>{
+      const accountId=args[method==='readSummary'?3:method==='execute'?2:1];
+      return client(accountId)[method](...args);
+    }
+  ]));
+  return {
+    ...defaultBridge,
+    ...accountMethods,
+    hideSite:()=>Array.from(clients.values()).some(value=>value.hideSite()) || defaultBridge.hideSite(),
+    dispose:()=>{for (const value of clients.values()) value.dispose(); defaultBridge.dispose();},
+    localCapabilities: () => ({storage:true,multiple:supportsProfiles()}),
+    localFiles:{read:localRead,write:localWrite,remove:localRemove}
+  };
   // #endif
   // #ifdef APP-HARMONY
   initializeICloudView();
-  return createHarmonyBridge({ adapterSource: harmonyAdapterSource });
+  return {
+    ...createHarmonyBridge({ adapterSource: harmonyAdapterSource, summaryEnabled:true, forgetSession:forgetHarmonySession }),
+    localCapabilities: () => ({storage:true,multiple:false}),
+    localFiles:{read:harmonyRead,write:harmonyWrite,remove:harmonyRemove}
+  };
   // #endif
   return previewBridge();
 }

@@ -1,0 +1,9 @@
+{
+  "id": "suixing-local",
+  "displayName": "随行本地存储与安卓会话",
+  "version": "0.1.0",
+  "description": "原子保存本地快照，管理隔离的安卓官方网页容器",
+  "engines": { "HBuilderX": "^5.34.0" },
+  "dcloudext": { "type": "uts" },
+  "uni_modules": { "dependencies": [] }
+}

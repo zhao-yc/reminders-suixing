@@ -59,9 +59,9 @@ function createReminderNotifications({read,show,changed=()=>{},now=Date.now,loca
   function updateContext(value) {
     if(!value || !['cn','global'].includes(value.region) || !['ready','busy','editing'].every(key=>typeof value[key]==='boolean') ||
       !Number.isSafeInteger(value.readGeneration) || value.readGeneration<0 || !['pageId','listId'].every(key=>typeof value[key]==='string' && value[key].length<=150))return {ok:false,code:'INVALID_REQUEST'};
-    const next={region:value.region,ready:value.ready,busy:value.busy,editing:value.editing,pageId:value.pageId,listId:value.listId,readGeneration:value.readGeneration};
+    const next={region:value.region,accountId:value.accountId,ready:value.ready,busy:value.busy,editing:value.editing,pageId:value.pageId,listId:value.listId,readGeneration:value.readGeneration};
     if(JSON.stringify(next)!==JSON.stringify(context)) {
-      if(!context || next.region!==context.region || next.pageId!==context.pageId || next.listId!==context.listId || next.readGeneration!==context.readGeneration)faultGeneration=null;
+      if(!context || next.region!==context.region || next.accountId!==context.accountId || next.pageId!==context.pageId || next.listId!==context.listId || next.readGeneration!==context.readGeneration)faultGeneration=null;
       context=next;revision++;
     }
     return {ok:true};
@@ -73,7 +73,8 @@ function createReminderNotifications({read,show,changed=()=>{},now=Date.now,loca
     const valid=()=>!stopped && enabled && current===revision;
     publish('checking');
     try {
-      const result=await read({type:'readList',pageId:before.pageId,listId:before.listId,background:true},before.region);
+      const scope=before.accountId?[before.region,before.accountId]:[before.region];
+      const result=await read({type:'readList',pageId:before.pageId,listId:before.listId,background:true},...scope);
       if(!valid())return;
       if(['BUSY','AUTO_READ_DEFERRED'].includes(result?.code)){publish('paused');return;}
       const snapshot=result?.snapshot;
@@ -83,7 +84,7 @@ function createReminderNotifications({read,show,changed=()=>{},now=Date.now,loca
       }
       const time=now();
       const due=dueOccurrences(snapshot,{now:time,from:enabledAt,allDayTime,localZone:localZone()});unknownDates=due.unknownDates;
-      const events=due.events.map(key=>before.region+':'+key).filter(key=>!delivered.has(key));
+      const events=due.events.map(key=>(before.accountId || before.region)+':'+key).filter(key=>!delivered.has(key));
       // 启用前已经进入的分钟不补发；同一进程恢复、切换清单或回拨时钟不重播。
       for(const key of events)delivered.set(key,time);
       if(!events.length){publish('ready');return;}

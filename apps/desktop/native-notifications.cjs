@@ -25,8 +25,9 @@ function createNativeNotifications({Notification,Tray,Menu,nativeImage,controlle
     });
   }
   const publish=value=>{if(tray)tray.setToolTip(APP_NAME+(value.phase==='ready'?' · 通知已开启':' · 通知暂缓'));changed({ok:true,supported,...value});};
-  const scheduler=createReminderNotifications({read:async(command,region)=>{
-    const task=controller.execute(command,region);currentRead=task;
+  const scheduler=createReminderNotifications({read:async(command,region,accountId)=>{
+    const client = accountId ? controller.accountController?.({id:accountId,region}) : controller;
+    const task=client?.execute(command,region);currentRead=task;
     try{return await task;}finally{if(currentRead===task)currentRead=null;}
   },show:count=>show(count),changed:publish,now:scheduling.now,localZone:scheduling.localZone,setInterval:scheduling.setInterval,clearInterval:scheduling.clearInterval});
   function destroyTray(restore) {if(!tray)return;if(restore && !window.isVisible())focus();tray.destroy();tray=null;}

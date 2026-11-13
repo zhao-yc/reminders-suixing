@@ -1070,6 +1070,12 @@ async function runSmoke({ frontendURL, root }) {
     await waitForRenderer('!document.querySelector(".compact-overview") && document.querySelector(".list-title").textContent==="工作"',ui);
     assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".reminder-row[data-record-id]").length'),0);
     console.log('窄屏首页两列快捷卡片、今天、返回及示例清单隔离通过。');
+    stopIPC();
+    stopIPC=null;
+    const {verifyAccountCache,verifyAccountPartitions}=require('./account-cache-scenario.cjs');
+    await verifyAccountCache({frontendURL,root,waitForRenderer});
+    await verifyAccountPartitions('http://127.0.0.1:'+server.address().port+'/');
+    console.log('本地快照冷启动、账号折叠、同名清单只读及手动刷新验证通过。');
     assert.deepEqual(uiErrors,[],'合成检查不得忽略本地界面的脚本错误');
     const report = {
       passed: true, kind: 'Electron 合成验证，不代表真实 iCloud 或真机验收',
@@ -1088,6 +1094,7 @@ async function runSmoke({ frontendURL, root }) {
     report.checks.push('普通模式重新连接、同名清单只读保护与新页面句柄');
     report.checks.push('服务不可达时保留草稿、禁止写入与导航，恢复后手动刷新且不重放');
     report.checks.push('清单标题双击重命名，以及事项行选中后的 Enter 编辑、Space 完成、Delete/Backspace 删除和 Ctrl+N 新增');
+    report.checks.push('双账号离线快照、折叠及手动刷新');
     fs.mkdirSync(path.join(root, '.local'), { recursive: true });
     fs.writeFileSync(path.join(root, '.local/desktop-smoke.json'), JSON.stringify(report, null, 2));
     console.log('桌面合成验证通过：' + report.checks.join('、'));

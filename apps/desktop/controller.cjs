@@ -28,6 +28,7 @@ function atRemindersEntry(contents, destination) {
 function createController(options = {}) {
   let site = null;
   let activeRegion = '';
+  let pageNeedsVerification = false;
   let busy = false;
   let gatheringSummary = false;
   let closing = false;
@@ -41,6 +42,8 @@ function createController(options = {}) {
   let connectionCache=null,connectionFailures=0,connectionSuspended=false;
   const trace = [];
   const fixtureURL = options.fixtureURL;
+  const partitionFor = region => fixtureURL ? options.fixturePartition || 'suixing-smoke' :
+    'persist:suixing-icloud-' + (options.accountId && !options.accountId.startsWith('legacy-') ? options.accountId : region);
   const fixtureOrigin = fixtureURL ? new URL(fixtureURL).origin : null;
   const canNavigate = value => {
     if (!fixtureOrigin) return allowedURL(value);
@@ -84,7 +87,7 @@ function createController(options = {}) {
     contents.setWindowOpenHandler(({ url }) => canNavigate(url) ? {
       action: 'allow', overrideBrowserWindowOptions: {
         parent: site, width: 920, height: 760,
-        webPreferences: { partition: fixtureURL ? 'suixing-smoke' : 'persist:suixing-icloud-' + activeRegion, nodeIntegration: false, contextIsolation: true, sandbox: true }
+        webPreferences: { partition: partitionFor(activeRegion), nodeIntegration: false, contextIsolation: true, sandbox: true }
       }
     } : { action: 'deny' });
     contents.on('did-create-window', popup => { harden(popup.webContents); });
@@ -96,7 +99,8 @@ function createController(options = {}) {
     if (site && !site.isDestroyed()) { closing = true; site.destroy(); closing = false; }
     activeRegion = region;
     connectionCache=null;connectionFailures=0;connectionSuspended=false;
-    const partition = fixtureURL ? 'suixing-smoke' : 'persist:suixing-icloud-' + region;
+    const partition = partitionFor(region);
+    pageNeedsVerification = false;
     const isolated = session.fromPartition(partition);
     isolated.setUserAgent(browserUserAgent(process.versions.chrome), 'zh-CN,zh,en-US,en');
     isolated.setPermissionCheckHandler((contents, permission, origin, details = {}) => {
@@ -122,7 +126,7 @@ function createController(options = {}) {
         if (allowedURL(details.url) && details.statusCode >= 400) console.warn('官方页面响应异常：' + new URL(details.url).hostname + ' HTTP ' + details.statusCode);
       });
     }
-    isolated.on('will-download', event => event.preventDefault());
+    if (!isolated.listenerCount('will-download')) isolated.on('will-download', event => event.preventDefault());
     site = new BrowserWindow({
       width: 1180, height: 830, minWidth: 700, minHeight: 600, show: false,
       title: 'iCloud 官方页面 · 提醒事项随行', autoHideMenuBar: true,
@@ -165,10 +169,13 @@ function createController(options = {}) {
     const automaticSequence=options.diagnostics && command.type==='readList' && command.background===true?++automaticReadSequence:0;
     if(automaticSequence)lastAutomaticReadOutcome={sequence:automaticSequence,ok:false,code:'IN_FLIGHT'};
     const write = ['setCompleted', 'setText', 'createItem', 'setSchedule', 'setFlagged', 'deleteItem', 'createList', 'renameList','deleteList','setListAppearance','setSubtask'].includes(command.type);
+    if (write && pageNeedsVerification) {busy=false;return {ok:false,code:'READ_REQUIRED',message:'请先重新打开清单，核对当前页面。'};}
     if (write) lastWriteAt = performance.now();
     const sequence = write && options.diagnostics ? ++writeSequence : 0;
     if (sequence) lastWriteOutcome = summarizeWriteOutcome(command.type, sequence, null, true);
     const finish = result => {
+      if (result.ok && ['read','selectList','readList'].includes(command.type) &&
+          (result.snapshot?.activeListId || result.snapshot?.emptyAccount)) pageNeedsVerification=false;
       if(automaticSequence)lastAutomaticReadOutcome={sequence:automaticSequence,ok:result?.ok===true,
         code:/^[A-Z_]{1,60}$/.test(result?.code || '')?result.code:'UNKNOWN',
         samePage:result?.snapshot?.pageId===command.pageId,sameList:result?.snapshot?.activeListId===command.listId,
@@ -297,6 +304,7 @@ function createController(options = {}) {
     if (gatheringSummary) return {ok:false,code:'BUSY',message:'正在汇总清单，请稍后打开官方页面。'};
     if (busy && region !== activeRegion) return { ok: false, code: 'BUSY', message: '请等待当前操作结束后再切换区域。' };
     const window = ensure(region);
+    pageNeedsVerification = true;
     loginSequence++;
     window.show();
     return { ok:true };
@@ -324,6 +332,7 @@ function createController(options = {}) {
           if (canCheck() && result.ok && result.needsListSelection && snapshot?.pageId &&
               snapshot.activeListId === null && snapshot.items?.length === 0 && (snapshot.lists?.length || snapshot.emptyAccount)) {
             window.hide();
+            if (snapshot.emptyAccount) pageNeedsVerification=false;
             return { ...result, code:'LOGIN_READY', initialSummary:options.allowSummary!==false,
               message:snapshot.emptyAccount?'已连接 iCloud，可以新建第一份清单。':'已连接 iCloud，请选择清单。' };
           }
@@ -339,6 +348,50 @@ function createController(options = {}) {
   return {
     execute,
     connectionState,
+    async prepareSummary(region) {
+      if (busy || performance.now()-lastWriteAt<30000 || site && !site.isDestroyed() &&
+          (site.isVisible() || site.getChildWindows().some(child => child.isVisible()))) {
+        return {ok:false,code:'AUTO_READ_DEFERRED'};
+      }
+      if (!net.isOnline()) return {ok:false,code:'OFFLINE'};
+      if (!site || site.isDestroyed() || activeRegion !== region) ensure(region);
+      else {
+        const window=site;
+        const contents = window.webContents;
+        if (!contents.isLoading()) {
+          const before=await execute({type:'readLists',background:true,sessionProbe:true},region);
+          if (site!==window || window.isDestroyed() || window.isVisible() || window.getChildWindows().some(child=>child.isVisible())) {
+            return {ok:false,code:'AUTO_READ_DEFERRED'};
+          }
+          if (!before.ok && before.code!=='PAGE_NOT_READY') return before;
+          const loaded=await reloadOfficial(contents,fixtureURL || ENTRY[region]);
+          if (!loaded.ok) return loaded;
+        }
+      }
+      return {ok:true};
+    },
+    async readNavigation(region) {
+      if (!site || site.isDestroyed() || site.isVisible() || site.webContents.isLoading() || activeRegion !== region) {
+        return {ok:false,code:'PAGE_NOT_READY'};
+      }
+      const result = await execute({type:'readLists',background:true,sessionProbe:true},region);
+      if (result.code !== 'PAGE_NOT_READY') return result;
+      // 仅识别公开的登录入口和认证框架，不读取输入框或会话数据。
+      const login = await site.webContents.executeJavaScript(
+        'Array.from(document.querySelectorAll("button,a,[role=button]")).some(x=>x.getClientRects().length&&/^(Sign in|登录|登入)$/i.test(x.innerText.trim()))||!!document.querySelector("iframe[src*=\\"idmsa.apple.com\\"]")'
+      ).catch(() => false);
+      return login ? {ok:false,code:'LOGIN_REQUIRED'} : result;
+    },
+    async forget(region) {
+      if (busy) return {ok:false,code:'BUSY'};
+      loginSequence++;
+      if (site && !site.isDestroyed()) { closing = true; site.destroy(); closing = false; }
+      site = null;
+      const isolated = session.fromPartition(partitionFor(region));
+      await isolated.clearStorageData();
+      await isolated.clearCache();
+      return {ok:true};
+    },
     adapterVersion() {return SOURCE.match(/version:\s*'(\d+\.\d+\.\d+)'/)?.[1] || 'unknown';},
     reconnectSite,
     lastWriteOutcome() { return lastWriteOutcome ? {...lastWriteOutcome} : null; },

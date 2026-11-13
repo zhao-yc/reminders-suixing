@@ -26,7 +26,8 @@ function validAppearance(selection) {
 function validCommand(command) {
   if (!command || typeof command !== 'object' || !['read','readLists','readList','readSummary', 'selectList', 'showCompleted', 'getSchedule', 'getDeleteInfo', 'deleteItem', 'getListCreateOptions', 'createList', 'renameList','deleteList','getListAppearance','setListAppearance','getSubtaskInfo','setSubtask', 'setSchedule', 'setFlagged', 'setCompleted', 'setText', 'createItem'].includes(command.type)) return false;
   if (command.type === 'read') return true;
-  if (command.type === 'readLists') return command.background === undefined || typeof command.background === 'boolean';
+  if (command.type === 'readLists') return (command.background === undefined || typeof command.background === 'boolean') &&
+    (command.sessionProbe === undefined || command.sessionProbe === true);
   if (typeof command.pageId !== 'string' || command.pageId.length > 150 || typeof command.listId !== 'string' || command.listId.length > 150) return false;
   if (command.type === 'readSummary') return !!command.pageId;
   if (command.type === 'selectList' && command.background === true) return !!command.pageId && !!command.listId &&

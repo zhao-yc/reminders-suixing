@@ -1,0 +1,28 @@
+export function localRead(key: string): string | null {
+  return LocalFiles.read(UTSAndroid.getAppContext()!, key);
+}
+
+export function localWrite(key: string, value: string): void {
+  LocalFiles.write(UTSAndroid.getAppContext()!, key, value);
+}
+
+export function localRemove(key: string): void {
+  LocalFiles.remove(UTSAndroid.getAppContext()!, key);
+}
+
+export function supportsProfiles(): boolean {
+  return ProfileViews.supported();
+}
+
+@UTSJS.keepAlive
+export function openProfile(id: string, url: string, event: (type: string, value: string) => void): void {
+  ProfileViews.open(UTSAndroid.getUniActivity()!, id, url, event);
+}
+
+export function profileAction(id: string, action: string, value: string): void {
+  ProfileViews.action(UTSAndroid.getUniActivity()!, id, action, value);
+}
+
+export function forgetProfile(id: string, done: (ok: boolean) => void): void {
+  ProfileViews.forget(UTSAndroid.getUniActivity()!, id, done);
+}

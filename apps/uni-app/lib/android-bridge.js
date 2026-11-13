@@ -7,9 +7,10 @@ const failure = (code, message) => ({ ok: false, code, message });
 const deferAutoRead = () => ({ ...failure('AUTO_READ_DEFERRED', '官方页面可见性尚未确认，自动更新暂缓。'), reason: 'window-hidden' });
 
 /** Android 专用容器：远程网页无 5+ 权限，每个回执绑定到创建它的窗口与单次请求。 */
-export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000, loginTimeoutMs = 600000, loginIntervalMs = 1000 }) {
+export function createAndroidBridge({ runtime, profileRuntime, adapterSource, timeoutMs = 18000, loginTimeoutMs = 600000, loginIntervalMs = 1000 }) {
   let webview = null;
   let activeRegion = '';
+  let activeAccount;
   let ready = false;
   let needsRead = true;
   let disposed = false;
@@ -17,6 +18,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
   let login = null;
   let summary = null;
   let hiding = null;
+  let lastWriteAt = -Infinity;
   let counter = 0;
 
   function official(view) {
@@ -108,16 +110,18 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
     return true;
   }
 
-  function ensure(region) {
-    if (webview && activeRegion === region) return webview;
+  function ensure(region, accountId) {
+    if (webview && activeRegion === region && activeAccount === accountId) return webview;
     const previous = webview;
     webview = null;
     ready = false;
     needsRead = true;
     if (previous) previous.close('none');
     activeRegion = region;
+    activeAccount = accountId;
     // 创建时传入已校验地区的固定入口。Android 的空白容器可能吞掉随后的首次导航。
-    const view = runtime.webview.create(REGIONS[region].url, 'suixing-icloud-' + region, {
+    const container = accountId && !accountId.startsWith('legacy-') ? profileRuntime : runtime.webview;
+    const viewOptions = {
       'uni-app': 'none', plusrequire: 'none', disablePlus: true,
       top: '0px', bottom: '0px', popGesture: 'hide',
       backButtonAutoControl: 'hide',
@@ -127,7 +131,10 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
           if (webview === view) hideSite();
         } }]
       }
-    });
+    };
+    const viewId = 'suixing-icloud-' + region;
+    const view = container === runtime.webview ? container.create(REGIONS[region].url, viewId, viewOptions) :
+      container.create(REGIONS[region].url, viewId, viewOptions, accountId);
     webview = view;
     try { configure(view); }
     catch {
@@ -148,14 +155,14 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
   }
 
   /** 不重放写入；超时、导航或回执异常后，必须先成功读取当前页面。 */
-  async function execute(input, region = 'cn') {
+  async function execute(input, region = 'cn', accountId) {
     const command = normalizeCommand(input, { scopedReads: true, itemWrites: true });
     if (!command) return failure('INVALID_COMMAND', '不支持或不完整的操作。');
     const blocked = unavailable(region, true);
     if (blocked) return blocked;
-    if (command.background && (!webview || activeRegion !== region)) return failure('PAGE_NOT_READY', '自动更新需要已打开的官方页面。');
+    if (command.background && (!webview || activeRegion !== region || activeAccount !== accountId)) return failure('PAGE_NOT_READY', '自动更新需要已打开的官方页面。');
     let view;
-    try { view = ensure(region); } catch { return failure('BRIDGE_ERROR', '官方页面暂时无法打开，请稍后重试。'); }
+    try { view = ensure(region, accountId); } catch { return failure('BRIDGE_ERROR', '官方页面暂时无法打开，请稍后重试。'); }
     if (command.background && !isHidden(view)) return deferAutoRead();
     const navigationRead = command.type === 'read' || command.type === 'readLists';
     // 官方单页应用更新内容时不一定重发 loaded。只读操作可由适配器检查当前清单是否就绪。
@@ -164,6 +171,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
     }
     const write = isNativeWrite(command.type);
     if (needsRead && (write || command.background || ['getSchedule', 'getDeleteInfo', 'showCompleted'].includes(command.type))) return failure('READ_REQUIRED', '请先刷新，核对当前页面后再操作。');
+    if (write) lastWriteAt=Date.now();
     return dispatch(view, command, write);
   }
 
@@ -183,7 +191,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
   }
 
   /** 汇总期间独占官方窗口，读取范围和恢复选区交给两端共用的汇总逻辑。 */
-  async function readSummary(pageId, listId, region = 'cn') {
+  async function readSummary(pageId, listId, region = 'cn', accountId) {
     const blocked = unavailable(region, true);
     if (blocked) return blocked;
     if (typeof pageId !== 'string' || !pageId || pageId.length > 150 ||
@@ -191,7 +199,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
     const view = webview;
     const current = { cancelled: false };
     const canRead = () => !disposed && !current.cancelled && view && webview === view &&
-      activeRegion === region && ready && isHidden(view) && onRegionSite(view, region);
+      activeRegion === region && activeAccount === accountId && ready && isHidden(view) && onRegionSite(view, region);
     summary = current;
     const now = () => globalThis.performance?.now?.() ?? Date.now();
     try {
@@ -214,11 +222,11 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
   }
 
   /** 登录交接只等清单导航就绪，并复用登录后的同一个官方窗口。 */
-  async function openLogin(region = 'cn') {
+  async function openLogin(region = 'cn', accountId) {
     const blocked = unavailable(region, true);
     if (blocked) return blocked;
     let view;
-    try { view = ensure(region); }
+    try { view = ensure(region, accountId); }
     catch { return failure('BRIDGE_ERROR', '官方页面暂时无法打开，请稍后重试。'); }
     const current = { view, cancelled: false, wake: null };
     login = current;
@@ -279,33 +287,69 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
       // 仅判断设备已联网，仍需读取官方页面才能恢复写入。
       return { ok: true, state: type > network.CONNECTION_NONE ? 'available' : 'unknown' };
     },
-    async openSite(region = 'cn') {
+    async prepareSummary(region, accountId) {
+      const blocked = unavailable(region, true);
+      if (blocked) return blocked;
+      if (runtime.networkinfo?.getCurrentType()===runtime.networkinfo?.CONNECTION_NONE && runtime.networkinfo) return failure('OFFLINE','网络已断开。');
+      if (Date.now()-lastWriteAt<30000) return deferAutoRead();
+      if (webview && !isHidden(webview)) return failure('AUTO_READ_DEFERRED', '请先返回随行。');
+      try {
+        const existing = webview && activeRegion === region && activeAccount === accountId;
+        const view = ensure(region, accountId);
+        if (existing && ready) {
+          const before=await dispatch(view,{type:'readLists',background:true,sessionProbe:true},false,false,3000);
+          if (webview!==view || !isHidden(view)) return deferAutoRead();
+          if (!before.ok && before.code!=='PAGE_NOT_READY') return before;
+          ready=false;
+          needsRead=true;
+          view.reload();
+        }
+        return {ok:true};
+      } catch { return failure('BRIDGE_ERROR', '官方页面暂时无法打开。'); }
+    },
+    async readNavigation(region, accountId) {
+      if (!webview || activeRegion !== region || activeAccount !== accountId || !official(webview) || !isHidden(webview)) {
+        return failure('PAGE_NOT_READY', '官方页面尚未就绪。');
+      }
+      const blocked = unavailable(region, true);
+      return blocked || dispatch(webview, {type:'readLists', background:true, sessionProbe:true}, false, false, 3000);
+    },
+    async forgetAccount(region, accountId) {
+      if (unavailable(region,true)) return failure('BUSY','请等待当前操作结束。');
+      if (activeAccount === accountId && webview) {
+        if (!isHidden(webview)) return failure('BUSY','请先返回随行。');
+        webview.close('none');
+        webview=null;
+      }
+      return {ok:await profileRuntime.forget(accountId)};
+    },
+    async openSite(region = 'cn', accountId) {
       const blocked = unavailable(region);
       if (blocked) return blocked;
-      try { ensure(region).show('slide-in-right', 180); return { ok: true }; }
+      try { ensure(region, accountId).show('slide-in-right', 180); return { ok: true }; }
       catch { return failure('BRIDGE_ERROR', '官方页面暂时无法打开，请稍后重试。'); }
     },
-    async reloadSite(region = 'cn') {
+    async reloadSite(region = 'cn', accountId) {
       const blocked = unavailable(region, true);
       if (blocked) return blocked;
       try {
-        const existing = webview && activeRegion === region;
-        const view = ensure(region);
+        const existing = webview && activeRegion === region && activeAccount === accountId;
+        const view = ensure(region, accountId);
         ready = false;
         needsRead = true;
         if (existing) view.reload();
         return { ok: true, message: '官方页面正在重新加载，请稍后读取。' };
       } catch { return failure('BRIDGE_ERROR', '官方页面暂时无法重新加载，请稍后重试。'); }
     },
-    async reconnectSite(region = 'cn') {
+    async reconnectSite(region = 'cn', accountId) {
       const blocked = unavailable(region, true);
       if (blocked) return blocked;
       try {
-        if (webview && activeRegion === region) {
+        if (webview && activeRegion === region && activeAccount === accountId) {
           ready = false;
           needsRead = true;
           webview.loadURL(REGIONS[region].url);
-        } else ensure(region);
+        } else ensure(region, accountId);
         return { ok: true };
       } catch { return failure('BRIDGE_ERROR', '官方页面暂时无法重新连接，请稍后重试。'); }
     },

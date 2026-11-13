@@ -1,0 +1,40 @@
+import { fileIo } from '@kit.CoreFileKit';
+import { webview } from '@kit.ArkWeb';
+import { UTSHarmony } from '@dcloudio/uni-app-runtime';
+
+function filename(key: string): string {
+  if (!/^(accounts|snapshot-(legacy-(cn|global)|[a-z0-9]{20,48}))$/.test(key)) throw new Error('无效的快照名称');
+  return UTSHarmony.getUIAbilityContext()!.filesDir + '/suixing-' + key + '.json';
+}
+
+export function localRead(key: string): string | null {
+  const target = filename(key);
+  return fileIo.accessSync(target) ? fileIo.readTextSync(target) : null;
+}
+
+/** 临时文件和目标文件处于同一私有目录，写入完成前保留原快照。 */
+export function localWrite(key: string, value: string): void {
+  const target = filename(key);
+  const temp = target + '.tmp';
+  const file = fileIo.openSync(temp, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
+  try {
+    fileIo.writeSync(file.fd, value);
+    fileIo.fsyncSync(file.fd);
+  } finally {
+    fileIo.closeSync(file);
+  }
+  fileIo.renameSync(temp, target);
+}
+
+export function localRemove(key: string): void {
+  const target = filename(key);
+  if (fileIo.accessSync(target)) fileIo.unlinkSync(target);
+  if (fileIo.accessSync(target + '.tmp')) fileIo.unlinkSync(target + '.tmp');
+}
+
+/** 仅由应用的移除账号入口调用，清除 ArkWeb 单账号会话。 */
+export function forgetHarmonySession(): boolean {
+  webview.WebCookieManager.clearAllCookiesSync(false);
+  webview.WebStorage.deleteAllData(false);
+  return true;
+}

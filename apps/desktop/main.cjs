@@ -9,6 +9,7 @@ const { browserUserAgent } = require('./policy.cjs');
 const { installDesktopIPC } = require('./ipc.cjs');
 const {createNativeNotifications,bindNotificationClose}=require('./native-notifications.cjs');
 const {APP_ID,APP_NAME}=require('./identity.cjs');
+const {createLocalFiles}=require('./local-reminders.cjs');
 
 const ROOT = path.resolve(__dirname, '../..');
 const smoke = process.argv.includes('--smoke-test');
@@ -56,6 +57,22 @@ app.whenReady().then(async () => {
   }
   // 真实账户诊断只能读取专用测试清单，不触发普通客户端的跨清单读取。
   controller = createController({ diagnostics: liveCheck, allowSummary: !liveCheck });
+  const files = !liveCheck && !verifyNotifications ? createLocalFiles(
+    app.isPackaged ? path.join(process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local'), APP_ID, 'reminders') :
+      path.join(app.getPath('userData'), 'reminders')
+  ) : null;
+  const accountControllers = new Map();
+  function forAccount(account) {
+    if (!account) return controller;
+    const key=account.id+'@'+account.region;
+    if (!accountControllers.has(key)) accountControllers.set(key, createController({accountId:account.id}));
+    return accountControllers.get(key);
+  }
+  controller.accountController = forAccount;
+  const originalFlush = controller.flushStorage;
+  const originalDispose = controller.dispose;
+  controller.flushStorage = () => Promise.allSettled([originalFlush(), ...Array.from(accountControllers.values(), client => client.flushStorage())]);
+  controller.dispose = () => { originalDispose(); for (const client of accountControllers.values()) client.dispose(); };
   mainWindow = new BrowserWindow({
     width: 1160, height: 830, minWidth: 390, minHeight: 600, show: false,
     title: '提醒事项·随行', autoHideMenuBar: true, backgroundColor: '#f6f7f9',
@@ -68,7 +85,7 @@ app.whenReady().then(async () => {
       if(!mainWindow.isDestroyed())mainWindow.webContents.send('suixing:notifications-state',state);
       observeLiveNotification?.(state);
     }});
-  installDesktopIPC({ipcMain,controller,getMainWindow:()=>mainWindow,notifications});
+  installDesktopIPC({ipcMain,controller,getMainWindow:()=>mainWindow,notifications,files,forAccount:files ? forAccount : undefined});
   bindNotificationClose(mainWindow,notifications,()=>quitting);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', event => event.preventDefault());

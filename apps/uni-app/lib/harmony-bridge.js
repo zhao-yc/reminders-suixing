@@ -1,11 +1,12 @@
 // #ifdef APP-HARMONY
 import { REGIONS } from './origins.js';
 import { normalizeCommand, parseNativeReply, nativeCommandScript } from './native-protocol.js';
+import { collectSummary } from './collect-summary.mjs';
 
 const failure = (code, message) => ({ ok: false, code, message });
 
 /** 鸿蒙容器由原生 embed 持有，业务层仅更新固定配置并接收带实例标识的原生事件。 */
-export function createHarmonyBridge({ adapterSource, timeoutMs = 18000 }) {
+export function createHarmonyBridge({ adapterSource, timeoutMs = 18000, summaryEnabled = false, forgetSession }) {
   let host = null;
   let listener = null;
   let pending = null;
@@ -13,6 +14,9 @@ export function createHarmonyBridge({ adapterSource, timeoutMs = 18000 }) {
   let ready = false;
   let needsRead = true;
   let disposed = false;
+  let readingSummary = false;
+  let loggingIn = false;
+  let lastWriteAt = -Infinity;
 
   function publish(changes) {
     if (host) host = { ...host, ...changes };
@@ -65,35 +69,105 @@ export function createHarmonyBridge({ adapterSource, timeoutMs = 18000 }) {
   }
 
   async function execute(input, region = 'cn') {
-    const command = normalizeCommand(input);
+    const command = normalizeCommand(input, {scopedReads:summaryEnabled});
     if (!command) return failure('INVALID_COMMAND', '不支持或不完整的操作。');
     const blocked = unavailable(region, true);
     if (blocked) return blocked;
     if (!host || host.region !== region || !ready) return failure('PAGE_NOT_READY', '请先打开官方页面，完成登录并等待页面载入。');
-    if (command.type !== 'read' && needsRead) return failure('READ_REQUIRED', '请先刷新，核对当前页面后再操作。');
+    if (readingSummary || loggingIn) return failure('BUSY','请等待当前读取结束。');
+    if (!['read','readLists','selectList'].includes(command.type) && needsRead) return failure('READ_REQUIRED', '请先刷新，核对当前页面后再操作。');
+    if (command.type==='setCompleted') lastWriteAt=Date.now();
+    return dispatch(command);
+  }
+
+  function dispatch(command, limit = timeoutMs) {
     return new Promise(resolve => {
       const id = 'h-' + Date.now().toString(36) + '-' + (++counter);
       const current = { id, resolve, write: command.type === 'setCompleted' };
       pending = current;
       current.timer = setTimeout(() => {
         if (pending === current) interrupt('BRIDGE_TIMEOUT');
-      }, timeoutMs);
-      publish({ packet: JSON.stringify({ id, action: 'execute', source: nativeCommandScript(adapterSource, command, id) }) });
+      }, limit);
+      const request = summaryEnabled ? {...command,androidCompact:true} : command;
+      publish({ packet: JSON.stringify({ id, action: 'execute', source: nativeCommandScript(adapterSource, request, id) }) });
     });
+  }
+
+  function ensure(region, visible) {
+    if (!host || host.region !== region) {
+      ready = false;
+      needsRead = true;
+      host = { instanceId: 'arkweb-' + (++counter), region, packet: '', visible };
+    }
+    publish({visible});
   }
 
   return {
     platform: 'HarmonyOS · 待真机验收', execute, handleHostEvent,
+    async forgetAccount(region) {
+      const blocked=unavailable(region,true);
+      if (blocked || readingSummary || loggingIn || host?.visible) return blocked || failure('BUSY','请先返回随行。');
+      ready=false;
+      needsRead=true;
+      host=null;
+      publish();
+      return {ok:forgetSession?.()===true};
+    },
+    async prepareSummary(region) {
+      const blocked = unavailable(region,true);
+      if (blocked || readingSummary || loggingIn || host?.visible || Date.now()-lastWriteAt<30000) return blocked || failure('AUTO_READ_DEFERRED','请稍后刷新。');
+      const existing = host?.region === region;
+      ensure(region,false);
+      if (existing && ready) {
+        const before=await dispatch({type:'readLists',background:true,sessionProbe:true},3000);
+        if (host?.region!==region || host.visible) return failure('AUTO_READ_DEFERRED','请先返回随行。');
+        if (!before.ok && before.code!=='PAGE_NOT_READY') return before;
+        ready = false;
+        publish({packet:JSON.stringify({id:'reload-' + (++counter), action:'reload', source:''})});
+      }
+      return {ok:true};
+    },
+    async readNavigation(region) {
+      if (host?.region !== region || !ready || host.visible || pending) return failure('PAGE_NOT_READY','官方页面尚未就绪。');
+      return dispatch({type:'readLists',background:true,sessionProbe:true},3000);
+    },
+    async readSummary(pageId,listId,region) {
+      const current = host?.instanceId;
+      const canRead = () => !!host && host.instanceId === current && host.region === region && ready && !host.visible;
+      if (readingSummary || pending || loggingIn) return failure('BUSY','请等待当前读取结束。');
+      readingSummary = true;
+      try {
+        return await collectSummary({pageId,listId},{canRead,timeoutMs:60000,
+          read:(command,deadline)=>dispatch(command,Math.max(1,Math.min(timeoutMs,deadline-performance.now())))});
+      } finally { readingSummary = false; }
+    },
+    async openLogin(region) {
+      const blocked = unavailable(region,true);
+      if (blocked || loggingIn || readingSummary) return blocked || failure('BUSY','请等待当前读取结束。');
+      ensure(region,true);
+      const current = host.instanceId;
+      const active = () => host?.instanceId === current && host.visible;
+      loggingIn = true;
+      try {
+        const deadline = Date.now() + 600000;
+        while (active() && Date.now() < deadline) {
+          if (ready) {
+            const reply = await dispatch({type:'readLists',background:true},3000);
+            if (active() && reply.ok && (reply.snapshot.lists.length || reply.snapshot.emptyAccount)) {
+              publish({visible:false});
+              return {...reply,code:'LOGIN_READY',initialSummary:true};
+            }
+          }
+          if (active()) await new Promise(resolve=>setTimeout(resolve,750));
+        }
+        return failure(active()?'LOGIN_WAIT_TIMEOUT':'LOGIN_CANCELLED','请在官方页面完成登录。');
+      } finally { loggingIn = false; }
+    },
     onHostState(callback) { listener = callback; callback(host); return () => { if (listener === callback) listener = null; }; },
     async openSite(region = 'cn') {
       const blocked = unavailable(region);
       if (blocked) return blocked;
-      if (!host || host.region !== region) {
-        ready = false;
-        needsRead = true;
-        host = { instanceId: 'arkweb-' + (++counter), region, packet: '', visible: true };
-      }
-      publish({ visible: true });
+      ensure(region,true);
       return { ok: true };
     },
     hideSite() {

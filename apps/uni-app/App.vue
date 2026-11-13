@@ -1,9 +1,5 @@
 <script>
-export default {
-  onLaunch() {
-    // 不在启动时读取账号、凭据或个人内容；由用户主动连接 iCloud。
-  }
-};
+export default {};
 </script>
 
 <style>

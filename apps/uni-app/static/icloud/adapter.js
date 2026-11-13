@@ -204,7 +204,15 @@
 
   async function readLists(command) {
     var doc=application();
-    if(!doc || isLoading(doc)) {lastSnapshot=null;return result(false,'PAGE_NOT_READY','官方清单尚未就绪，请稍后读取。');}
+    if(!doc || isLoading(doc)) {
+      lastSnapshot=null;
+      var login=command.sessionProbe && documents().some(function(page) {
+        return Array.from(page.querySelectorAll('button,a,[role="button"]')).some(function(node) {
+          return visibleControl(node) && /^(sign in|登录|登入)$/i.test(text(node));
+        }) || !!page.querySelector('iframe[src*="idmsa.apple.com"]');
+      });
+      return result(false,login?'LOGIN_REQUIRED':'PAGE_NOT_READY',login?'请在官方页面重新登录。':'官方清单尚未就绪，请稍后读取。');
+    }
     if(command.background===true) {
       var deferred=deferredWhileEditing(doc);
       if(deferred)return deferred;

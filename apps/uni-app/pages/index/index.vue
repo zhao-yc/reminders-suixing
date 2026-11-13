@@ -22,16 +22,43 @@
         </button>
       </view>
       <text v-if="mobileOverview && !canReadSummary && snapshot.activeListTitle" class="overview-scope muted">{{ isDemo ? '界面示例 · ' : '快捷视图 · ' }}{{ snapshot.activeListTitle }}</text>
-      <view v-if="(!desktopWide || !snapshot?.activeListId) && !mobileOverview" class="account-card">
+      <view v-if="(!localEnabled || !accounts.length) && (!desktopWide || !snapshot?.activeListId) && !mobileOverview" class="account-card">
         <view class="account-dot" :class="{ connected: accountConnected }"></view>
         <view class="account-copy"><text class="account-title">{{ isDemo ? '界面示例' : accountConnected ? '已连接 iCloud' : snapshot ? '待读取核对' : '连接你的 iCloud' }}</text><text class="muted small">{{ isDemo ? '示例数据，不连接账户' : region === 'cn' ? '中国大陆账户' : '其他地区账户' }}</text></view>
       </view>
-      <view class="sidebar-section"><text>{{ mobileOverview && !isDemo ? 'iCloud' : '我的清单' }}</text>
+      <view class="sidebar-section"><text>{{ mobileOverview && !isDemo && !accounts.length ? 'iCloud' : '我的清单' }}</text>
+        <button v-if="multipleAccounts && !isDemo && accounts.length" class="quiet-button account-add" :disabled="busy || refreshingAccounts || !!editing" @click="addAccount">添加账号</button>
         <button v-if="snapshot && canManageLists" class="add-list-button desktop-add-list" role="button"
           :tabindex="busy || editing || (!live && !canCreateFirstList) ? -1 : 0" :disabled="busy || !!editing || (!live && !canCreateFirstList)"
           aria-label="新建清单" title="新建清单" @click="startListEdit('create', $event)"><image class="desktop-icon" src="/static/desktop-icons/journal-plus.svg" mode="aspectFit" aria-hidden="true" /></button>
       </view>
-      <view v-if="!snapshot" class="sidebar-placeholder">连接后，你的清单会显示在这里。</view>
+      <template v-if="localEnabled && !isDemo && accounts.length">
+        <view v-for="group in accountGroups" :key="group.account.id" class="account-group">
+          <view class="account-group-header">
+            <button class="account-group-toggle" :aria-expanded="String(!accountCollapsed[group.account.id])" @click="accountCollapsed[group.account.id]=!accountCollapsed[group.account.id]">
+              <text class="list-name">{{ group.account.label }}</text>
+              <view class="list-chevron" :class="{'account-chevron-open':!accountCollapsed[group.account.id]}" aria-hidden="true"></view>
+            </button>
+            <button class="account-more quiet-button" :aria-label="group.account.label + '的账号选项'" :aria-expanded="String(accountOptions===group.account.id)" :disabled="busy || refreshingAccounts || !!editing" @click="accountOptions=accountOptions===group.account.id?'':group.account.id">•••</button>
+          </view>
+          <view v-if="accountOptions===group.account.id" class="account-group-actions">
+            <button class="quiet-button" :disabled="busy || refreshingAccounts || !!editing" @click="accountLogin(group.account,true)">重新登录</button>
+            <button class="quiet-button" :disabled="busy || refreshingAccounts || !!editing" @click="clearAccount(group.account,false)">清除缓存</button>
+            <button v-if="canRemoveAccount(group.account)" class="quiet-button" :disabled="busy || refreshingAccounts || !!editing" @click="clearAccount(group.account,true)">移除账号</button>
+            <button class="quiet-button" :disabled="busy || refreshingAccounts || !!editing" @click="renameAccount(group.account)">修改名称</button>
+          </view>
+          <text v-if="accountMessage(group.account)" class="sidebar-placeholder account-status" role="status">{{ accountMessage(group.account) }}</text>
+          <view v-if="!accountCollapsed[group.account.id]" class="list-group">
+            <button v-for="list in group.lists" :key="list.id" class="list-button" :data-list-id="list.id" :class="{selected: list.id===snapshot?.activeListId || list.id===cachedList?.id}" :disabled="busy || !!editing" @click="selectList(list)" @dblclick.stop="renameListFromSidebar(list)">
+              <view class="list-symbol" :style="{background:list.color}"><image v-if="listIconURL(list.icon)" class="list-glyph" :src="listIconURL(list.icon)" mode="aspectFit" aria-hidden="true" /><image v-else class="desktop-icon" src="/static/desktop-icons/list-ul.svg" mode="aspectFit" aria-hidden="true" /></view>
+              <text class="list-name">{{ list.title }}</text>
+              <text v-if="sidebarListCount(list)!==null" class="list-count">{{ sidebarListCount(list) }}</text>
+              <view v-if="mobileOverview" class="list-chevron" aria-hidden="true"></view>
+            </button>
+          </view>
+        </view>
+      </template>
+      <view v-else-if="!snapshot" class="sidebar-placeholder">连接后，你的清单会显示在这里。</view>
       <view v-else class="list-group">
         <button v-for="list in sidebarLists" :key="list.id" class="list-button" :data-list-id="list.id" :class="{ selected: list.id === snapshot.activeListId }" :disabled="busy || !!editing" @click="selectList(list)" @dblclick.stop="renameListFromSidebar(list)">
           <view class="list-symbol" :style="{ background: list.color }"><image v-if="listIconURL(list.icon)" class="list-glyph" :src="listIconURL(list.icon)" mode="aspectFit" aria-hidden="true" /><image v-else class="desktop-icon" src="/static/desktop-icons/list-ul.svg" mode="aspectFit" aria-hidden="true" /></view>
@@ -58,7 +85,7 @@
           <view class="toolbar-search"><view class="search-mark"></view><input v-model="search" :disabled="!!editing" :focus="searchFocused" class="search" :placeholder="searchLabel" :aria-label="searchLabel" @blur="searchFocused = false" /></view>
         </view>
         <view class="toolbar-actions">
-          <picker class="region-control" :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || !!editing" @change="changeRegion">
+          <picker class="region-control" :range="regionLabels" :value="region === 'cn' ? 0 : 1" :disabled="busy || refreshingAccounts || !!editing || localEnabled && !multipleAccounts && !!accounts.length" @change="changeRegion">
             <button class="region-picker" role="button" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing"
               :aria-label="'iCloud 地区，当前为' + (region === 'cn' ? '中国大陆' : '其他地区')">
               <view class="region-globe" aria-hidden="true"></view>
@@ -66,9 +93,9 @@
               <view class="region-chevron" aria-hidden="true"></view>
             </button>
           </picker>
-          <button class="quiet-button" :disabled="busy || (!!editing && !editing.blocked)" @click="connect">{{ snapshot && !isDemo ? '官方页面' : '登录 iCloud' }}</button>
+          <button class="quiet-button" :disabled="busy || refreshingAccounts || (!!editing && !editing.blocked)" @click="connect">{{ snapshot && !isDemo && (!localEnabled || live || selectedAccount && !selectedAccount.verify) ? '官方页面' : '登录 iCloud' }}</button>
           <button v-if="snapshot && !isDemo && bridge.capabilities?.reconnect" class="quiet-button reconnect-button" role="button" :tabindex="busy || editing || networkOffline ? -1 : 0" :disabled="busy || !!editing || networkOffline" title="重新打开官方页面并读取清单，复用现有会话" @click="reconnectClient">重新连接</button>
-          <button class="primary-button refresh-button" :disabled="busy || (!!editing && !editing.blocked)" @click="refresh">{{ busy && !autoReading ? '处理中…' : '刷新' }}</button>
+          <button class="primary-button refresh-button" :disabled="busy || refreshingAccounts || (!!editing && !editing.blocked)" @click="refresh">{{ refreshingAccounts ? '刷新中…' : busy && !autoReading ? '处理中…' : '刷新' }}</button>
         </view>
       </view>
       <view v-if="canNotify && notificationsPanelOpen" class="notification-panel" role="region" aria-label="系统通知设置">
@@ -87,7 +114,7 @@
         <text class="welcome-kicker">熟悉的提醒，新的随行方式</text>
         <view class="welcome-title" role="heading" aria-level="1"><view>每一件小事，</view><view>都值得被记住。</view></view>
         <view class="welcome-description"><view>连接 iCloud，在这里查看清单、整理思绪，</view><view>轻轻一点，完成今天的一件事。</view></view>
-        <button class="primary-button welcome-connect" :disabled="busy" @click="connect">连接我的提醒事项</button>
+        <button class="primary-button welcome-connect" :disabled="busy || refreshingAccounts" @click="connect">连接我的提醒事项</button>
         <button class="demo-link" :disabled="busy" @click="showDemo">先看看界面示例 →</button>
         <text class="welcome-footnote">登录在 iCloud 官方页面完成</text>
       </view>
@@ -101,7 +128,7 @@
               <view class="completion-button" :class="{ checked: entry.item.completed }" aria-hidden="true">{{ entry.item.completed ? '✓' : '' }}</view>
               <view class="reminder-copy">
                 <text class="reminder-title">{{ entry.item.title }}</text>
-                <view class="summary-row-meta"><button v-if="summarySourcesCurrent" class="summary-source-button" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" :aria-label="'打开清单：' + entry.list.title" @click="selectList(entry.list)">{{ entry.list.title }}</button><text v-else class="reminder-metadata">{{ entry.list.title }}</text><text v-if="entry.item.metadata" class="reminder-metadata" :class="{ 'is-overdue': entry.overdue }">{{ entry.item.metadata }}</text></view>
+                <view class="summary-row-meta"><button v-if="summarySourcesCurrent" class="summary-source-button" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" :aria-label="'打开清单：' + sourceLabel(entry.list)" @click="selectList(entry.list)">{{ sourceLabel(entry.list) }}</button><text v-else class="reminder-metadata">{{ entry.list.title }}</text><text v-if="entry.item.metadata" class="reminder-metadata" :class="{ 'is-overdue': entry.overdue }">{{ entry.item.metadata }}</text></view>
               </view>
             </view>
           </template>
@@ -110,6 +137,7 @@
         <view v-if="summaryData" class="list-footer summary-footer"><text>汇总于 {{ summaryReadTime }}</text></view>
       </view>
       <view v-else v-show="!mobileOverview" class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-list-title="snapshot.activeListTitle" :data-captured-at="snapshot.capturedAt" :data-live="String(live)">
+        <view v-if="cachedList && !live" class="cached-list-actions"><button class="summary-source-button" :disabled="busy || refreshingAccounts || networkOffline" @click="openLiveList(cachedList)">连接此清单以编辑</button><text class="muted small">本地缓存 · 只读</text></view>
         <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title" role="heading" aria-level="1" tabindex="-1" @click="$event.currentTarget.focus()" @dblclick="canManageLists && snapshot.activeListId ? startListEdit('rename') : undefined" @keydown="listTitleKeydown">{{ mobileTitle || snapshot.activeListTitle || (snapshot.emptyAccount ? '还没有清单' : '选择清单') }}</text><text v-if="snapshot.activeListId" class="heading-count">{{ incompleteCount }}</text><button v-if="canManageLists && snapshot.activeListId" class="rename-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="重命名清单" title="重命名当前清单" @click="startListEdit('rename')">✎</button><button v-if="canEditListAppearance && snapshot.activeListId" class="list-appearance-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="清单颜色与图标" title="清单颜色与图标" @click="startListAppearance">◉</button><button v-if="canDeleteList && snapshot.activeListId" class="delete-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="删除清单" title="删除当前清单" @click="startListDeletion">⌫</button></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : !snapshot.activeListId ? '清单导航' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
         <view v-if="editing?.field === 'list-delete'" class="inline-editor list-delete-confirmation" role="alertdialog" aria-label="确认删除清单"><text class="delete-title">删除清单“{{ editing.title }}”？</text><text>清单及其中的全部事项都会从 iCloud 和同步设备移除，包括当前尚未加载的内容。</text><text class="muted small">共享清单请在官方页面处理。</text><view class="editor-actions"><button class="confirm-list-delete" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '删除中…' : '确认删除清单' }}</button><button class="cancel-list-delete" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view></view>
         <view v-if="editing?.field === 'list-appearance'" class="inline-editor appearance-editor" role="group" aria-label="清单颜色与图标"><text class="editor-label">{{ editing.title }} · 颜色与图标</text><view class="appearance-colors" role="radiogroup" aria-label="清单颜色"><button v-for="(option,index) in editing.colors" :key="option.key" class="appearance-choice color-choice" :data-key="option.key" role="radio" :aria-checked="String(editing.color === option.key)" :aria-label="appearanceColorLabel(option.color,index)" :title="appearanceColorLabel(option.color,index)" :tabindex="busy || editing.blocked || editing.color !== option.key ? -1 : 0" :disabled="busy || editing.blocked" :style="{background:option.color}" @click="editing.color = option.key"><text v-if="editing.color === option.key">✓</text></button></view><scroll-view class="appearance-icons-scroll" scroll-y><view class="appearance-icons" role="radiogroup" aria-label="清单图标"><button v-for="(option,index) in editing.icons" :key="option.key" class="appearance-choice icon-choice" :data-key="option.key" :class="{'icon-choice-selected':editing.iconKey === option.key}" role="radio" :aria-checked="String(editing.iconKey === option.key)" :aria-label="'图标 '+(index+1)" :title="'图标 '+(index+1)" :tabindex="busy || editing.blocked || editing.iconKey !== option.key ? -1 : 0" :disabled="busy || editing.blocked" @click="editing.iconKey = option.key"><image class="appearance-glyph" :src="listIconURL(option.icon)" mode="aspectFit" aria-hidden="true" /></button></view></scroll-view><text class="muted small">保存后同步到使用此清单的设备。</text><view class="editor-actions"><button class="save-list-appearance" role="button" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '保存中…' : '保存外观' }}</button><button class="cancel-list-appearance" role="button" :disabled="busy" @click="endEdit">取消</button></view></view>
@@ -226,6 +254,7 @@ import { listIconURL, appearanceColorLabel } from '../../lib/list-appearance.js'
 import { VIEW_OPTIONS, groupLoadedDateView, projectLoadedItems, projectAcrossLists } from '../../lib/list-views.js';
 import { monitorConnection, connectionResult } from '../../lib/connection.js';
 import { monitorLoadedList } from '../../lib/loaded-list-monitor.js';
+import { createLocalStore, createAccountRefresh, refreshOfficial, prepareNavigation, incompleteReport, matchingList, toLocalReport } from '../../lib/local-reminders.mjs';
 // #ifdef APP-HARMONY
 import HarmonyICloudHost from '../../components/HarmonyICloudHost.vue';
 // #endif
@@ -234,6 +263,20 @@ import { onBackPress } from '@dcloudio/uni-app';
 // #endif
 
 const bridge = createBridge();
+const localStore = bridge.localFiles ? createLocalStore(bridge.localFiles) : null;
+const localEnabled = ref(false);
+const multipleAccounts = ref(false);
+const accounts = ref([]);
+const accountReports = ref({});
+const accountStatus = ref({});
+const accountCollapsed = ref({});
+const selectedAccount = ref(null);
+const cachedList = ref(null);
+const accountOptions = ref('');
+const refreshingAccounts = ref(false);
+let initialNavigation;
+let workspaceMounted = true;
+let accountRegistryWrite=Promise.resolve();
 const regionLabels = ['中国大陆', '其他地区'];
 // 显式调用 uni API，确保 H5 按需编译包含存储能力；测试替身只在纯逻辑测试中使用。
 const settingsStorage = {
@@ -292,7 +335,7 @@ const canEditHierarchy = computed(() => !isDemo.value && bridge.capabilities?.ed
 const canManageLists = computed(() => !isDemo.value && bridge.capabilities?.manageLists === true);
 const canDeleteList = computed(() => !isDemo.value && bridge.capabilities?.deleteList === true);
 const canEditListAppearance = computed(() => !isDemo.value && bridge.capabilities?.listAppearance === true);
-const canCreateFirstList = computed(() => canManageLists.value && !networkOffline.value && !networkNeedsRead.value && snapshot.value?.emptyAccount === true && snapshot.value.lists.length === 0);
+const canCreateFirstList = computed(() => canManageLists.value && !refreshingAccounts.value && !selectedAccount.value?.verify && !networkOffline.value && !networkNeedsRead.value && snapshot.value?.emptyAccount === true && snapshot.value.lists.length === 0);
 const canCreate = computed(() => isDemo.value || bridge.capabilities?.openNewItem === true);
 const notice = ref('');
 const noticeError = ref(false);
@@ -340,6 +383,16 @@ const sidebarLists = computed(() => {
   const query = mobileOverview.value ? search.value.trim().toLocaleLowerCase() : '';
   return query ? lists.filter(list => list.title.toLocaleLowerCase().includes(query)) : lists;
 });
+const accountGroups = computed(() => {
+  const query = mobileOverview.value ? search.value.trim().toLocaleLowerCase() : '';
+  return accounts.value.map(account => {
+    const report = accountReports.value[account.id];
+    const current = selectedAccount.value?.id === account.id && snapshot.value?.pageId && !cachedList.value && !isDemo.value && !account.verify;
+    const lists = current ? snapshot.value.lists.map(list=>({...list,accountId:account.id})) :
+      (report?.lists.map(entry=>entry.list) || []);
+    return { account, lists:query ? lists.filter(list=>list.title.toLocaleLowerCase().includes(query)) : lists };
+  });
+});
 const currentListItems = computed(() => {
   const data = snapshot.value;
   if (!data) return [];
@@ -359,10 +412,22 @@ const viewProjection=computed(()=>projectLoadedItems(sortLoadedItems(currentList
 const viewContext=computed(()=>viewProjection.value.contextIds);
 const dateView=computed(()=>groupLoadedDateView(viewProjection.value,{view:tab.value,...viewDates.value,descending:sortMode.value==='date-descending'}));
 const visibleItems=computed(()=>dateView.value.items);
-const summaryData=computed(()=>summaryCache.value?.pageId===snapshot.value?.pageId && summaryCache.value?.region===region.value?summaryCache.value.report:null);
-const summarySourcesCurrent=computed(()=>!!summaryData.value && summaryCache.value.sourcePageId===snapshot.value?.pageId);
+const summaryData=computed(()=>{
+  if (localEnabled.value && !isDemo.value) {
+    const reports = accounts.value.map(account=>accountReports.value[account.id]).filter(Boolean);
+    if (!reports.length) return null;
+    return {
+      lists:reports.flatMap(report=>report.lists),
+      totalLists:reports.reduce((sum,report)=>sum+report.totalLists,0),
+      capturedAt:reports.map(report=>report.capturedAt).sort()[0]
+    };
+  }
+  return summaryCache.value?.pageId===snapshot.value?.pageId && summaryCache.value?.region===region.value?summaryCache.value.report:null;
+});
+const summarySourcesCurrent=computed(()=>!!summaryData.value && (localEnabled.value || summaryCache.value?.sourcePageId===snapshot.value?.pageId));
 const summaryProjection=computed(()=>projectAcrossLists(summaryData.value?.lists || [],{...viewDates.value,view:summaryView.value || 'pending',query:summaryView.value?search.value:''}));
-const summaryPartial=computed(()=>!!summaryData.value && (summaryData.value.lists.length<summaryData.value.totalLists || summaryData.value.lists.some(entry=>entry.partial)));
+const summaryPartial=computed(()=>!!summaryData.value && (incompleteReport(summaryData.value) ||
+  localEnabled.value && accounts.value.some(account=>!accountReports.value[account.id] || accountStatus.value[account.id]==='PARTIAL')));
 const summaryNotice=computed(()=>{
   const data=summaryData.value;
   if(!data) return '';
@@ -376,8 +441,14 @@ const summaryNotice=computed(()=>{
 });
 const summaryReadTime=computed(()=>summaryData.value?localTimeString(new Date(summaryData.value.capturedAt)):'');
 function sidebarListCount(list) {
-  if (list.id === snapshot.value.activeListId) return incompleteCount.value;
+  if (list.id === snapshot.value?.activeListId) return incompleteCount.value;
   if (isDemo.value) return snapshot.value.items.filter(item => item.listId === list.id && !item.completed).length;
+  if (localEnabled.value) {
+    const entries = accountReports.value[list.accountId]?.lists || [];
+    const entry = entries.find(candidate=>candidate.list.id === list.id) ||
+      entries.find(candidate=>candidate.list === matchingList(entries.map(value=>value.list),list));
+    return entry ? entry.items.filter(item=>!item.completed).length + (entry.partial?'+':'') : null;
+  }
   if (!mobileOverview.value || !summarySourcesCurrent.value) return null;
   const entry = summaryData.value.lists.find(candidate => candidate.list.id === list.id);
   return entry ? entry.items.filter(item => !item.completed).length + (entry.partial ? '+' : '') : null;
@@ -442,6 +513,10 @@ onBackPress(() => {
 // #endif
 // 同一页面的单清单读回只更新该清单的缓存，其余清单继续使用上次汇总数据。
 watch(snapshot,value=>{
+  if (localEnabled.value && !isDemo.value) {
+    void rememberCurrentList(value);
+    return;
+  }
   const report=summaryData.value;
   if (!summarySourcesCurrent.value || !value?.lists) return;
   const prior=new Map(report.lists.map(entry=>[entry.list.id,entry]));
@@ -500,11 +575,269 @@ function accept(result,readRecovery=false) {
   noticeError.value = !result.ok;
 }
 
+const sessionAccountId = () => localEnabled.value ? selectedAccount.value?.id : undefined;
+const legacyAccount = () => ({id:'legacy-' + region.value, region:region.value, label:'iCloud', confirmed:false, verify:false});
+const sourceLabel = list => accounts.value.length > 1
+  ? (accounts.value.find(account=>account.id===list.accountId)?.label || 'iCloud') + ' · ' + list.title : list.title;
+const canRemoveAccount = account => typeof bridge.forgetAccount === 'function' && !!account;
+
+function renameAccount(account) {
+  uni.showModal({title:'修改账号显示名称',editable:true,placeholderText:account.label,success:async value=>{
+    const label=value.content?.trim().slice(0,48);
+    if (!value.confirm || !label || busy.value || refreshingAccounts.value || editing.value) return;
+    busy.value=true;
+    const next=accounts.value.map(entry=>entry.id===account.id?{...entry,label}:entry);
+    try {
+      await saveAccounts(next);
+      accounts.value=next;
+      if (selectedAccount.value?.id===account.id) selectedAccount.value=next.find(entry=>entry.id===account.id);
+    } catch {notice.value='账号名称未能保存。';noticeError.value=true;}
+    finally {busy.value=false;}
+  }});
+}
+
+function saveAccounts(value) {
+  const next=value.map(account=>({...account}));
+  const task=accountRegistryWrite.then(()=>localStore.saveAccounts(next));
+  accountRegistryWrite=task.catch(()=>{});
+  return task;
+}
+
+let pendingCacheWrite=Promise.resolve();
+function rememberCurrentList(value) {
+  const account=selectedAccount.value;
+  if (!account || account.verify || !live.value || refreshingAccounts.value || !value?.pageId || !value.activeListId || value.partial) return;
+  const report=accountReports.value[account.id];
+  const selected=value.lists.find(list=>list.id===value.activeListId);
+  const match=selected && report && matchingList(report.lists.map(entry=>entry.list),selected);
+  if (!match) return;
+  const before=report.lists.find(entry=>entry.list.id===match.id);
+  // 当前视图可能隐藏完成事项。全局刷新负责替换整份清单，单清单读取只更新可核对的待办。
+  const fresh=value.items.filter(item=>!item.completed);
+  const done=before.items.filter(item=>item.completed);
+  if (before.items.some(item=>item.level>1) || fresh.some(item=>item.level>1)) return;
+  const lists=report.lists.map(entry=>entry===before ? {list:selected,items:[...fresh,...done],partial:false} : entry);
+  const next=toLocalReport(account,{...report,lists});
+  if (JSON.stringify(next)===JSON.stringify(report)) return;
+  accountReports.value[account.id]=next;
+  pendingCacheWrite=pendingCacheWrite.then(()=>localStore.saveReport(account,next)).catch(()=>{accountStatus.value[account.id]='CACHE_WRITE_FAILED';});
+}
+
+function accountMessage(account) {
+  if (account.verify) return '请重新登录，缓存可继续查看';
+  return {
+    PARTIAL:'部分清单尚未读取', CACHE_WRITE_FAILED:'本地缓存保存失败',
+    PAGE_NOT_READY:'iCloud 尚未就绪', CONNECTION_FAILED:'暂时无法同步', CONNECTION_UNAVAILABLE:'暂时无法连接 iCloud',
+    OFFLINE:'离线 · 显示上次读取内容', AUTO_READ_DEFERRED:'官方页面忙，请稍后刷新', OFFICIAL_PAGE_BUSY:'官方页面忙，请稍后刷新',
+    RECONNECT_FAILED:'暂时无法连接 iCloud', RECONNECT_TIMEOUT:'iCloud 连接超时'
+  }[accountStatus.value[account.id]] || '';
+}
+
+function cachedSnapshot(list) {
+  const report = accountReports.value[list?.accountId];
+  const entry = report?.lists.find(candidate=>candidate.list.id===list.id);
+  if (!entry) return null;
+  return {
+    pageId:'', activeListId:entry.list.id, activeListTitle:entry.list.title, capturedAt:report.capturedAt,
+    lists:report.lists.map(value=>value.list), items:entry.items, partial:entry.partial
+  };
+}
+
+function showAccountOverview() {
+  if (snapshot.value && !isDemo.value || !accounts.value.length) return;
+  isDemo.value=false;
+  live.value=false;
+  const report=accounts.value.map(account=>accountReports.value[account.id]).find(Boolean);
+  snapshot.value={pageId:'',activeListId:null,activeListTitle:'',lists:[],items:[],capturedAt:report?.capturedAt || new Date().toISOString()};
+  if (desktopWide.value) summaryView.value='today';
+}
+
+function updateAccountReport(account, report, code, result) {
+  accountStatus.value[account.id]=code;
+  if (code==='LOGIN_REQUIRED' && !account.verify) {
+    account.verify=true;
+    saveAccounts(accounts.value).catch(()=>{accountStatus.value[account.id]='CACHE_WRITE_FAILED';});
+  }
+  if (report) {
+    const previous=cachedList.value?.accountId===account.id ? cachedList.value : null;
+    accountReports.value[account.id]=report;
+    if (previous) {
+      const next=matchingList(report.lists.map(entry=>entry.list),previous);
+      if (next) {cachedList.value=next; snapshot.value=cachedSnapshot(next);}
+      else {
+        cachedList.value=null;
+        snapshot.value=null;
+      }
+    }
+  }
+  if (selectedAccount.value?.id===account.id && code!=='AUTO_READ_DEFERRED' && result.navigation &&
+      !cachedList.value && !summaryView.value && !live.value) accept({ok:true,code:'READY',snapshot:result.navigation,needsListSelection:true},true);
+  showAccountOverview();
+}
+
+const accountRefresh=createAccountRefresh({
+  collect:account=>account.verify ? {ok:false,code:'LOGIN_REQUIRED'} : refreshOfficial(bridge,account,initialNavigation?.id===account.id ? initialNavigation.result : null),
+  previous:account=>accountReports.value[account.id],
+  active:account=>workspaceMounted && accounts.value.some(entry=>entry.id===account.id),
+  save:(account,report)=>localStore.saveReport(account,report),
+  update:updateAccountReport
+});
+
+/** 后台汇总会切换官方选区。先清除写入授权，缓存导航仍然可用。 */
+async function refreshAccounts(targets=accounts.value, startup=false) {
+  if (!targets.length || busy.value || editing.value && !editing.value.blocked) return;
+  if (refreshingAccounts.value) return accountRefresh.refresh(targets);
+  refreshingAccounts.value=true;
+  const wasLive=live.value;
+  const liveAccountId=sessionAccountId();
+  const previousList=cachedList.value || snapshot.value?.lists.find(list=>list.id===snapshot.value?.activeListId);
+  if (live.value && selectedAccount.value && previousList) {
+    const report=accountReports.value[selectedAccount.value.id];
+    const cached=report && matchingList(report.lists.map(entry=>entry.list),previousList);
+    if (cached) { cachedList.value=cached; snapshot.value=cachedSnapshot(cached); }
+  }
+  live.value=false;
+  try { await pendingCacheWrite; await (startup ? accountRefresh.start(targets) : accountRefresh.refresh(targets)); }
+  finally { refreshingAccounts.value=false; initialNavigation=null; }
+  if (wasLive && previousList && cachedList.value?.accountId===liveAccountId && matchingList([cachedList.value],previousList) && !summaryView.value && !networkOffline.value &&
+      !selectedAccount.value?.verify && !editing.value) await openLiveList(cachedList.value,true);
+}
+
+async function initializeAccounts() {
+  if (!localStore) return;
+  let capabilities;
+  try { capabilities=await bridge.localCapabilities(); } catch { return; }
+  if (!workspaceMounted || !capabilities?.storage) return;
+  localEnabled.value=true;
+  multipleAccounts.value=capabilities.multiple===true;
+  const saved=await localStore.accounts();
+  if (!workspaceMounted) return;
+  if (saved) {
+    accounts.value=multipleAccounts.value ? saved : saved.filter(account=>account.id.startsWith('legacy-')).slice(0,1);
+    const loaded=await Promise.all(accounts.value.map(async account=>[account.id,await localStore.report(account)]));
+    accountReports.value=Object.fromEntries(loaded.filter(([,report])=>report));
+    selectedAccount.value=accounts.value.find(account=>account.region===region.value) || accounts.value[0] || null;
+    if (selectedAccount.value) region.value=selectedAccount.value.region;
+    showAccountOverview();
+    await nextTick();
+    await refreshAccounts(accounts.value,true);
+    return;
+  }
+  // 升级只探测当前区域已有会话，首次安装保持欢迎页。
+  const account=legacyAccount();
+  if (busy.value || isDemo.value) return;
+  refreshingAccounts.value=true;
+  try {
+    const result=await refreshOfficial(bridge,account);
+    if (!workspaceMounted || !result.ok || !result.summary) return;
+    account.confirmed=true;
+    accounts.value=[account];
+    selectedAccount.value=account;
+    const report=toLocalReport(account,result.summary);
+    let code=incompleteReport(report)?'PARTIAL':'READY';
+    try {await saveAccounts(accounts.value); await localStore.saveReport(account,report);}
+    catch {code='CACHE_WRITE_FAILED';}
+    updateAccountReport(account,report,code,result);
+  } finally {refreshingAccounts.value=false;}
+}
+
+async function accountLogin(account, verify=false) {
+  if (busy.value || refreshingAccounts.value || editing.value) return;
+  busy.value=true;
+  if (verify && selectedAccount.value?.id===account.id) live.value=false;
+  accountOptions.value='';
+  const existing=accounts.value.some(entry=>entry.id===account.id);
+  let success=false;
+  try {
+    if (existing && verify) {
+      account.verify=true;
+      await saveAccounts(accounts.value);
+    }
+    const result=await bridge.openLogin(account.region,account.id);
+    if (!result.ok) {notice.value=result.message || '登录未完成'; return;}
+    if (existing && account.confirmed && account.verify) {
+      const confirmed=await new Promise(resolve=>uni.showModal({
+        title:'确认 Apple 账号',content:'请确认刚刚登录的是「' + account.label + '」对应的 Apple 账号。',confirmText:'确认',success:value=>resolve(value.confirm),fail:()=>resolve(false)
+      }));
+      if (!confirmed) return;
+    }
+    const connected={...account,confirmed:true,verify:false};
+    const next=existing ? accounts.value.map(entry=>entry.id===account.id?connected:entry) : [...accounts.value,connected];
+    await saveAccounts(next);
+    accounts.value=next;
+    selectedAccount.value=accounts.value.find(entry=>entry.id===account.id);
+    region.value=account.region;
+    cachedList.value=null;
+    listSelectionRequired.value=true;
+    accept({...result,code:'READY'},true);
+    if (desktopWide.value && !result.snapshot.emptyAccount) summaryView.value='today';
+    else summaryView.value=null;
+    initialNavigation={id:account.id,result};
+    success=true;
+  } catch {
+    notice.value='账号或本地缓存暂时无法保存。';
+    noticeError.value=true;
+  } finally {
+    if (!success && !existing && !account.id.startsWith('legacy-')) await bridge.forgetAccount?.(account.region,account.id).catch(()=>{});
+    busy.value=false;
+  }
+  if (success) await refreshAccounts([selectedAccount.value]);
+}
+
+function addAccount() {
+  if (!multipleAccounts.value || busy.value || refreshingAccounts.value || editing.value) return;
+  uni.showActionSheet({itemList:regionLabels,success:({tapIndex})=>{
+    void accountLogin(newAccount(tapIndex===0?'cn':'global'));
+  }});
+}
+
+function newAccount(accountRegion) {
+  let ordinal=2;
+  while (accounts.value.some(account=>account.label==='iCloud ' + ordinal)) ordinal++;
+  const id=Date.now().toString(36)+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);
+  return {id,region:accountRegion,label:'iCloud ' + ordinal,confirmed:false,verify:false};
+}
+
+async function clearAccount(account, remove) {
+  if (busy.value || refreshingAccounts.value || editing.value) return;
+  const confirmed=await new Promise(resolve=>uni.showModal({
+    title:remove?'移除账号':'清除缓存',content:remove?'移除「' + account.label + '」在本机的会话及缓存？':'清除「' + account.label + '」在本机的缓存？',
+    success:value=>resolve(value.confirm),fail:()=>resolve(false)
+  }));
+  if (!confirmed || busy.value || refreshingAccounts.value) return;
+  busy.value=true;
+  try {
+    await pendingCacheWrite;
+    if (selectedAccount.value?.id===account.id) live.value=false;
+    if (remove && !(await bridge.forgetAccount(account.region,account.id)).ok) throw Error('会话尚未清除');
+    await localStore.removeReport(account);
+    delete accountReports.value[account.id];
+    delete accountStatus.value[account.id];
+    if (remove) {
+      const next=accounts.value.filter(entry=>entry.id!==account.id);
+      await saveAccounts(next);
+      accounts.value=next;
+    }
+    if (selectedAccount.value?.id===account.id || cachedList.value?.accountId===account.id) {
+      cachedList.value=null; snapshot.value=null; live.value=false;
+      if (remove) {
+        selectedAccount.value=accounts.value[0] || null;
+        if (selectedAccount.value) region.value=selectedAccount.value.region;
+      }
+      showAccountOverview();
+    }
+  } catch {notice.value='本机账号或缓存未能清除，请稍后重试。';noticeError.value=true;}
+  finally {busy.value=false;accountOptions.value='';}
+}
+
+onMounted(()=>initializeAccounts().catch(()=>{notice.value='本地缓存暂时不可用。';}));
+onUnmounted(()=>{workspaceMounted=false;});
+
 async function run(command) {
-  if (busy.value) return;
+  if (busy.value || refreshingAccounts.value || selectedAccount.value?.verify) return;
   busy.value = true;
   const revision=networkRevision;
-  try { const result = connectionResult(await bridge.execute(command, region.value),command.type,revision!==networkRevision); accept(result,['read','readLists','readList','selectList'].includes(command.type) && revision===networkRevision); return result; }
+  try { const result = connectionResult(await bridge.execute(command, region.value,sessionAccountId()),command.type,revision!==networkRevision); accept(result,['read','readLists','readList','selectList'].includes(command.type) && revision===networkRevision); return result; }
   catch (_) { live.value = false; notice.value = '连接暂时不可用，请重新打开官方页面核对。'; noticeCode.value='CONNECTION_FAILED'; noticeError.value = true; return { ok: false, code: 'CONNECTION_FAILED' }; }
   finally { busy.value = false; }
 }
@@ -523,7 +856,23 @@ function resetLoginView(message, code = '') {
 }
 
 async function connect() {
-  if (busy.value || (editing.value && !editing.value.blocked)) return;
+  if (busy.value || refreshingAccounts.value || (editing.value && !editing.value.blocked)) return;
+  if (localEnabled.value && !refreshingAccounts.value && !editing.value) {
+    const account=selectedAccount.value || (accounts.value.length && multipleAccounts.value ? newAccount(region.value) : legacyAccount());
+    if (!account.confirmed || account.verify || !snapshot.value || isDemo.value) return accountLogin(account);
+    // 打开完整官网后用户可以退出或换号。再次写入前由用户核对身份。
+    busy.value=true;
+    account.verify=true;
+    live.value=false;
+    try {
+      await saveAccounts(accounts.value);
+      const result=await bridge.openSite(account.region,account.id);
+      if (!result.ok) accept(result);
+      else notice.value='';
+    } catch {notice.value='账号状态未能保存或官方页面无法打开，请重试。';noticeError.value=true;}
+    finally {busy.value=false;}
+    return;
+  }
   const openLogin = typeof bridge.openLogin === 'function';
   if (openLogin && !editing.value && (!snapshot.value || isDemo.value)) {
     const revision = networkRevision;
@@ -548,7 +897,7 @@ async function connect() {
     }
     return;
   }
-  const result = await bridge.openSite(region.value);
+  const result = await bridge.openSite(region.value,sessionAccountId());
   if (!result.ok) { accept(result); return; }
   if (editing.value?.blocked) { notice.value = '请在官方页面核对修改结果，返回后刷新。'; return; }
   if (openLogin && snapshot.value && !isDemo.value) {
@@ -564,6 +913,7 @@ async function connect() {
 }
 
 async function refresh() {
+  if (localEnabled.value && !isDemo.value && accounts.value.length && !editing.value) return refreshAccounts();
   if (summaryView.value) return refreshSummary();
   if (isDemo.value) { showDemo(); return; }
   if (mobileOverview.value && canReadSummary.value && summaryData.value) return refreshSummary();
@@ -576,6 +926,10 @@ async function refresh() {
 
 async function reconnectClient() {
   if(busy.value || editing.value || isDemo.value || networkOffline.value || !bridge.capabilities?.reconnect) return;
+  if (localEnabled.value && selectedAccount.value) {
+    if (selectedAccount.value.verify) return accountLogin(selectedAccount.value);
+    return refreshAccounts([selectedAccount.value]);
+  }
   const revision=networkRevision;
   summaryView.value=null;
   summaryCache.value=null;
@@ -615,7 +969,7 @@ function selectDesktopCard(view) {
     if (summaryView.value!==view) search.value='';
     updateViewClock();
     summaryView.value=view;
-    if (!summaryData.value) return refreshSummary();
+    if (!summaryData.value && !localEnabled.value) return refreshSummary();
     return;
   }
   flagOnly.value = view === 'flagged';
@@ -623,6 +977,7 @@ function selectDesktopCard(view) {
 }
 
 function loadInitialSummary() {
+  if (localEnabled.value && selectedAccount.value) return;
   if (canReadSummary.value && live.value && !summaryData.value) return refreshSummary(true);
 }
 
@@ -665,6 +1020,24 @@ async function selectList(list) {
     showMobileDetail();
     return;
   }
+  if (localEnabled.value && list.accountId) {
+    const account=accounts.value.find(entry=>entry.id===list.accountId);
+    if (!account) return;
+    const report=accountReports.value[account.id];
+    const cached=report?.lists.find(entry=>entry.list.id===list.id)?.list ||
+      matchingList(report?.lists.map(entry=>entry.list) || [],list);
+    if (cached) {
+      selectedAccount.value=account;
+      region.value=account.region;
+      cachedList.value=cached;
+      snapshot.value=cachedSnapshot(cached);
+      live.value=false;
+      listSelectionRequired.value=true;
+      showMobileDetail();
+      return;
+    }
+    return openLiveList(list);
+  }
   const result = await run({ type: 'selectList', listId: list.id, pageId: snapshot.value.pageId });
   if(result?.ok) {
     showMobileDetail();
@@ -674,6 +1047,48 @@ async function selectList(list) {
   }
   if (result?.ok && tab.value === 'completed') await selectTab('completed');
   if (result?.ok) await loadInitialSummary();
+}
+
+/** 清单同名或外观无法唯一对应时留在只读界面，等待从官方导航中重新选择。 */
+async function openLiveList(list, quiet=false) {
+  if (busy.value || refreshingAccounts.value || editing.value) return;
+  const account=accounts.value.find(entry=>entry.id===list.accountId);
+  if (!account) return;
+  if (account.verify) return quiet ? undefined : accountLogin(account);
+  const current=selectedAccount.value?.id===account.id && snapshot.value?.pageId && snapshot.value.lists.some(entry=>entry.id===list.id);
+  selectedAccount.value=account;
+  region.value=account.region;
+  busy.value=true;
+  live.value=false;
+  try {
+    let navigation=current ? {ok:true,snapshot:snapshot.value} : await bridge.readNavigation(account.region,account.id);
+    if (!current && !navigation.ok && navigation.code==='PAGE_NOT_READY') {
+      navigation=await prepareNavigation(bridge,account);
+    }
+    if (!navigation.ok) {
+      if (navigation.code==='LOGIN_REQUIRED') updateAccountReport(account,null,navigation.code,navigation);
+      if (!quiet) accept({...navigation,message:navigation.message || '请先刷新此账号的清单。'});
+      return;
+    }
+    const target=current ? navigation.snapshot.lists.find(entry=>entry.id===list.id) : matchingList(navigation.snapshot.lists,list);
+    if (!target) {
+      if (!quiet) {
+        cachedList.value=null;
+        accept({...navigation,needsListSelection:true});
+        notice.value='请从此账号的清单中重新选择。';
+      }
+      return;
+    }
+    const result=await bridge.execute({type:'selectList',pageId:navigation.snapshot.pageId,listId:target.id},account.region,account.id);
+    if (result.ok && result.snapshot?.activeListId===target.id) {
+      cachedList.value=null;
+      listSelectionRequired.value=false;
+      accept(result,true);
+      showMobileDetail();
+    } else if (!quiet) accept(result);
+  } catch {
+    if (!quiet) {notice.value='暂时无法打开此清单，请刷新后重试。';noticeError.value=true;}
+  } finally {busy.value=false;}
 }
 
 async function renameListFromSidebar(list) {
@@ -908,12 +1323,21 @@ function showDemo() {
 }
 
 function changeRegion(event) {
-  if (busy.value || editing.value) return;
+  if (busy.value || refreshingAccounts.value || editing.value) return;
   const index = Number(event.detail.value);
   if (![0, 1].includes(index)) return;
   const next = index === 0 ? 'cn' : 'global';
   if (next === region.value) return;
   region.value = next;
+  if (localEnabled.value) {
+    if (accounts.value.length && !multipleAccounts.value) {
+      region.value=accounts.value[0].region;
+      notice.value='此设备支持一个账号。移除当前账号后可连接其他地区。';
+      return;
+    }
+    selectedAccount.value=accounts.value.find(account=>account.region===next) || null;
+    cachedList.value=null;
+  }
   summaryView.value = null;
   summaryCache.value = null;
   listSelectionRequired.value = false;
@@ -924,6 +1348,7 @@ function changeRegion(event) {
   const saved = saveRegionPreference(settingsStorage, next);
   notice.value = saved ? '服务区域已切换，请重新连接。' : '本次已切换区域，但未能保存设置；下次启动请重新选择。';
   noticeError.value = !saved;
+  if (localEnabled.value) showAccountOverview();
 }
 
 function changeSort(event) {
@@ -1014,7 +1439,7 @@ async function startCreate() {
   summaryView.value = null;
   showMobileDetail();
   if (!isDemo.value && bridge.capabilities?.createItem !== true) {
-    const result = await bridge.openSite(region.value);
+    const result = await bridge.openSite(region.value,sessionAccountId());
     if (!result.ok) { accept(result); return; }
     notice.value = '请在官方页面新增事项，返回后刷新。';
     noticeError.value = false;
@@ -1184,15 +1609,19 @@ function updateConnection(state) {
   }
 }
 let stopConnectionMonitor;
-onMounted(()=>{stopConnectionMonitor=monitorConnection(bridge,()=>region.value,updateConnection);});
+onMounted(()=>{
+  const connection=typeof bridge.connectionState==='function'
+    ? {connectionState:()=>bridge.connectionState(region.value,sessionAccountId())} : {};
+  stopConnectionMonitor=monitorConnection(connection,()=>sessionAccountId() || region.value,updateConnection);
+});
 onUnmounted(()=>stopConnectionMonitor?.());
 let stopNotifications;
 onMounted(async()=>{if(!canNotify)return;stopNotifications=bridge.onNotifications?.(receiveNotifications);try{receiveNotifications(await bridge.notificationsState(region.value));}catch{};});
 onUnmounted(()=>stopNotifications?.());
-watch(()=>[region.value,live.value,busy.value,!!editing.value,isDemo.value,networkNeedsRead.value,networkOffline.value,listSelectionRequired.value,snapshot.value?.pageId,snapshot.value?.activeListId,explicitReadGeneration.value,notificationsPanelOpen.value],()=>{
+watch(()=>[region.value,sessionAccountId(),live.value,busy.value,refreshingAccounts.value,!!editing.value,isDemo.value,networkNeedsRead.value,networkOffline.value,listSelectionRequired.value,snapshot.value?.pageId,snapshot.value?.activeListId,explicitReadGeneration.value,notificationsPanelOpen.value],()=>{
   if(!canNotify)return;
-  bridge.notificationsContext({region:region.value,ready:live.value && !isDemo.value && !networkNeedsRead.value && !networkOffline.value && !listSelectionRequired.value,
-    busy:busy.value,editing:!!editing.value,pageId:snapshot.value?.pageId || '',listId:snapshot.value?.activeListId || '',readGeneration:explicitReadGeneration.value}).catch(()=>{});
+  bridge.notificationsContext({region:region.value,accountId:sessionAccountId(),ready:live.value && !isDemo.value && !networkNeedsRead.value && !networkOffline.value && !listSelectionRequired.value,
+    busy:busy.value || refreshingAccounts.value,editing:!!editing.value,pageId:snapshot.value?.pageId || '',listId:snapshot.value?.activeListId || '',readGeneration:explicitReadGeneration.value}).catch(()=>{});
 },{immediate:true});
 // #ifdef H5 || APP-PLUS
 let loadedListMonitor;
@@ -1214,10 +1643,10 @@ function loadedListVisible() {
 onMounted(()=>{
   if(!canAutoRead)return;
   loadedListMonitor=monitorLoadedList({
-    state:()=>({enabled:autoReadEnabled.value && !summaryView.value,visible:loadedListVisible(),busy:busy.value,editing:!!editing.value || sortMenuOpen.value || notificationsPanelOpen.value,
+    state:()=>({enabled:autoReadEnabled.value && !summaryView.value,visible:loadedListVisible(),busy:busy.value || refreshingAccounts.value,editing:!!editing.value || sortMenuOpen.value || notificationsPanelOpen.value,
       recovery:networkOffline.value || networkNeedsRead.value || listSelectionRequired.value,live:live.value,demo:isDemo.value,region:region.value,revision:networkRevision+loadedListVisibilityRevision,snapshot:snapshot.value,
       allowReload:tab.value!=='completed'}),
-    read:(command,currentRegion)=>bridge.execute(command,currentRegion),
+    read:(command,currentRegion)=>bridge.execute(command,currentRegion,sessionAccountId()),
     started:()=>{autoReading.value=true;busy.value=true;},
     finished:()=>{autoReading.value=false;busy.value=false;},
     // 自动读取只更新内容；不抹去仍待核对的保存提示，也不自动解除断网恢复保护。
@@ -1277,6 +1706,19 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .brand-name { display:block; font-size:18px; font-weight:650; letter-spacing:-.5px; }.brand-caption { display:block; font-size:11px; color:#9198a5; margin-top:5px; letter-spacing:.5px; }
 .account-card { display:flex; align-items:center; gap:10px; background:#fff; border:1px solid #e8ebf1; border-radius:12px; padding:15px 12px; margin-bottom:32px; }.account-dot { width:8px; height:8px; border-radius:50%; background:#bec6d2; }.account-dot.connected { background:#37af7b; }.account-copy { display:flex; flex-direction:column; gap:5px; }.account-title { font-size:13px; font-weight:550; }
 .muted { color:#929aa7; }.small { font-size:11px; }.sidebar-section { display:flex; justify-content:space-between; font-size:11px; font-weight:600; color:#9198a6; padding:0 10px; margin-bottom:12px; letter-spacing:1px; }.sidebar-placeholder { font-size:12px; color:#a0a7b3; line-height:1.8; padding:8px 10px; }
+.account-group { margin-bottom:12px; }
+.account-group-header { display:flex; align-items:center; gap:4px; }
+.account-group-toggle { display:flex; align-items:center; gap:12px; flex:1; min-width:0; text-align:left; padding:6px 8px; min-height:36px; }
+.account-group-toggle .list-name { font-weight:650; }
+.account-group-toggle .list-chevron { width:7px; height:7px; border:solid currentColor; border-width:2px 2px 0 0; transform:rotate(45deg); opacity:.5; flex:none; }
+.account-group-toggle .account-chevron-open { transform:rotate(135deg); }
+.account-more { flex-shrink:0; min-width:32px; }
+.account-group-actions { display:flex; flex-wrap:wrap; padding:0 4px; }
+.account-add { margin-left:auto; white-space:nowrap; font-weight:normal; }
+.account-status { display:block; padding:3px 8px; }
+.cached-list-actions { display:flex; align-items:center; gap:10px; padding:8px 0; }
+.compact-overview .account-group-toggle { padding:9px 12px; }
+.compact-overview .account-group-toggle .list-name { font-size:20px; }
 .list-button { display:flex; width:100%; align-items:center; gap:11px; padding:11px 10px; border-radius:9px; margin-bottom:4px; text-align:left; }.list-button.selected { background:#e6edf9; }.list-symbol { width:26px; height:26px; border-radius:7px; color:#fff; text-align:center; line-height:23px; font-size:22px; font-weight:600; }.list-name { flex:1; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.list-count { color:#758297; font-size:13px; }.sidebar-footer { margin-top:auto; display:flex; flex-direction:column; gap:8px; padding:24px 10px 0; }.footer-wordmark { font-size:12px; color:#6b7482; }
 .workspace { flex:1; display:flex; flex-direction:column; min-width:0; }.toolbar { height:77px; padding:0 34px; border-bottom:1px solid #eff1f5; display:flex; align-items:center; justify-content:space-between; gap:20px; flex-shrink:0; }.toolbar-label { color:#929aa7; font-size:12px; }.toolbar-actions { display:flex; gap:14px; align-items:center; }.region-picker { color:#9198a5; font-size:12px; padding:8px 0; }.quiet-button { font-size:13px; color:#596679; padding:9px 5px; }.primary-button { background:#1687ff; color:#fff; border-radius:9px; padding:10px 19px; font-size:13px; font-weight:550; }.primary-button[disabled] { background:#1687ff; color:#fff; }.notice { margin:16px 34px 0; background:#f2f7fd; color:#617a98; padding:11px 14px; font-size:12px; line-height:1.7; border-radius:9px; flex-shrink:0; }.notice.error { color:#b36139; background:#fff6ed; }
 .welcome { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:36px 20px 60px; }.welcome-art { width:100px; height:115px; padding:22px 17px; border:1px solid #edf0f4; box-shadow:0 12px 35px #2d497017; border-radius:23px; margin-bottom:34px; transform:rotate(-6deg); display:flex; flex-direction:column; gap:15px; }.welcome-line { display:flex; align-items:center; gap:12px; height:14px; color:#1687ff; font-size:20px; }.welcome-line:nth-child(2) { color:#ed9659; }.welcome-line:nth-child(3) { color:#ac89d1; }.welcome-line view { height:4px; background:#e7eaf0; border-radius:2px; flex:1; }.welcome-kicker { font-size:11px; letter-spacing:2px; color:#8697ab; margin-bottom:16px; }.welcome-title { font-size:36px; font-weight:650; letter-spacing:-1.5px; line-height:1.5; color:#263247; }.welcome-description { font-size:13px; line-height:1.9; color:#9099a6; margin-top:17px; }.welcome-connect { margin-top:28px; padding:13px 28px; }.demo-link { color:#7f8b9d; font-size:12px; padding:18px 0; }.welcome-footnote { color:#afb5be; font-size:10px; margin-top:9px; }
