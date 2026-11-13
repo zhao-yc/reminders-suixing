@@ -187,8 +187,9 @@ test('文字未变化时不进入编辑或再次保存', async t => {
 });
 
 test('域名检查兼容中国区并拒绝相似域名、HTTP 和非标准端口', () => {
-  for (const url of ['https://www.icloud.com.cn/reminders/', 'https://idmsa.apple.com/appleauth/']) assert.equal(isApplePage(url), true);
-  for (const url of ['https://icloud.com.evil.example/', 'https://evilicloud.com/', 'http://www.icloud.com/', 'https://www.icloud.com:8443/']) assert.equal(isApplePage(url), false);
+  for (const url of ['https://www.icloud.com.cn/reminders/', 'https://idmsa.apple.com/appleauth/', 'HTTPS://WWW.ICLOUD.COM:443/?test']) assert.equal(isApplePage(url), true);
+  for (const url of ['https://icloud.com.evil.example/', 'https://evilicloud.com/', 'http://www.icloud.com/', 'https://www.icloud.com:8443/',
+    'https://www.icloud.com@evil.example/', 'https://evil.example@www.icloud.com/', 'https://www.icloud.com\\@evil.example/']) assert.equal(isApplePage(url), false);
 });
 
 test('读取保留同名事项的不同记录 ID，且不重复辅助文字', async t => {

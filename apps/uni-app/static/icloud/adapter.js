@@ -297,7 +297,7 @@
     var doc = application();
     if (!doc) {
       lastSnapshot = null;
-      return result(false, 'PAGE_NOT_READY', '请在 iCloud 官方页面完成登录，等待清单出现后再读取。');
+      return result(false, 'PAGE_NOT_READY', '暂时读不到官方清单。请在 iCloud 官方页面确认清单已显示后再刷新。');
     }
     if (isLoading(doc)) {
       lastSnapshot = null;

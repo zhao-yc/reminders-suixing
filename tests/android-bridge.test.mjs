@@ -35,7 +35,7 @@ function setup(t, options = {}) {
         this.loads.push(value); this.url = value; this.emit('loading');
       },
       close() { this.closed++; this.emit('close'); },
-      show() { this.shown++; this.visible = true; }, hide() { this.hidden++; this.visible = false; },
+      show() { this.shown++; this.visible = true; }, hide() { this.hidden++; this.visible = false; this.emit('hide'); },
       isVisible() { return this.visible; },
       reload() { this.reloads++; this.emit('loading'); },
       evalJS(script) {
@@ -53,7 +53,8 @@ function setup(t, options = {}) {
     views.push(view);
     return view;
   } } };
-  const bridge = createAndroidBridge({ runtime, adapterSource: options.realAdapter ? source : '', timeoutMs: options.timeoutMs || 1000 });
+  const bridge = createAndroidBridge({ runtime, adapterSource: options.realAdapter ? source : '', timeoutMs: options.timeoutMs || 1000,
+    loginIntervalMs: options.loginIntervalMs, loginTimeoutMs: options.loginTimeoutMs });
   t.after(() => { bridge.dispose(); for (const view of views) view.window.close?.(); });
   return { bridge, views,
     async open(region = 'cn') { assert.equal((await bridge.openSite(region)).ok, true); const view = views.at(-1); view.emit('loaded'); return view; },
@@ -621,6 +622,66 @@ test('Android 拒绝任意命令、原型区域和未读取页面的写入', asy
   view.emit('loaded');
   assert.equal((await state.bridge.execute({ type: 'read' })).code, 'PAGE_NOT_READY');
   assert.equal(view.scripts.length, 0);
+});
+
+test('Android 等官方清单就绪才自动返回，并复用原窗口选清单', async t => {
+  const state = setup(t, { realAdapter: true, loginIntervalMs: 1 });
+  const login = state.bridge.openLogin();
+  const [view] = state.views;
+  const panel = view.window.document.createElement('div');
+  panel.setAttribute('role', 'dialog');
+  panel.textContent = '随行验证 · 官方登录确认';
+  view.window.document.body.append(panel);
+  await tick();
+  assert.equal(view.hidden, 0);
+  assert.equal((await state.bridge.execute(writeCommand())).code, 'BUSY');
+  panel.remove();
+  const result = await login;
+  assert.equal(result.code, 'LOGIN_READY');
+  assert.equal(result.snapshot.activeListId, null);
+  assert.deepEqual(result.snapshot.items, []);
+  assert.ok(result.snapshot.lists.length > 0);
+  assert.equal(view.hidden, 1);
+  assert.equal(view.closed, 0);
+  assert.equal(view.loads.length, 1);
+  assert.equal((await state.bridge.execute({ type: 'read' })).ok, true);
+  assert.equal(state.views.length, 1);
+});
+
+test('Android 手动返回后结束登录检测，即使缺少 loaded 事件也可刷新', async t => {
+  const state = setup(t);
+  const login = state.bridge.openLogin();
+  const [view] = state.views;
+  await tick();
+  assert.equal(view.calls[0].command.type, 'readLists');
+  assert.equal(view.calls[0].command.background, true);
+  assert.equal(state.bridge.hideSite(), true);
+  assert.equal((await login).code, 'LOGIN_CANCELLED');
+  view.calls[0].resolve(readResult());
+  const refreshed = state.bridge.execute({ type: 'read' });
+  await tick();
+  view.calls.at(-1).resolve(readResult());
+  assert.equal((await refreshed).ok, true);
+  assert.equal(view.hidden, 1);
+  assert.equal(state.views.length, 1);
+});
+
+test('Android 原生逻辑层没有 URL 构造器时仍能读到官方清单', async t => {
+  const original = globalThis.URL;
+  const state = setup(t);
+  try {
+    globalThis.URL = undefined;
+    const opened = state.bridge.openLogin();
+    const [view] = state.views;
+    await tick();
+    assert.equal(view.calls[0].command.type, 'readLists');
+    view.calls[0].resolve({
+      ok: true, code: 'SELECT_A_LIST', needsListSelection: true,
+      snapshot: { ...snapshot(), activeListId: null, lists: [{ id: 'synthetic-list' }] }
+    });
+    assert.equal((await opened).code, 'LOGIN_READY');
+    assert.equal((await state.read(view)).ok, true);
+  } finally { globalThis.URL = original; }
 });
 
 test('按编码后的 URL 限制中文快照大小，超限不拆分重发', async t => {
