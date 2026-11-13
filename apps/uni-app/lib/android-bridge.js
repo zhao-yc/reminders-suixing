@@ -169,7 +169,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
         if (pending === current) interrupt('BRIDGE_TIMEOUT', '页面响应超时，请在官方页面核对后重新读取。');
       }, commandTimeoutMs);
       // 限制实际 URL 编码后的长度，避免中文正文使传输范围被低估。不拆分或重发命令。
-      const source = nativeCommandScript(adapterSource, command, id);
+      const source = nativeCommandScript(adapterSource, { ...command, androidCompact: true }, id);
       try { view.evalJS(source); }
       catch { interrupt('BRIDGE_ERROR', '页面命令未取得回执，请核对后重新读取。'); }
     });

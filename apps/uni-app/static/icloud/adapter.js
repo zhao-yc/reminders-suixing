@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.24') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.25') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -9,6 +9,8 @@
   var nextHandle = 0;
   var inFlight = false;
   var lastSnapshot = null;
+  var compactSelection = null;
+  var compactLists = null;
   var creationRequests = new Set();
   var deletionRequests = new Set();
   var listRequests = new Set();
@@ -32,7 +34,7 @@
     clearSettledCreation();
     connectionEpoch++;
     pageId='page-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
-    lastSnapshot=null;detailScheduleReads.clear();
+    lastSnapshot=null;compactSelection=null;compactLists=null;detailScheduleReads.clear();
   }
   root.addEventListener('offline',lostConnection);
   function assertConnected() {
@@ -72,7 +74,7 @@
     return documents().find(function (doc) {
       return doc.querySelector('[role="tree"] .rm-list-menu-item') ||
         doc.querySelector('[role="treegrid"] .reminder-item') ||
-        doc.querySelector('.no-lists-note') && doc.querySelector('.new-list-button') ||
+        doc.querySelector('.no-lists-note') && doc.querySelector('.new-list-button') || compactPane(doc) ||
         doc.querySelector('[role="tree"][aria-label="Reminder Lists"], [role="tree"][aria-label="提醒事项列表"]');
     });
   }
@@ -89,6 +91,41 @@
     return Array.from(doc.querySelectorAll('[role="tree"] [role="treeitem"]')).filter(function (el) {
       return el.querySelector('.inline-editable-label');
     });
+  }
+
+  function compactPane(doc) {
+    return doc.querySelector('.rm-list .rm-list-header.compact .list-back-button')?.closest('.rm-list') || null;
+  }
+
+  function compactTitle(pane) {
+    return text(pane?.querySelector('.rm-list-header h1.title .inline-editable-label'));
+  }
+
+  function selectedListNode(doc) {
+    var current = listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
+    if (current) return current;
+    var selection = compactSelection;
+    if (selection && selection.pane === compactPane(doc) && compactTitle(selection.pane) === listName(selection.node)) return selection.node;
+    return null;
+  }
+
+  /** 手机官网一次只挂载清单导航或事项页。仅点击明确的“列表”返回按钮，不碰编辑或确认弹层。 */
+  async function revealCompactLists(doc) {
+    var deferred = deferredWhileEditing(doc);
+    if (deferred) return deferred;
+    var back = compactPane(doc)?.querySelector('.list-back-button');
+    if (!back || !visibleControl(back) || back.disabled || back.getAttribute('aria-disabled') === 'true') {
+      return result(false, 'LIST_LOADING', '官方清单导航尚未就绪，请稍后刷新。');
+    }
+    activate(back);
+    var navigation = await until(function () {
+      var current = application();
+      return current && !isLoading(current) && !compactPane(current) &&
+        (listNodes(current).length || current.querySelector('.no-lists-note') && current.querySelector('.new-list-button')) && current;
+    }, 4000);
+    if (!navigation) return result(false, 'LIST_LOADING', '官方清单导航尚未就绪，请稍后刷新。');
+    compactSelection = null;
+    return navigation;
   }
 
   function handle(node) {
@@ -165,14 +202,23 @@
     });
   }
 
-  function readLists(command) {
+  async function readLists(command) {
     var doc=application();
     if(!doc || isLoading(doc)) {lastSnapshot=null;return result(false,'PAGE_NOT_READY','官方清单尚未就绪，请稍后读取。');}
     if(command.background===true) {
       var deferred=deferredWhileEditing(doc);
       if(deferred)return deferred;
     }
+    if (command.androidCompact && !listNodes(doc).length && compactPane(doc)) {
+      var navigation = await revealCompactLists(doc);
+      if (navigation.ok === false) return navigation;
+      doc = navigation;
+    }
     var lists=listNodes(doc).map(readList);
+    if (command.androidCompact && !lists.length && !(doc.querySelector('.no-lists-note') && doc.querySelector('.new-list-button'))) {
+      return result(false, 'LIST_LOADING', '官方清单导航尚未就绪，请稍后刷新。');
+    }
+    if (command.androidCompact) compactLists = lists;
     var navigation={snapshot:navigationSnapshot(doc,lists),needsListSelection:true};
     if(command.background===true) {
       var selected=lists.filter(function(list){return list.selected;});
@@ -190,6 +236,7 @@
     var doc=application();
     if(!doc || isLoading(doc)){lastSnapshot=null;return result(false,'LIST_LOADING','指定清单正在加载，请稍后读取。');}
     var selected=listNodes(doc).filter(function(node){return node.getAttribute('aria-selected')==='true';});
+    if (!selected.length && command.androidCompact && selectedListNode(doc)) selected.push(selectedListNode(doc));
     if(selected.length!==1 || handle(selected[0])!==command.listId){lastSnapshot=null;return result(false,'STALE_VIEW','官方选中的清单已变化，请重新选择。');}
     // 自动读取不碰官方编辑草稿或弹层，也不通过失焦结束编辑。
     if(command.background===true) {
@@ -200,7 +247,7 @@
       var deferred=deferredWhileEditing(doc,known && settledCreation);
       if(deferred)return deferred;
     }
-    return read();
+    return read(command);
   }
 
   function rowNodes(doc) {
@@ -293,7 +340,7 @@
     return output.replace(/\u200b/g, '').replace(/\r\n?/g, '\n').trim();
   }
 
-  function read() {
+  function read(command) {
     var doc = application();
     if (!doc) {
       lastSnapshot = null;
@@ -306,6 +353,13 @@
     var nodes = listNodes(doc);
     var lists = nodes.map(readList);
     var active = lists.find(function (item) { return item.selected; });
+    if (!nodes.length && compactPane(doc) && (command?.androidCompact || compactSelection)) {
+      var selected = selectedListNode(doc);
+      if (!selected) return readLists({ androidCompact: true, background: true });
+      active = readList(selected);
+      active.selected = true;
+      lists = compactLists.map(function (list) { return Object.assign({}, list, {selected:list.id === active.id}); });
+    }
     if (!active) {
       return result(true,'SELECT_A_LIST',lists.length?'请选择一个清单。':'还没有清单，可以新建一份。',{snapshot:navigationSnapshot(doc,lists),needsListSelection:true});
     }
@@ -367,6 +421,18 @@
   async function selectList(command) {
     var doc = application();
     if (!doc || command.pageId !== pageId) return result(false, 'STALE_VIEW', '页面已变化，请先刷新列表。');
+    var requested = null;
+    if (command.androidCompact && compactPane(doc)) {
+      var selected = selectedListNode(doc);
+      if (selected && handle(selected) === command.listId) return read(command);
+      requested = compactLists?.find(function (list) { return list.id === command.listId; });
+      if (!requested || compactLists.filter(function (list) { return list.title === requested.title; }).length !== 1) {
+        return result(false, 'STALE_VIEW', '请刷新清单导航后重新选择。');
+      }
+      var navigation = await revealCompactLists(doc);
+      if (navigation.ok === false) return navigation;
+      doc = navigation;
+    }
     var nodes = listNodes(doc);
     if(command.background===true) {
       var selected=nodes.filter(function(node){return node.getAttribute('aria-selected')==='true';});
@@ -375,9 +441,18 @@
       var deferred=deferredWhileEditing(doc);
       if(deferred)return deferred;
     }
-    var target = nodes.find(function (node) { return handle(node) === command.listId; });
+    var target;
+    if (requested) {
+      var matches = nodes.filter(function (node) { return listName(node) === requested.title; });
+      if (matches.length === 1 && nodes.length === compactLists.length &&
+          nodes.every(function (node, index) { return listName(node) === compactLists[index].title; })) {
+        nodes.forEach(function (node, index) { listHandles.set(node, compactLists[index].id); });
+        target = matches[0];
+      }
+    } else target = nodes.find(function (node) { return handle(node) === command.listId; });
     if (!target) return result(false, 'STALE_VIEW', '清单已变化，请先刷新列表。');
-    if (target.getAttribute('aria-selected') === 'true') return read();
+    if (target.getAttribute('aria-selected') === 'true') return read(command);
+    if (command.androidCompact) compactLists = nodes.map(readList);
     var oldIds = rowNodes(doc).map(function (row) { return row.id; }).join('|');
     // 点击清单容器，避免在标题按钮上触发重命名编辑。
     activate(target);
@@ -385,23 +460,27 @@
     var previous = null;
     var loaded = await until(function () {
       var current = application();
-      if (!current || isLoading(current) || target.getAttribute('aria-selected') !== 'true') return false;
+      if (!current || isLoading(current)) return false;
+      var pane = command.androidCompact && compactPane(current);
+      var compactReady = pane && !target.isConnected && compactTitle(pane) === listName(target);
+      if (!compactReady && target.getAttribute('aria-selected') !== 'true') return false;
       var ids = rowNodes(current).map(function (row) { return row.id; }).join('|');
       if (ids === oldIds && ids) return false;
       stable = previous === ids ? stable + 1 : 0;
       previous = ids;
-      return stable >= 3;
+      return stable >= 3 && (compactReady ? pane : true);
     }, 8000);
     if (!loaded) { lastSnapshot = null; return result(false, 'LIST_LOADING', '列表尚未加载完成，请稍后重新读取。'); }
+    if (loaded !== true) compactSelection = {pane:loaded,node:target};
     if(command.background===true)return readSelectedList(command);
-    return read();
+    return read(command);
   }
 
   /** 只请求官方菜单展开完成项，不切换事项状态；清单变化时不继续点击。 */
   async function showCompleted(command) {
     var doc = application();
     function currentList() {
-      var active = doc && listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
+      var active = doc && selectedListNode(doc);
       return active && handle(active) === command.listId && command.pageId === pageId;
     }
     if (!doc || !lastSnapshot || lastSnapshot.activeListId !== command.listId || !currentList()) return result(false, 'STALE_VIEW', '当前清单已变化，请先刷新。');
@@ -455,7 +534,7 @@
     if (!doc || !lastSnapshot || command.pageId !== pageId || lastSnapshot.activeListId !== command.listId) {
       return result(false, 'STALE_VIEW', '这份数据不是当前页面，请先刷新。');
     }
-    var active = listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
+    var active = selectedListNode(doc);
     if (!active || handle(active) !== command.listId) return result(false, 'STALE_VIEW', '当前清单已变化，请先刷新。');
     var rows = rowNodes(doc).filter(function (row) { return row.id === command.id; });
     if (rows.length !== 1) return result(false, 'STALE_VIEW', '无法唯一定位事项，请先刷新。');
@@ -559,7 +638,7 @@
     if (!doc || !lastSnapshot || command.pageId !== pageId || lastSnapshot.activeListId !== command.listId) {
       return result(false, 'STALE_VIEW', '页面已变化，请先刷新后再编辑。');
     }
-    var active = listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
+    var active = selectedListNode(doc);
     var rows = rowNodes(doc).filter(function (row) { return row.id === command.id; });
     if (!active || handle(active) !== command.listId || rows.length !== 1) return result(false, 'STALE_VIEW', '当前清单或事项已变化，请先刷新。');
     var current = readItem(rows[0], command.listId);
@@ -607,7 +686,7 @@
         typeof command.requestId !== 'string' || !/^[a-z0-9-]{1,100}$/.test(command.requestId)) return result(false, 'INVALID_COMMAND', '请填写有效的事项标题。');
     if (creationRequests.has(command.requestId)) return result(false, 'ALREADY_SUBMITTED', '本次新增已经提交过，请先读取核对，不要重复创建。');
     var doc = application();
-    var active = doc && listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
+    var active = doc && selectedListNode(doc);
     if (!doc || !lastSnapshot || command.pageId !== pageId || lastSnapshot.activeListId !== command.listId || !active || handle(active) !== command.listId || isLoading(doc)) {
       return result(false, 'STALE_VIEW', '请先读取当前清单，再新增事项。');
     }
@@ -626,7 +705,7 @@
     assertConnected();
     submitButton.click();
     var draft = await until(function () {
-      var selected = listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
+      var selected = selectedListNode(doc);
       if (!selected || handle(selected) !== command.listId) return false;
       var candidates = rowNodes(doc).filter(function (row) { return !beforeIds.has(row.id); });
       if (candidates.length !== 1) return false;
@@ -732,7 +811,7 @@
   function itemContext(command) {
     var doc = application();
     if (!doc || !lastSnapshot || command.pageId !== pageId || lastSnapshot.activeListId !== command.listId || typeof command.expectedCompleted !== 'boolean') return null;
-    var selected = listNodes(doc).find(function (node) { return node.getAttribute('aria-selected') === 'true'; });
+    var selected = selectedListNode(doc);
     if (!selected || handle(selected) !== command.listId || isLoading(doc)) return null;
     var rows = rowNodes(doc).filter(function (row) { return row.id === command.id; });
     var item = rows.length === 1 && readItem(rows[0],command.listId);
@@ -1460,7 +1539,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.24',
+    version: '0.3.25',
     dispose:function(){clearSettledCreation();root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */
@@ -1478,8 +1557,8 @@
       operationEpoch=connectionEpoch;
       if (command.type === 'createItem') { creationDiagnosticSequence = root.__suixingDiagnosticWriteSequence; setCreationStage('preflight'); }
       try {
-        if (command.type === 'read') return read();
-        if (command.type === 'readLists') return readLists(command);
+        if (command.type === 'read') return await read(command);
+        if (command.type === 'readLists') return await readLists(command);
         if (command.type === 'readList') return readSelectedList(command);
         if (command.type === 'selectList') return await selectList(command);
         if (command.type === 'showCompleted') return await showCompleted(command);

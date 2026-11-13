@@ -26,6 +26,74 @@ function textChange(snapshot, field, value, index = 0) {
     fingerprint: item.fingerprint, expectedCompleted: item.completed, field, value };
 }
 
+test('Android 官方窄屏详情移除导航时，读取清单并按选择恢复事项', async t => {
+  const { execute, window } = setup(t);
+  const doc = window.document;
+  const originalTree = doc.querySelector('[role="tree"]');
+  const originalDetail = doc.querySelector('[role="treegrid"]');
+  const rows = ['one', 'two'].map((key, index) => ({
+    key, title: '随行验证 · 清单 ' + (index + 1)
+  }));
+  const results = { back:0, selections:0 };
+  originalTree.remove();
+  const pane = doc.createElement('main');
+  pane.className = 'rm-list';
+  const header = doc.createElement('div');
+  header.className = 'rm-list-header compact';
+  header.innerHTML = '<div class="compact"><button class="list-back-button">列表</button></div><h1 class="title"><button class="inline-editable-label"></button></h1>';
+  originalDetail.before(pane);
+  pane.append(header, originalDetail);
+  function displayDetail(entry) {
+    header.querySelector('h1 button').textContent = entry.title;
+    window.renderFixture(entry.key);
+    pane.hidden = false;
+  }
+  header.querySelector('.list-back-button').addEventListener('click', () => {
+    results.back++;
+    pane.hidden = true;
+    header.classList.remove('compact');
+    const tree = doc.createElement('div');
+    tree.setAttribute('role', 'tree');
+    for (const entry of rows) {
+      const node = doc.createElement('div');
+      node.setAttribute('role', 'treeitem');
+      node.setAttribute('aria-selected', 'false');
+      node.className = 'rm-list-menu-item is-compact';
+      const label = doc.createElement('button');
+      label.className = 'inline-editable-label';
+      label.textContent = entry.title;
+      node.append(label);
+      node.addEventListener('click', () => {
+        results.selections++;
+        tree.remove();
+        header.classList.add('compact');
+        displayDetail(entry);
+      });
+      tree.append(node);
+    }
+    pane.before(tree);
+  });
+  displayDetail(rows[0]);
+  const options = { androidCompact:true };
+  const nav = await execute({ type:'read', ...options });
+  assert.equal(nav.code, 'SELECT_A_LIST');
+  assert.equal(nav.snapshot.activeListId, null);
+  assert.equal(nav.snapshot.lists.length, 2);
+  assert.deepEqual(results, {back:1,selections:0});
+  const [first, second] = nav.snapshot.lists;
+  const select = id => execute({type:'selectList', pageId:nav.snapshot.pageId, listId:id, ...options});
+  const opened = await select(first.id);
+  assert.equal(opened.code, 'READY');
+  assert.equal(opened.snapshot.activeListId, first.id);
+  assert.ok(opened.snapshot.items.length > 0);
+  const refreshed = await execute({type:'read', ...options});
+  assert.equal(refreshed.snapshot.activeListId, first.id);
+  const switched = await select(second.id);
+  assert.equal(switched.code, 'READY');
+  assert.equal(switched.snapshot.activeListId, second.id);
+  assert.deepEqual(results, {back:2,selections:2});
+});
+
 test('标题编辑只命中同名事项中的目标，HTML 作为文字且只保存一次', async t => {
   const { execute, window } = setup(t);
   const { snapshot } = await execute({ type: 'read' });
