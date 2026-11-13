@@ -1044,13 +1044,32 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(layout.sidebarPosition, 'fixed');
     assert.ok(layout.sidebarRight <= 1);
     assert.ok(layout.scrollWidth <= layout.width + 1);
-    const bounds = await ui.webContents.executeJavaScript('Object.fromEntries([".workspace",".notice",".list-content",".list-controls",".search",".reminder-row",".reminder-copy"].map(s=>{const n=document.querySelector(s);const r=n.getBoundingClientRect();return [s,{left:r.left,right:r.right,width:r.width,scroll:n.scrollWidth}]}))');
+    const bounds = await ui.webContents.executeJavaScript('Object.fromEntries([".workspace",".list-content",".reminder-row",".reminder-copy"].map(s=>{const n=document.querySelector(s);const r=n.getBoundingClientRect();return [s,{left:r.left,right:r.right,width:r.width,scroll:n.scrollWidth}]}))');
     console.log('窄屏内容范围：' + JSON.stringify(bounds));
     for (const [selector, rect] of Object.entries(bounds)) {
       assert.ok(rect.left >= -1 && rect.right <= layout.width + 1, selector + ' 不能超出窄屏内容区');
       assert.ok(rect.scroll <= Math.ceil(rect.width) + 1, selector + ' 不能横向裁切内容');
     }
     fs.writeFileSync(path.join(root, '.local/mobile-preview.png'), (await ui.webContents.capturePage()).toPNG());
+    await ui.webContents.executeJavaScript('document.querySelector(".more-tool").click(); document.querySelector(".refresh-button").click()');
+    await ui.webContents.executeJavaScript('document.querySelector(".mobile-menu").click()');
+    await waitForRenderer('document.querySelector(".compact-overview") && document.querySelectorAll(".desktop-view-card").length===6',ui);
+    const overview = await ui.webContents.executeJavaScript(`(() => {
+      const cards = [...document.querySelectorAll('.desktop-view-card')].map(card => card.getBoundingClientRect());
+      return { columns: new Set(cards.map(card => card.left)).size, rows: new Set(cards.map(card => card.top)).size,
+        detailHidden: getComputedStyle(document.querySelector('.list-content')).display === 'none',
+        lists: document.querySelectorAll('.list-group .list-button').length };
+    })()`);
+    assert.deepEqual(overview, {columns:2,rows:3,detailHidden:true,lists:3});
+    await ui.webContents.executeJavaScript('document.querySelector(".desktop-view-card[data-status=today]").click()');
+    await waitForRenderer('!document.querySelector(".compact-overview") && document.querySelector(".list-title").textContent==="今天"',ui);
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".reminder-row[data-record-id]").length'),2);
+    await ui.webContents.executeJavaScript('document.querySelector(".mobile-menu").click()');
+    await waitForRenderer('document.querySelector(".compact-overview")',ui);
+    await ui.webContents.executeJavaScript('document.querySelector(".list-button[data-list-id=demo-work]").click()');
+    await waitForRenderer('!document.querySelector(".compact-overview") && document.querySelector(".list-title").textContent==="工作"',ui);
+    assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".reminder-row[data-record-id]").length'),0);
+    console.log('窄屏首页两列快捷卡片、今天、返回及示例清单隔离通过。');
     assert.deepEqual(uiErrors,[],'合成检查不得忽略本地界面的脚本错误');
     const report = {
       passed: true, kind: 'Electron 合成验证，不代表真实 iCloud 或真机验收',

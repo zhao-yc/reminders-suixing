@@ -1,5 +1,7 @@
 <template>
-  <view class="app-shell" :class="{ 'desktop-sidebar-layout': desktopWide }">
+  <view class="app-shell" :class="{ 'desktop-sidebar-layout': desktopWide, 'compact-layout': !desktopWide && !!snapshot,
+    'compact-overview': mobileOverview, 'compact-options': mobileOptionsOpen, 'compact-search': mobileSearchOpen,
+    'compact-editing': !!editing || sortMenuOpen }">
     <!-- #ifdef APP-HARMONY -->
     <HarmonyICloudHost :bridge="bridge" />
     <!-- #endif -->
@@ -9,9 +11,9 @@
         <view class="brand-icon"><view></view><view></view><view></view></view>
         <view><text class="brand-name">提醒事项·随行</text><text class="brand-caption">让每一件事，随身而行</text></view>
       </view>
-      <view v-if="desktopWide && snapshot && (snapshot.activeListId || canReadSummary)" class="desktop-view-grid" :data-scope="canReadSummary ? 'summary' : 'list'" role="group" aria-label="快捷视图">
+      <view v-if="snapshot && (desktopWide || mobileOverview)" class="desktop-view-grid" :data-scope="canReadSummary ? 'summary' : 'list'" role="group" aria-label="快捷视图">
         <button v-for="card in desktopCards" :key="card.value" class="view-tab desktop-view-card" role="button" :data-status="card.value"
-          :tabindex="desktopCardsDisabled ? -1 : 0" :disabled="desktopCardsDisabled" :class="{ active: activeDesktopCard === card.value }" :aria-pressed="String(activeDesktopCard === card.value)"
+          :tabindex="desktopCardsDisabled ? -1 : 0" :disabled="desktopCardsDisabled" :class="{ active: !mobileOverview && activeDesktopCard === card.value }" :aria-pressed="String(!mobileOverview && activeDesktopCard === card.value)"
           :aria-label="card.label + (canReadSummary ? '，跨清单' : '，当前清单') + '，' + desktopCardCount(card.value)"
           @click="selectDesktopCard(card.value)">
           <view class="desktop-card-top"><image class="desktop-icon" :src="'/static/desktop-icons/' + card.icon + '.svg'" mode="aspectFit" aria-hidden="true" />
@@ -19,29 +21,40 @@
           <text class="desktop-card-label">{{ card.label }}</text>
         </button>
       </view>
-      <view v-if="!desktopWide || !snapshot?.activeListId" class="account-card">
+      <text v-if="mobileOverview && !canReadSummary && snapshot.activeListTitle" class="overview-scope muted">{{ isDemo ? '界面示例 · ' : '快捷视图 · ' }}{{ snapshot.activeListTitle }}</text>
+      <view v-if="(!desktopWide || !snapshot?.activeListId) && !mobileOverview" class="account-card">
         <view class="account-dot" :class="{ connected: accountConnected }"></view>
         <view class="account-copy"><text class="account-title">{{ isDemo ? '界面示例' : accountConnected ? '已连接 iCloud' : snapshot ? '待读取核对' : '连接你的 iCloud' }}</text><text class="muted small">{{ isDemo ? '示例数据，不连接账户' : region === 'cn' ? '中国大陆账户' : '其他地区账户' }}</text></view>
       </view>
-      <view class="sidebar-section"><text>我的清单</text><text v-if="!desktopWide" class="muted">{{ snapshot?.lists.length || 0 }}</text>
-        <button v-if="desktopWide && snapshot && canManageLists" class="add-list-button desktop-add-list" role="button"
+      <view class="sidebar-section"><text>{{ mobileOverview && !isDemo ? 'iCloud' : '我的清单' }}</text>
+        <button v-if="snapshot && canManageLists" class="add-list-button desktop-add-list" role="button"
           :tabindex="busy || editing || (!live && !canCreateFirstList) ? -1 : 0" :disabled="busy || !!editing || (!live && !canCreateFirstList)"
           aria-label="新建清单" title="新建清单" @click="startListEdit('create', $event)"><image class="desktop-icon" src="/static/desktop-icons/journal-plus.svg" mode="aspectFit" aria-hidden="true" /></button>
       </view>
       <view v-if="!snapshot" class="sidebar-placeholder">连接后，你的清单会显示在这里。</view>
-      <button v-for="list in snapshot?.lists || []" :key="list.id" class="list-button" :data-list-id="list.id" :class="{ selected: list.id === snapshot.activeListId }" :disabled="busy || !!editing" @click="selectList(list)" @dblclick.stop="renameListFromSidebar(list)">
-        <view class="list-symbol" :style="{ background: list.color }"><image v-if="listIconURL(list.icon)" class="list-glyph" :src="listIconURL(list.icon)" mode="aspectFit" aria-hidden="true" /><image v-else-if="desktopWide" class="desktop-icon" src="/static/desktop-icons/list-ul.svg" mode="aspectFit" aria-hidden="true" /><text v-else>≡</text></view><text class="list-name">{{ list.title }}</text>
-        <text v-if="list.id === snapshot.activeListId" class="list-count">{{ incompleteCount }}</text>
-      </button>
-      <button v-if="!desktopWide && snapshot && canManageLists" class="add-list-button" role="button" :tabindex="busy || editing || (!live && !canCreateFirstList) ? -1 : 0" :disabled="busy || !!editing || (!live && !canCreateFirstList)" @click="startListEdit('create', $event)">＋ 新建清单</button>
+      <view v-else class="list-group">
+        <button v-for="list in sidebarLists" :key="list.id" class="list-button" :data-list-id="list.id" :class="{ selected: list.id === snapshot.activeListId }" :disabled="busy || !!editing" @click="selectList(list)" @dblclick.stop="renameListFromSidebar(list)">
+          <view class="list-symbol" :style="{ background: list.color }"><image v-if="listIconURL(list.icon)" class="list-glyph" :src="listIconURL(list.icon)" mode="aspectFit" aria-hidden="true" /><image v-else class="desktop-icon" src="/static/desktop-icons/list-ul.svg" mode="aspectFit" aria-hidden="true" /></view>
+          <text class="list-name">{{ list.title }}</text>
+          <text v-if="sidebarListCount(list) !== null" class="list-count">{{ sidebarListCount(list) }}</text>
+          <view v-if="mobileOverview" class="list-chevron" aria-hidden="true"></view>
+        </button>
+        <text v-if="search && mobileOverview && !sidebarLists.length" class="sidebar-placeholder">没有找到相关清单。</text>
+      </view>
       <view class="sidebar-footer"><button v-if="canNotify" class="notifications-settings-button" role="button" :aria-expanded="String(notificationsPanelOpen)" :disabled="busy || !!editing" @click="toggleNotificationPanel">系统通知{{ notificationState.enabled ? ' · 已开启' : '' }}</button><text class="footer-wordmark">随行 · 开源</text><text class="muted small">{{ bridge.platform }} · 最小验证版</text></view>
     </view>
     <view class="workspace" :inert="creatingList ? '' : undefined">
       <view class="toolbar" :class="{ 'with-tools': !!snapshot }">
-        <button class="mobile-menu" aria-label="显示清单" @click="sidebarOpen = true">☰</button>
+        <button v-if="!mobileOverview" class="mobile-menu" :class="{ 'compact-tool': !!snapshot }" aria-label="显示清单" :disabled="busy || !!editing" @click="showLists">
+          <view v-if="snapshot" class="back-chevron" aria-hidden="true"></view><text v-else>☰</text>
+        </button>
+        <view v-if="snapshot && !desktopWide" class="compact-toolbar-tools">
+          <button class="compact-tool more-tool" aria-label="更多操作" :aria-expanded="String(mobileOptionsOpen)" @click="mobileOptionsOpen = !mobileOptionsOpen"><text>•••</text></button>
+          <button class="compact-tool search-tool" :aria-label="searchLabel" :aria-expanded="String(mobileSearchOpen)" :disabled="!!editing" @click="toggleMobileSearch"><view class="search-mark" aria-hidden="true"></view></button>
+        </view>
         <text v-if="!snapshot" class="toolbar-label">你的清单，随时在身边</text>
         <view v-if="snapshot" class="quick-tools">
-          <button v-if="canCreate" class="add-reminder-button" :disabled="summaryView || busy || !!editing || (!live && !isDemo)" aria-label="新增提醒事项" title="新增提醒事项（Ctrl+N）" @click="startCreate"><text>＋</text></button>
+          <button v-if="canCreate && (desktopWide || (snapshot.activeListId && (!summaryView || mobileOverview)))" class="add-reminder-button" :disabled="(summaryView && !mobileOverview) || busy || !!editing || (!live && !isDemo)" aria-label="新增提醒事项" title="新增提醒事项（Ctrl+N）" @click="startCreate"><text>＋</text></button>
           <view class="toolbar-search"><view class="search-mark"></view><input v-model="search" :disabled="!!editing" :focus="searchFocused" class="search" :placeholder="searchLabel" :aria-label="searchLabel" @blur="searchFocused = false" /></view>
         </view>
         <view class="toolbar-actions">
@@ -67,7 +80,7 @@
         <text class="notification-state" role="status">{{ notificationMessage || notificationStatusText }}</text><text v-if="notificationState.unknownDates">{{ notificationState.unknownDates }} 项日期不可确认，暂不提醒；请在官方页面核对。</text>
       </view>
       <view v-if="!isDemo && (networkOffline || networkNeedsRead)" class="notice network-notice" :class="{ error: networkOffline }" :data-state="networkOffline ? networkReason : 'read-required'" role="status"><text>{{ networkOffline ? networkReason === 'offline' ? '网络已断开，当前内容仅供查看；联网后请刷新核对。' : '暂时无法连接 iCloud，当前内容仅供查看；连接恢复后请刷新核对。' : '检测到网络可用，请刷新核对后继续编辑。' }}</text></view>
-      <view v-if="notice" class="notice" :data-code="noticeCode" :data-reconnect-stage="noticeStage" :class="{ error: noticeError }" role="status"><text>{{ notice }}</text></view>
+      <view v-if="notice && (desktopWide || !isDemo || noticeError)" class="notice" :data-code="noticeCode" :data-reconnect-stage="noticeStage" :class="{ error: noticeError }" role="status"><text>{{ notice }}</text></view>
       <view v-if="editing?.blocked" class="edit-recovery"><text>{{ editing.offline ? '草稿保留在当前窗口；请联网后先刷新核对。' : '请先核对修改结果。' }}</text><button class="end-blocked-edit" role="button" :disabled="busy" @click="endEdit">结束本次编辑</button></view>
       <view v-if="!snapshot" class="welcome" :class="{'notification-settings-open':notificationsPanelOpen}">
         <view class="welcome-art"><view class="welcome-line"><text>✓</text><view></view></view><view class="welcome-line"><text>○</text><view></view></view><view class="welcome-line"><text>○</text><view></view></view></view>
@@ -78,7 +91,7 @@
         <button class="demo-link" :disabled="busy" @click="showDemo">先看看界面示例 →</button>
         <text class="welcome-footnote">登录在 iCloud 官方页面完成</text>
       </view>
-      <view v-else-if="summaryView" class="list-content across-lists">
+      <view v-else-if="summaryView" v-show="!mobileOverview" class="list-content across-lists">
         <view class="list-heading"><view class="title-line"><text class="list-title" role="heading" aria-level="1">{{ summaryTitle }}</text><text v-if="summaryData" class="heading-count">{{ summaryProjection.matchCount }}</text></view></view>
         <text v-if="summaryNotice" class="date-view-description" role="status">{{ summaryNotice }}</text>
         <scroll-view class="items-scroll" scroll-y>
@@ -96,13 +109,13 @@
         </scroll-view>
         <view v-if="summaryData" class="list-footer summary-footer"><text>汇总于 {{ summaryReadTime }}</text></view>
       </view>
-      <view v-else class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-list-title="snapshot.activeListTitle" :data-captured-at="snapshot.capturedAt" :data-live="String(live)">
-        <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title" role="heading" aria-level="1" tabindex="-1" @click="$event.currentTarget.focus()" @dblclick="canManageLists && snapshot.activeListId ? startListEdit('rename') : undefined" @keydown="listTitleKeydown">{{ snapshot.activeListTitle || (snapshot.emptyAccount ? '还没有清单' : '选择清单') }}</text><text v-if="snapshot.activeListId" class="heading-count">{{ incompleteCount }}</text><button v-if="canManageLists && snapshot.activeListId" class="rename-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="重命名清单" title="重命名当前清单" @click="startListEdit('rename')">✎</button><button v-if="canEditListAppearance && snapshot.activeListId" class="list-appearance-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="清单颜色与图标" title="清单颜色与图标" @click="startListAppearance">◉</button><button v-if="canDeleteList && snapshot.activeListId" class="delete-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="删除清单" title="删除当前清单" @click="startListDeletion">⌫</button></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : !snapshot.activeListId ? '清单导航' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
+      <view v-else v-show="!mobileOverview" class="list-content" :data-page-id="snapshot.pageId" :data-list-id="snapshot.activeListId" :data-list-title="snapshot.activeListTitle" :data-captured-at="snapshot.capturedAt" :data-live="String(live)">
+        <view class="list-heading"><view><text class="eyebrow">{{ isDemo ? '界面示例' : '我的提醒事项' }}</text><view class="title-line"><text class="list-title" role="heading" aria-level="1" tabindex="-1" @click="$event.currentTarget.focus()" @dblclick="canManageLists && snapshot.activeListId ? startListEdit('rename') : undefined" @keydown="listTitleKeydown">{{ mobileTitle || snapshot.activeListTitle || (snapshot.emptyAccount ? '还没有清单' : '选择清单') }}</text><text v-if="snapshot.activeListId" class="heading-count">{{ incompleteCount }}</text><button v-if="canManageLists && snapshot.activeListId" class="rename-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="重命名清单" title="重命名当前清单" @click="startListEdit('rename')">✎</button><button v-if="canEditListAppearance && snapshot.activeListId" class="list-appearance-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="清单颜色与图标" title="清单颜色与图标" @click="startListAppearance">◉</button><button v-if="canDeleteList && snapshot.activeListId" class="delete-list-button" role="button" :tabindex="busy || editing || !live ? -1 : 0" :disabled="busy || !!editing || !live" aria-label="删除清单" title="删除当前清单" @click="startListDeletion">⌫</button></view></view><view class="source-chip"><view></view><text>{{ isDemo ? '示例数据' : !snapshot.activeListId ? '清单导航' : live ? 'iCloud 网页' : '待读取核对' }}</text></view></view>
         <view v-if="editing?.field === 'list-delete'" class="inline-editor list-delete-confirmation" role="alertdialog" aria-label="确认删除清单"><text class="delete-title">删除清单“{{ editing.title }}”？</text><text>清单及其中的全部事项都会从 iCloud 和同步设备移除，包括当前尚未加载的内容。</text><text class="muted small">共享清单请在官方页面处理。</text><view class="editor-actions"><button class="confirm-list-delete" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '删除中…' : '确认删除清单' }}</button><button class="cancel-list-delete" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view></view>
         <view v-if="editing?.field === 'list-appearance'" class="inline-editor appearance-editor" role="group" aria-label="清单颜色与图标"><text class="editor-label">{{ editing.title }} · 颜色与图标</text><view class="appearance-colors" role="radiogroup" aria-label="清单颜色"><button v-for="(option,index) in editing.colors" :key="option.key" class="appearance-choice color-choice" :data-key="option.key" role="radio" :aria-checked="String(editing.color === option.key)" :aria-label="appearanceColorLabel(option.color,index)" :title="appearanceColorLabel(option.color,index)" :tabindex="busy || editing.blocked || editing.color !== option.key ? -1 : 0" :disabled="busy || editing.blocked" :style="{background:option.color}" @click="editing.color = option.key"><text v-if="editing.color === option.key">✓</text></button></view><scroll-view class="appearance-icons-scroll" scroll-y><view class="appearance-icons" role="radiogroup" aria-label="清单图标"><button v-for="(option,index) in editing.icons" :key="option.key" class="appearance-choice icon-choice" :data-key="option.key" :class="{'icon-choice-selected':editing.iconKey === option.key}" role="radio" :aria-checked="String(editing.iconKey === option.key)" :aria-label="'图标 '+(index+1)" :title="'图标 '+(index+1)" :tabindex="busy || editing.blocked || editing.iconKey !== option.key ? -1 : 0" :disabled="busy || editing.blocked" @click="editing.iconKey = option.key"><image class="appearance-glyph" :src="listIconURL(option.icon)" mode="aspectFit" aria-hidden="true" /></button></view></scroll-view><text class="muted small">保存后同步到使用此清单的设备。</text><view class="editor-actions"><button class="save-list-appearance" role="button" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '保存中…' : '保存外观' }}</button><button class="cancel-list-appearance" role="button" :disabled="busy" @click="endEdit">取消</button></view></view>
         <view v-if="editing?.listOperation === 'rename'" class="inline-editor list-editor" data-operation="rename"><text class="editor-label">重命名清单</text><input v-model="editing.value" class="edit-field list-name-input" :maxlength="100" :focus="true" :disabled="busy || editing.blocked" aria-label="清单名称" @confirm="confirmEdit" @keydown="editKeydown" /><text class="muted small">保存后可单独调整颜色与图标。</text><view class="editor-actions"><button class="save-edit save-list-edit" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked || !editing.value.trim()" @click="saveEdit">{{ busy ? '保存中…' : '保存名称' }}</button><button class="cancel-list-edit" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view></view>
         <view class="list-controls">
-          <view v-if="!desktopWide || (canReadSummary && snapshot.activeListId)" class="tabs" role="group" aria-label="当前清单已加载内容的视图"><button v-for="option in scopedViewOptions" :key="option.value" class="view-tab" role="button" :data-status="option.value" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing" :aria-pressed="String(tab === option.value)" :aria-label="option.label + '，当前清单已确认 ' + viewProjection.counts[option.value] + ' 项' + (unknownForView(option.value) ? '，另有日期待核对' : '')" :class="{ active: tab === option.value }" @click="selectTab(option.value)">{{ option.label }} <text>{{ viewProjection.counts[option.value] }}{{ unknownForView(option.value) ? '+' : '' }}</text></button></view>
+          <view v-if="!desktopWide || (canReadSummary && snapshot.activeListId)" class="tabs" role="group" aria-label="当前清单已加载内容的视图"><button v-for="option in scopedViewOptions" :key="option.value" class="view-tab" role="button" :data-status="option.value" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing" :aria-pressed="String(tab === option.value)" :aria-label="option.label + '，当前清单已确认 ' + viewProjection.counts[option.value] + ' 项' + (unknownForView(option.value) ? '，另有日期待核对' : '')" :class="{ active: tab === option.value }" @click="selectScopedTab(option.value)">{{ option.label }} <text>{{ viewProjection.counts[option.value] }}{{ unknownForView(option.value) ? '+' : '' }}</text></button></view>
           <view class="list-view-tools"><text class="current-scope">当前清单已加载</text>
             <button class="flag-filter" role="button" :tabindex="busy || editing || !flagReadable ? -1 : 0" :disabled="busy || !!editing || !flagReadable" :aria-pressed="String(flagOnly)" :class="{ 'flag-active': flagOnly }" aria-label="只看当前清单已加载的旗标事项" @click="flagOnly = !flagOnly">⚑ {{ flaggedCount }}</button>
             <!-- #ifdef H5 -->
@@ -118,7 +131,7 @@
             <!-- #endif -->
           </view>
         </view>
-        <text v-if="dateViewLabel" class="date-view-description" :data-view="tab" :data-matches="viewProjection.matchCount" :data-unknown="unknownForView(tab)">{{ dateViewLabel }} · 当前清单已加载 · {{ viewProjection.matchCount }} 项{{ unknownForView(tab) ? '；另有 ' + unknownForView(tab) + ' 项日期或时区待核对，未计入' : '' }}{{ viewContext.size ? '；灰色主事项仅供定位，不计入数量' : '' }}</text>
+        <text v-if="dateViewLabel" class="date-view-description" :class="{ 'date-view-complete': !unknownForView(tab) && !viewContext.size }" :data-view="tab" :data-matches="viewProjection.matchCount" :data-unknown="unknownForView(tab)">{{ dateViewLabel }} · 当前清单已加载 · {{ viewProjection.matchCount }} 项{{ unknownForView(tab) ? '；另有 ' + unknownForView(tab) + ' 项日期或时区待核对，未计入' : '' }}{{ viewContext.size ? '；灰色主事项仅供定位，不计入数量' : '' }}</text>
         <text v-if="sortMode !== 'manual'" class="sort-description">仅本地显示排序，子事项跟随主事项{{ sortMode.startsWith('date-') ? '；日期不可读的主事项列在末尾' : sortMode.startsWith('priority-') ? '；无优先级在后，不可读的主事项列在末尾' : '' }}</text>
         <text v-if="sortMode.startsWith('priority-')" class="sort-description">优先级仅查看，请在苹果设备上修改</text>
         <text v-if="flagOnly" class="sort-description">只显示当前清单已加载的旗标事项{{ unreadableFlags ? '；还有旗标状态不可读的事项，请在官方页面核对' : '' }}</text>
@@ -149,7 +162,7 @@
               </view>
               <template v-else><view class="reminder-title-line"><text v-if="item.flagged" class="flag-mark" aria-label="已添加旗标">⚑</text><text v-if="priorityInfo(item.priority).mark" class="priority-mark" :aria-label="priorityInfo(item.priority).label" :title="priorityInfo(item.priority).label + '；请在苹果设备上修改'">{{ priorityInfo(item.priority).mark }}</text><text class="reminder-title" @dblclick="startEdit(item, 'title')">{{ item.title }}</text></view><text v-if="item.notes" class="reminder-notes" @dblclick="startEdit(item, 'notes')">{{ item.notes }}</text><text v-if="item.notesTruncated" class="reminder-metadata">备注较长，请在官方页面查看完整内容</text><text v-if="item.priority === null" class="reminder-metadata">优先级不可读</text></template>
               <text v-if="viewContext.has(item.id)" class="reminder-metadata">所属主事项 · 仅供定位</text>
-              <text v-if="item.metadata" class="reminder-metadata" :class="{ 'is-overdue': viewProjection.overdueIds.has(item.id) }">{{ item.metadata }}</text>
+              <view v-if="mobileTitle || item.metadata" class="summary-row-meta"><text v-if="mobileTitle" class="reminder-metadata">{{ snapshot.activeListTitle }}</text><text v-if="item.metadata" class="reminder-metadata" :class="{ 'is-overdue': viewProjection.overdueIds.has(item.id) }">{{ item.metadata }}</text></view>
               <text v-if="item.metadataPartial" class="reminder-metadata">部分日期附注请在官方页面查看</text>
             </view>
             <view v-if="(canEdit || canEditSchedule || canEditFlag || canDelete || canEditHierarchy) && !editing && !viewContext.has(item.id)" class="row-actions"><button v-if="canEdit" class="edit-title-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑标题" @click="startEdit(item, 'title')">✎</button><button v-if="canEdit" class="edit-notes-button" :disabled="busy || (!live && !isDemo) || item.disabled || item.notesTruncated" aria-label="编辑备注" @click="startEdit(item, 'notes')">≡</button><button v-if="canEditSchedule" class="edit-schedule-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑日期与时间" @click="startScheduleEdit(item)">▦</button><button v-if="canEditFlag" class="flag-toggle-button" role="button" :tabindex="busy || item.disabled || typeof item.flagged !== 'boolean' ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled || typeof item.flagged !== 'boolean'" :aria-pressed="String(item.flagged === true)" :aria-label="item.flagged ? '移除旗标' : '添加旗标'" :class="{ 'flag-active': item.flagged }" @click="toggleFlag(item)">⚑</button><button v-if="canEditHierarchy" class="subtask-item-button" role="button" :tabindex="busy || item.disabled || !item.hierarchyReadable ? -1 : 0" :disabled="busy || !live || item.disabled || !item.hierarchyReadable" :aria-label="item.level > 1 ? '提升为顶层事项' : '设为上一主事项的子事项'" :title="item.level > 1 ? '提升为顶层事项' : '设为上一主事项的子事项'" @click="startSubtask(item)">{{ item.level > 1 ? '⇤' : '⇥' }}</button><button v-if="canDelete" class="delete-item-button" role="button" :tabindex="busy || item.disabled ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="删除事项" title="删除这一条事项" @click="startDelete(item)">⌫</button></view>
@@ -215,13 +228,12 @@ import { monitorConnection, connectionResult } from '../../lib/connection.js';
 import { monitorLoadedList } from '../../lib/loaded-list-monitor.js';
 // #ifdef APP-HARMONY
 import HarmonyICloudHost from '../../components/HarmonyICloudHost.vue';
+// #endif
+// #ifdef APP-PLUS || APP-HARMONY
 import { onBackPress } from '@dcloudio/uni-app';
 // #endif
 
 const bridge = createBridge();
-// #ifdef APP-HARMONY
-onBackPress(() => bridge.hideSite());
-// #endif
 const regionLabels = ['中国大陆', '其他地区'];
 // 显式调用 uni API，确保 H5 按需编译包含存储能力；测试替身只在纯逻辑测试中使用。
 const settingsStorage = {
@@ -293,7 +305,13 @@ const flagOnly = ref(false);
 const summaryView = ref(null);
 const summaryCache = ref(null);
 const canReadSummary = computed(()=>!isDemo.value && typeof bridge.readSummary==='function');
-const desktopWide = ref(false);
+const wideLayoutMinWidth = 761;
+const desktopWide = ref(uni.getWindowInfo().windowWidth >= wideLayoutMinWidth);
+const mobileScreen = ref('overview');
+const mobileView = ref(null);
+const mobileOptionsOpen = ref(false);
+const mobileSearchOpen = ref(false);
+const mobileOverview = computed(() => !!snapshot.value && !desktopWide.value && mobileScreen.value === 'overview');
 const scopedViewOptions = computed(() => VIEW_OPTIONS.filter(option => desktopWide.value || !option.desktopOnly));
 const desktopCards = [
   { value:'today', label:'今天', icon:'calendar2-event' },
@@ -305,27 +323,31 @@ const desktopCards = [
 ];
 const activeDesktopCard = computed(() => canReadSummary.value ? summaryView.value : tab.value === 'pending' && flagOnly.value ? 'flagged' : tab.value);
 const summaryTitle = computed(() => desktopCards.find(card=>card.value===summaryView.value)?.label || '');
-const searchLabel = computed(() => summaryView.value ? '搜索' + summaryTitle.value : '搜索当前清单');
-// #ifdef H5
-const desktopViewport = typeof window === 'undefined' ? null : window.matchMedia('(min-width:761px)');
-function updateDesktopWidth() {
-  desktopWide.value = desktopViewport?.matches === true;
-  if (!desktopWide.value && summaryView.value) {
-    flagOnly.value=summaryView.value==='flagged';
-    tab.value=flagOnly.value?'pending':summaryView.value;
-    summaryView.value=null;
-  }
-  if (!desktopWide.value && tab.value === 'overdue') tab.value = 'pending';
+const mobileTitle = computed(() => !desktopWide.value ? desktopCards.find(card => card.value === mobileView.value)?.label : undefined);
+const searchLabel = computed(() => mobileOverview.value ? '搜索清单' : summaryView.value ? '搜索' + summaryTitle.value : mobileTitle.value ? '搜索' + mobileTitle.value : '搜索当前清单');
+function updateDesktopWidth(event) {
+  desktopWide.value = (event?.size?.windowWidth ?? uni.getWindowInfo().windowWidth) >= wideLayoutMinWidth;
 }
-updateDesktopWidth();
-onMounted(() => desktopViewport?.addEventListener('change', updateDesktopWidth));
-onUnmounted(() => desktopViewport?.removeEventListener('change', updateDesktopWidth));
-// #endif
+onMounted(() => {
+  updateDesktopWidth();
+  uni.onWindowResize(updateDesktopWidth);
+});
+onUnmounted(() => uni.offWindowResize?.(updateDesktopWidth));
 const search = ref('');
 const searchFocused = ref(false);
-const incompleteCount = computed(() => snapshot.value?.items.filter(item => !item.completed).length || 0);
-const flagReadable = computed(() => snapshot.value?.items.some(item => typeof item.flagged === 'boolean') || false);
-const unreadableFlags = computed(() => snapshot.value?.items.some(item => typeof item.flagged !== 'boolean') || false);
+const sidebarLists = computed(() => {
+  const lists = snapshot.value?.lists || [];
+  const query = mobileOverview.value ? search.value.trim().toLocaleLowerCase() : '';
+  return query ? lists.filter(list => list.title.toLocaleLowerCase().includes(query)) : lists;
+});
+const currentListItems = computed(() => {
+  const data = snapshot.value;
+  if (!data) return [];
+  return isDemo.value ? data.items.filter(item => item.listId === data.activeListId) : data.items;
+});
+const incompleteCount = computed(() => currentListItems.value.filter(item => !item.completed).length);
+const flagReadable = computed(() => currentListItems.value.some(item => typeof item.flagged === 'boolean'));
+const unreadableFlags = computed(() => currentListItems.value.some(item => typeof item.flagged !== 'boolean'));
 const flaggedCount = computed(() => viewProjection.value.flaggedCount);
 const viewClock=ref(Date.now());
 const viewDates=computed(()=>{
@@ -333,7 +355,7 @@ const viewDates=computed(()=>{
   date.setDate(date.getDate()+1);
   return {today,tomorrow:localDateString(date)};
 });
-const viewProjection=computed(()=>projectLoadedItems(sortLoadedItems(snapshot.value?.items || [],sortMode.value),{view:tab.value,flagOnly:flagOnly.value,query:search.value,today:viewDates.value.today}));
+const viewProjection=computed(()=>projectLoadedItems(sortLoadedItems(currentListItems.value,sortMode.value),{view:tab.value,flagOnly:flagOnly.value,query:mobileOverview.value?'':search.value,today:viewDates.value.today}));
 const viewContext=computed(()=>viewProjection.value.contextIds);
 const dateView=computed(()=>groupLoadedDateView(viewProjection.value,{view:tab.value,...viewDates.value,descending:sortMode.value==='date-descending'}));
 const visibleItems=computed(()=>dateView.value.items);
@@ -353,12 +375,71 @@ const summaryNotice=computed(()=>{
   return messages.join(' · ');
 });
 const summaryReadTime=computed(()=>summaryData.value?localTimeString(new Date(summaryData.value.capturedAt)):'');
+function sidebarListCount(list) {
+  if (list.id === snapshot.value.activeListId) return incompleteCount.value;
+  if (isDemo.value) return snapshot.value.items.filter(item => item.listId === list.id && !item.completed).length;
+  if (!mobileOverview.value || !summarySourcesCurrent.value) return null;
+  const entry = summaryData.value.lists.find(candidate => candidate.list.id === list.id);
+  return entry ? entry.items.filter(item => !item.completed).length + (entry.partial ? '+' : '') : null;
+}
 const desktopCardsDisabled=computed(()=>busy.value || !!editing.value || (!canReadSummary.value && !snapshot.value?.activeListId));
 function desktopCardCount(view) {
   if (canReadSummary.value) return summaryData.value?summaryProjection.value.counts[view]+((summaryPartial.value || summaryProjection.value.unknown[view])?'+':''):'—';
   if (!snapshot.value?.activeListId) return '—';
   return viewProjection.value.counts[view]+(unknownForView(view)?'+':'');
 }
+function closeMobileTools() {
+  mobileOptionsOpen.value = false;
+  mobileSearchOpen.value = false;
+  search.value = '';
+  searchFocused.value = false;
+}
+function showLists() {
+  if (busy.value || editing.value) return;
+  if (!snapshot.value) {
+    sidebarOpen.value = true;
+    return;
+  }
+  closeMobileTools();
+  mobileScreen.value = 'overview';
+}
+function showMobileDetail(view = null) {
+  mobileView.value = view;
+  if (desktopWide.value) return;
+  closeMobileTools();
+  mobileScreen.value = 'detail';
+}
+function toggleMobileSearch() {
+  mobileSearchOpen.value = !mobileSearchOpen.value;
+  searchFocused.value = mobileSearchOpen.value;
+  if (!mobileSearchOpen.value) search.value = '';
+}
+// 缩窄现有窗口时保留正在浏览或编辑的事项，之后可返回窄屏清单首页。
+watch(desktopWide, wide => {
+  if (!wide && snapshot.value) {
+    sidebarOpen.value = false;
+    mobileScreen.value = 'detail';
+    mobileSearchOpen.value = !!search.value;
+  }
+});
+watch(snapshot, value => {
+  if (value) return;
+  mobileScreen.value = 'overview';
+  mobileView.value = null;
+  sidebarOpen.value = false;
+  closeMobileTools();
+});
+// #ifdef APP-PLUS || APP-HARMONY
+onBackPress(() => {
+  if (bridge.hideSite?.()) return true;
+  if (busy.value || editing.value) return true;
+  if (sidebarOpen.value) { sidebarOpen.value = false; return true; }
+  if (mobileSearchOpen.value || mobileOptionsOpen.value) { closeMobileTools(); return true; }
+  if (desktopWide.value || mobileOverview.value || !snapshot.value) return false;
+  showLists();
+  return true;
+});
+// #endif
 // 同一页面的单清单读回只更新该清单的缓存，其余清单继续使用上次汇总数据。
 watch(snapshot,value=>{
   const report=summaryData.value;
@@ -487,6 +568,7 @@ async function refresh() {
   if (isDemo.value) { showDemo(); return; }
   const result = await run({ type: listSelectionRequired.value ? 'readLists' : 'read' });
   if (result?.ok && !listSelectionRequired.value && tab.value === 'completed') await selectTab('completed');
+  if (result?.ok && mobileOverview.value && canReadSummary.value && live.value && summaryData.value) return refreshSummary(true);
   if (result?.ok && !summaryData.value && !listSelectionRequired.value) await loadInitialSummary();
 }
 
@@ -518,8 +600,15 @@ async function selectTab(next) {
   await run({ type: 'showCompleted', pageId: snapshot.value.pageId, listId: snapshot.value.activeListId });
 }
 
+function selectScopedTab(view) {
+  if (busy.value || editing.value) return;
+  mobileView.value = null;
+  return selectTab(view);
+}
+
 function selectDesktopCard(view) {
   if (desktopCardsDisabled.value) return;
+  showMobileDetail(view);
   if (canReadSummary.value) {
     if (summaryView.value!==view) search.value='';
     updateViewClock();
@@ -532,7 +621,7 @@ function selectDesktopCard(view) {
 }
 
 function loadInitialSummary() {
-  if (desktopWide.value && canReadSummary.value && live.value && !summaryData.value) return refreshSummary(true);
+  if (canReadSummary.value && live.value && !summaryData.value) return refreshSummary(true);
 }
 
 async function refreshSummary(quiet=false) {
@@ -564,17 +653,19 @@ async function refreshSummary(quiet=false) {
 
 async function selectList(list) {
   if (busy.value || editing.value) return;
-  if (summaryView.value) { summaryView.value=null;tab.value='pending';flagOnly.value=false; }
+  if (summaryView.value || !desktopWide.value) { summaryView.value=null;tab.value='pending';flagOnly.value=false; }
   sidebarOpen.value = false;
   search.value = '';
   if (isDemo.value) {
     snapshot.value.activeListId = list.id;
     snapshot.value.activeListTitle = list.title;
     snapshot.value.lists.forEach(item => { item.selected = item.id === list.id; });
+    showMobileDetail();
     return;
   }
   const result = await run({ type: 'selectList', listId: list.id, pageId: snapshot.value.pageId });
   if(result?.ok) {
+    showMobileDetail();
     const wasRequired=listSelectionRequired.value;
     listSelectionRequired.value=false;live.value=!networkOffline.value && !networkNeedsRead.value;
     if(wasRequired && result.code==='READY') {notice.value='';noticeError.value=false;}
@@ -916,8 +1007,10 @@ async function saveSchedule(current) {
 }
 
 async function startCreate() {
-  if (summaryView.value) return;
-  if (!canCreate.value || !snapshot.value || busy.value || editing.value || (!live.value && !isDemo.value)) return;
+  if (summaryView.value && !mobileOverview.value) return;
+  if (!canCreate.value || !snapshot.value?.activeListId || busy.value || editing.value || (!live.value && !isDemo.value)) return;
+  summaryView.value = null;
+  showMobileDetail();
   if (!isDemo.value && bridge.capabilities?.createItem !== true) {
     const result = await bridge.openSite(region.value);
     if (!result.ok) { accept(result); return; }
@@ -1064,7 +1157,9 @@ function workspaceKeydown(event) {
   }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); startCreate(); }
   else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
-    event.preventDefault(); searchFocused.value = false; nextTick(() => { searchFocused.value = true; });
+    event.preventDefault();
+    if (!desktopWide.value) mobileSearchOpen.value = true;
+    searchFocused.value = false; nextTick(() => { searchFocused.value = true; });
   } else if (event.key === 'Escape' && !event.target?.closest?.('.sort-picker')) search.value = '';
 }
 // 捕获原始 DOM 事件，避免输入组件包装时丢失 isComposing；远程官方网页不加载此界面代码。
@@ -1327,15 +1422,15 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .desktop-sidebar-layout .brand-icon { width:34px; height:36px; padding:7px; box-shadow:none; }
 .desktop-sidebar-layout .brand-name { font-size:15px; }
 .desktop-sidebar-layout .brand-caption { display:none; }
-.desktop-sidebar-layout .desktop-view-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-bottom:22px; }
-.desktop-sidebar-layout .desktop-view-card {
-  min-height:clamp(64px,7.15vw,112px);
-  padding:clamp(9px,1.15vw,18px);
+.desktop-view-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-bottom:22px; }
+.desktop-view-card {
+  min-height:var(--card-height,clamp(64px,7.15vw,112px));
+  padding:var(--card-padding,clamp(9px,1.15vw,18px));
   display:flex;
   flex-direction:column;
   justify-content:space-between;
   gap:6px;
-  border-radius:clamp(12px,1.25vw,20px);
+  border-radius:var(--card-radius,clamp(12px,1.25vw,20px));
   text-align:left;
   line-height:1.15;
   color:#fff;
@@ -1351,17 +1446,17 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .desktop-view-card:hover:not([disabled]) { filter:brightness(1.11); }
 .desktop-card-top { display:flex; justify-content:space-between; align-items:center; gap:6px; }
 .desktop-icon { display:block; width:20px; height:20px; flex:none; }
-.desktop-view-card .desktop-icon,.desktop-sidebar-layout .list-symbol .desktop-icon { filter:brightness(0) invert(1); }
-.desktop-view-card .desktop-icon { width:clamp(19px,2.1vw,32px); height:clamp(19px,2.1vw,32px); }
-.desktop-card-count { font-size:clamp(18px,2.1vw,33px); font-weight:700; font-variant-numeric:tabular-nums; }
-.desktop-card-label { font-size:clamp(14px,1.5vw,23px); font-weight:650; }
+.desktop-view-card .desktop-icon,.list-symbol .desktop-icon { filter:brightness(0) invert(1); }
+.desktop-view-card .desktop-icon { width:var(--card-icon-size,clamp(19px,2.1vw,32px)); height:var(--card-icon-size,clamp(19px,2.1vw,32px)); }
+.desktop-card-count { font-size:var(--card-count-size,clamp(18px,2.1vw,33px)); font-weight:700; font-variant-numeric:tabular-nums; }
+.desktop-card-label { font-size:var(--card-label-size,clamp(14px,1.5vw,23px)); font-weight:650; }
 .desktop-sidebar-layout .sidebar-section { min-height:30px; align-items:center; margin-bottom:4px; padding:0 8px; color:#607083; letter-spacing:0; font-size:13px; }
-.desktop-sidebar-layout .desktop-add-list { margin:0; padding:5px; border:0; background:#e5ecf5; border-radius:8px; }
-.desktop-sidebar-layout .desktop-add-list .desktop-icon { width:17px; height:17px; }
+.desktop-add-list { margin:0; padding:5px; border:0; background:#e5ecf5; border-radius:8px; }
+.desktop-add-list .desktop-icon { width:17px; height:17px; }
 .desktop-sidebar-layout .list-button { gap:11px; padding:7px 8px; margin-bottom:2px; }
 .desktop-sidebar-layout .list-button.selected,.desktop-sidebar-layout .list-button:hover:not([disabled]) { background:#e2eaf6; }
-.desktop-sidebar-layout .list-symbol { display:flex; align-items:center; justify-content:center; width:clamp(28px,2.9vw,45px); height:clamp(28px,2.9vw,45px); flex:none; border-radius:50%; }
-.desktop-sidebar-layout .list-symbol .desktop-icon,.desktop-sidebar-layout .list-glyph { width:56%; height:56%; }
+.list-symbol { display:flex; align-items:center; justify-content:center; width:var(--list-symbol-size,clamp(28px,2.9vw,45px)); height:var(--list-symbol-size,clamp(28px,2.9vw,45px)); flex:none; border-radius:50%; }
+.list-symbol .desktop-icon,.list-glyph { width:56%; height:56%; }
 .desktop-sidebar-layout .list-name { font-size:clamp(14px,1.5vw,22px); font-weight:550; }
 .desktop-sidebar-layout .list-count { color:#607083; font-variant-numeric:tabular-nums; }
 .desktop-sidebar-layout .sidebar-footer { gap:5px; padding:18px 8px 0; }
@@ -1372,7 +1467,89 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .summary-source-button { margin:0; color:#2872ba; font-size:11px; text-align:left; }
 .summary-source-button:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
 
-/* #ifdef H5 */
+/* 窄屏按层导航，快捷卡片、清单行和事项区仍使用宽屏的组件。 */
+.compact-layout {
+  --compact-gutter:20px;
+  --compact-safe-top:max(var(--status-bar-height,0px),env(safe-area-inset-top,0px));
+  --compact-safe-bottom:max(var(--window-bottom,0px),env(safe-area-inset-bottom,0px));
+  --compact-surface:var(--theme-background,#fff);
+  --compact-group:var(--theme-surface,#fff);
+  --compact-line:var(--theme-border,#e6e8ed);
+  --compact-text:var(--theme-text,#202735);
+  min-height:0;
+}
+.compact-overview { flex-direction:column; background:var(--theme-sidebar,#f1f2f6); }
+.compact-overview .workspace { order:-1; flex:none; }
+.compact-overview .sidebar {
+  position:static; transform:none; z-index:auto; flex:1; min-height:0; width:100%;
+  padding:12px var(--compact-gutter) calc(88px + var(--compact-safe-bottom));
+  overflow-y:auto; border:0; background:transparent;
+  --card-height:clamp(76px,19vw,108px);
+  --card-padding:12px;
+  --card-radius:17px;
+  --card-icon-size:25px;
+  --card-count-size:27px;
+  --card-label-size:16px;
+  --list-symbol-size:34px;
+}
+.compact-overview .sidebar > * { flex-shrink:0; }
+.compact-overview .brand,.compact-overview .footer-wordmark,.compact-overview .sidebar-footer > .small { display:none; }
+.compact-overview .desktop-view-grid { margin:0 0 18px; }
+.compact-overview .desktop-view-card { background:linear-gradient(145deg,#ffffff20,transparent 75%),var(--card-color); }
+.overview-scope { display:block; font-size:12px; margin-bottom:12px; }
+.compact-overview .sidebar-section { align-items:center; color:var(--compact-text); font-size:21px; letter-spacing:0; padding:0 12px; margin-bottom:10px; }
+.compact-overview .list-group { border-radius:22px; overflow:hidden; background:var(--compact-group); }
+.compact-overview .list-button { position:relative; min-height:59px; padding:10px 16px; margin:0; gap:0; border-radius:0; background:transparent; }
+.compact-overview .list-button + .list-button::before { content:''; position:absolute; top:0; left:61px; right:16px; border-top:1px solid var(--compact-line); }
+.compact-overview .list-name { margin-left:11px; font-size:17px; font-weight:450; }
+.compact-overview .list-count { font-size:16px; font-variant-numeric:tabular-nums; }
+.compact-overview .list-chevron { width:7px; height:7px; margin:0 2px 0 11px; border:solid #a5aeb9; border-width:2px 2px 0 0; transform:rotate(45deg); flex:none; }
+.compact-overview .sidebar-footer { padding:8px 12px 0; }
+.compact-layout .toolbar.with-tools {
+  display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center;
+  height:auto; min-height:calc(60px + var(--compact-safe-top)); border:0; gap:8px;
+  padding:calc(6px + var(--compact-safe-top)) var(--compact-gutter) 6px;
+}
+.compact-toolbar-tools { display:flex; justify-self:end; grid-column:2; order:2; }
+.compact-toolbar-tools,.compact-layout .mobile-menu { border:1px solid var(--compact-line); border-radius:24px; background:var(--compact-group); }
+.compact-layout .compact-tool { display:grid; place-items:center; width:44px; height:44px; margin:0; color:var(--compact-text); line-height:1; }
+.compact-layout .compact-tool[aria-expanded='true'] { color:#1687ff; }
+.compact-layout .compact-tool:focus-visible { outline:2px solid #1687ff; outline-offset:-3px; border-radius:22px; }
+.back-chevron { width:10px; height:10px; margin-left:4px; border:solid currentColor; border-width:0 0 2px 2px; transform:rotate(45deg); }
+.more-tool { font-size:15px; letter-spacing:1px; }
+.search-tool .search-mark { width:14px; height:14px; border-color:currentColor; }
+.search-tool .search-mark::after { background:currentColor; }
+.compact-layout .toolbar-actions { display:none; grid-column:1/-1; order:4; justify-self:end; flex-wrap:wrap; }
+.compact-options .toolbar-actions,.compact-editing .toolbar-actions { display:flex; }
+.compact-layout .quick-tools { grid-column:1/-1; order:3; }
+.compact-layout .toolbar-search { display:none; }
+.compact-search .toolbar-search { display:flex; }
+.compact-layout .add-reminder-button {
+  position:fixed; z-index:12; right:var(--compact-gutter); bottom:calc(18px + var(--compact-safe-bottom));
+  width:50px; height:50px; margin:0; border-radius:50%; color:#fff; background:#1687ff;
+  box-shadow:0 4px 16px #245fa62b;
+}
+.compact-layout .add-reminder-button[disabled] { display:none; }
+.compact-layout .list-content { padding:6px var(--compact-gutter) 0; }
+.compact-layout .list-heading { margin-bottom:10px; }
+.compact-layout .list-title { font-size:34px; }
+.compact-layout .reminder-title { font-size:16px; }
+.compact-layout .reminder-metadata,.compact-layout .summary-source-button { font-size:13px; }
+.compact-layout .summary-row-meta { column-gap:0; }
+.compact-layout .summary-row-meta > * + * { margin-left:8px; }
+.compact-layout .reminder-row { padding:11px 2px; }
+.compact-layout .reminder-row[data-selected='false'],.compact-layout .summary-row { border-radius:0; }
+.compact-layout .reminder-row[data-selected='false'] > .row-actions { display:none; }
+.compact-layout .eyebrow,.compact-layout .source-chip,.compact-layout .heading-count { display:none; }
+.compact-layout .list-controls { display:none; }
+.compact-options .list-controls,.compact-editing .list-controls { display:flex; }
+.compact-layout:not(.compact-options) .date-view-complete { display:none; }
+.compact-layout .list-footer { padding:8px 0 calc(12px + var(--compact-safe-bottom)); padding-right:66px; }
+.compact-layout .list-bottom-space { height:68px; }
+.compact-layout .summary-footer { padding-right:0; }
+.compact-overview .notice { margin:4px var(--compact-gutter) 0; }
+.compact-overview .notice[data-code='READY'],.compact-overview .notice[data-code='LIST_SELECTION_REQUIRED'] { display:none; }
+
 /* 系统配色只改变颜色，桌面与窄屏共用同一套事项区布局和编辑状态。 */
 @media (prefers-color-scheme: dark) {
   .app-shell {
@@ -1434,6 +1611,9 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
   .app-shell .desktop-add-list { background:var(--theme-surface); }
   .app-shell .desktop-add-list .desktop-icon { filter:brightness(0) invert(1); }
   .app-shell .desktop-view-card[aria-pressed='true'] { outline-color:#a9d9ff; }
+  .app-shell.compact-overview { background:var(--theme-sidebar); }
+  .app-shell.compact-overview .sidebar,.app-shell.compact-overview .list-button { background:transparent; }
+  .app-shell.compact-overview .sidebar-section { color:var(--theme-text); }
+  .app-shell.compact-layout .add-reminder-button { background:#1687ff; color:#fff; }
 }
-/* #endif */
 </style>
