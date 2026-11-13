@@ -543,7 +543,7 @@ async function connect() {
     if (initialSummary && canReadSummary.value) {
       // 登录只交接清单导航。先显示只读汇总，仍由用户明确选择清单后进入编辑。
       const emptyAccount = snapshot.value.emptyAccount === true;
-      if (!emptyAccount) summaryView.value = 'today';
+      if (!emptyAccount && !mobileOverview.value) summaryView.value = 'today';
       await refreshSummary(emptyAccount);
     }
     return;
@@ -566,10 +566,12 @@ async function connect() {
 async function refresh() {
   if (summaryView.value) return refreshSummary();
   if (isDemo.value) { showDemo(); return; }
+  if (mobileOverview.value && canReadSummary.value && summaryData.value) return refreshSummary();
+  const firstConnection = !snapshot.value;
   const result = await run({ type: listSelectionRequired.value ? 'readLists' : 'read' });
   if (result?.ok && !listSelectionRequired.value && tab.value === 'completed') await selectTab('completed');
-  if (result?.ok && mobileOverview.value && canReadSummary.value && live.value && summaryData.value) return refreshSummary(true);
-  if (result?.ok && !summaryData.value && !listSelectionRequired.value) await loadInitialSummary();
+  if (result?.ok && firstConnection && mobileOverview.value && canReadSummary.value) return refreshSummary();
+  if (result?.ok && !listSelectionRequired.value && !summaryData.value) await loadInitialSummary();
 }
 
 async function reconnectClient() {

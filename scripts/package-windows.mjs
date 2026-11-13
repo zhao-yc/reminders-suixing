@@ -29,7 +29,7 @@ await verifyWindowsIcon(executable);
 const appRoot = path.join(destination, 'resources', 'app');
 await fs.mkdir(appRoot, { recursive: true });
 await fs.writeFile(path.join(appRoot, 'package.json'), JSON.stringify({ name: 'reminders-suixing', version: metadata.version, main: 'apps/desktop/main.cjs' }, null, 2));
-for (const relative of ['apps/desktop', 'apps/uni-app/static/icloud']) {
+for (const relative of ['apps/desktop', 'apps/uni-app/static/icloud', 'apps/uni-app/lib/collect-summary.mjs']) {
   await fs.cp(path.join(root, relative), path.join(appRoot, relative), { recursive: true });
 }
 await fs.cp(path.join(root, frontend), path.join(appRoot, frontend), { recursive: true });

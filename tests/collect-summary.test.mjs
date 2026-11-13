@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collectSummary } from '../apps/desktop/collect-summary.cjs';
+import { collectSummary } from '../apps/uni-app/lib/collect-summary.mjs';
 
 function fixture({failOnSwitch=false,restoreAllowed=true,initialSelection='one'}={}) {
   const lists=['one','two'].map(id=>({id,title:'随行验证 · 同名清单'}));

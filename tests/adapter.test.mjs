@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import { isApplePage } from '../apps/uni-app/lib/origins.js';
+import { collectSummary } from '../apps/uni-app/lib/collect-summary.mjs';
 
 const source = await fs.readFile(new URL('../apps/uni-app/static/icloud/adapter.js', import.meta.url), 'utf8');
 const fixture = await fs.readFile(new URL('./fixtures/reminders.html', import.meta.url), 'utf8');
@@ -92,6 +93,15 @@ test('Android 官方窄屏详情移除导航时，读取清单并按选择恢复
   assert.equal(switched.code, 'READY');
   assert.equal(switched.snapshot.activeListId, second.id);
   assert.deepEqual(results, {back:2,selections:2});
+  const report = await collectSummary({pageId:nav.snapshot.pageId,listId:second.id},{
+    canRead:()=>true,
+    read:command=>execute({...command,...options})
+  });
+  assert.equal(report.code,'SUMMARY_READY');
+  assert.equal(report.summary.totalLists,2);
+  assert.deepEqual(Array.from(report.summary.lists,entry=>[entry.list.id,entry.items.length]),[[second.id,1],[first.id,2]]);
+  assert.equal(report.snapshot.activeListId,second.id);
+  assert.equal((await execute({type:'read', ...options})).snapshot.activeListId,second.id);
 });
 
 test('标题编辑只命中同名事项中的目标，HTML 作为文字且只保存一次', async t => {

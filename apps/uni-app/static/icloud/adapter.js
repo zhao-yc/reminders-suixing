@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.25') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.26') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -208,6 +208,12 @@
     if(command.background===true) {
       var deferred=deferredWhileEditing(doc);
       if(deferred)return deferred;
+    }
+    if (command.androidCompact && command.background && compactPane(doc) && selectedListNode(doc)) {
+      // 手机官网选中清单时卸载导航。汇总先核对当前事项页绑定，保留选区供恢复使用。
+      return result(true,'SELECT_A_LIST','请选择清单后继续。',{
+        snapshot:navigationSnapshot(doc,compactLists),needsListSelection:true,selectedListId:handle(compactSelection.node)
+      });
     }
     if (command.androidCompact && !listNodes(doc).length && compactPane(doc)) {
       var navigation = await revealCompactLists(doc);
@@ -422,8 +428,13 @@
     var doc = application();
     if (!doc || command.pageId !== pageId) return result(false, 'STALE_VIEW', '页面已变化，请先刷新列表。');
     var requested = null;
+    var checkedCompactSource = false;
     if (command.androidCompact && compactPane(doc)) {
       var selected = selectedListNode(doc);
+      if (command.background && (!selected || handle(selected) !== command.fromListId || isLoading(doc))) {
+        return result(false,'STALE_VIEW','官方选区已变化，请刷新清单。');
+      }
+      checkedCompactSource = command.background === true;
       if (selected && handle(selected) === command.listId) return read(command);
       requested = compactLists?.find(function (list) { return list.id === command.listId; });
       if (!requested || compactLists.filter(function (list) { return list.title === requested.title; }).length !== 1) {
@@ -437,7 +448,8 @@
     if(command.background===true) {
       var selected=nodes.filter(function(node){return node.getAttribute('aria-selected')==='true';});
       var previousId=selected.length===1?handle(selected[0]):selected.length===0?'':null;
-      if(isLoading(doc) || typeof command.fromListId!=='string' || previousId!==command.fromListId)return result(false,'STALE_VIEW','官方选区已变化，请刷新清单。');
+      var expectedSource = checkedCompactSource ? '' : command.fromListId;
+      if(isLoading(doc) || typeof expectedSource!=='string' || previousId!==expectedSource)return result(false,'STALE_VIEW','官方选区已变化，请刷新清单。');
       var deferred=deferredWhileEditing(doc);
       if(deferred)return deferred;
     }
@@ -1539,7 +1551,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.25',
+    version: '0.3.26',
     dispose:function(){clearSettledCreation();root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */

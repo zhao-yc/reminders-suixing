@@ -644,6 +644,11 @@ test('Android 等官方清单就绪才自动返回，并复用原窗口选清单
   assert.equal(view.hidden, 1);
   assert.equal(view.closed, 0);
   assert.equal(view.loads.length, 1);
+  assert.equal(result.initialSummary, true);
+  const summary = await state.bridge.readSummary(result.snapshot.pageId, '');
+  assert.equal(summary.code, 'SUMMARY_READY');
+  assert.equal(summary.summary.totalLists, 2);
+  assert.deepEqual(summary.summary.lists.map(entry => entry.items.length), [2, 1]);
   assert.equal((await state.bridge.execute({ type: 'read' })).ok, true);
   assert.equal(state.views.length, 1);
 });

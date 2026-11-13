@@ -1,12 +1,13 @@
 /** 逐份读取官方已加载清单，始终核对页面和选区，并尝试恢复原清单。 */
-async function collectSummary(command, { read, canRead }) {
+export async function collectSummary(command, { read, canRead, timeoutMs = 25000, restoreTimeoutMs = 9500 }) {
   const unavailable = {ok:false,code:'SUMMARY_UNAVAILABLE',message:'请先收起官方页面，再刷新汇总。'};
   const reselect = {ok:false,code:'STALE_VIEW',needsListSelection:true,message:'官方页面或选区已变化，请刷新清单后重新选择。'};
   const readSafely = async (request,deadline) => {
     try { return await read(request,deadline); } catch { return reselect; }
   };
   if (!canRead()) return unavailable;
-  const deadline = performance.now()+25000;
+  const now = () => globalThis.performance?.now?.() ?? Date.now();
+  const deadline = now()+timeoutMs;
   const navigation = {type:'readLists',background:true};
   const before = await readSafely(navigation,deadline);
   if (!before.ok) return before;
@@ -25,7 +26,7 @@ async function collectSummary(command, { read, canRead }) {
   const order = [...lists.filter(list=>list.id===original),...lists.filter(list=>list.id!==original)];
   try {
     for (const list of order) {
-      if (!canRead() || performance.now()>=deadline) break;
+      if (!canRead() || now()>=deadline) break;
       const switching = list.id!==current;
       if (switching) lastDestination = list.id;
       const reply = await readSafely(switching?selectList(list.id,current):readList(list.id),deadline);
@@ -38,7 +39,7 @@ async function collectSummary(command, { read, canRead }) {
     if (lastDestination && original) {
       originalSnapshot = undefined;
       if (canRead()) {
-        const restoreDeadline = performance.now()+9500;
+        const restoreDeadline = now()+restoreTimeoutMs;
         const after = await readSafely(navigation,restoreDeadline);
         if (canRead() && after.ok && after.snapshot?.pageId===pageId &&
             [original,current,lastDestination].includes(after.selectedListId) &&
@@ -62,5 +63,3 @@ async function collectSummary(command, { read, canRead }) {
     summary:{lists:collected,totalLists:lists.length,capturedAt:new Date().toISOString()}
   };
 }
-
-module.exports = {collectSummary};

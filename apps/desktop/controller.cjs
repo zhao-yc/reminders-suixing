@@ -10,7 +10,7 @@ const { inspectTestListDelete } = require('./list-delete-diagnostics.cjs');
 const { summarizeWriteOutcome, parseCreationStage, applyCreationStage } = require('./operation-diagnostics.cjs');
 const { reopenOfficial, reloadOfficial } = require('./site-navigation.cjs');
 const { readConnectionStatus,probePublicConnection } = require('./connection.cjs');
-const { collectSummary } = require('./collect-summary.cjs');
+const { collectSummary } = require('../uni-app/lib/collect-summary.mjs');
 
 const ROOT = path.resolve(__dirname, '../..');
 const SOURCE = fs.readFileSync(path.join(ROOT, 'apps/uni-app/static/icloud/adapter.js'), 'utf8');

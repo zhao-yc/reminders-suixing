@@ -1,6 +1,7 @@
 // #ifdef APP-PLUS
 import { REGIONS, applePageHost, isApplePage } from './origins.js';
 import { REPLY_PREFIX, MAX_PAYLOAD, isNativeWrite, normalizeCommand, parseNativeReply, nativeCommandScript } from './native-protocol.js';
+import { collectSummary } from './collect-summary.mjs';
 
 const failure = (code, message) => ({ ok: false, code, message });
 const deferAutoRead = () => ({ ...failure('AUTO_READ_DEFERRED', '官方页面可见性尚未确认，自动更新暂缓。'), reason: 'window-hidden' });
@@ -14,6 +15,8 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
   let disposed = false;
   let pending = null;
   let login = null;
+  let summary = null;
+  let hiding = null;
   let counter = 0;
 
   function official(view) {
@@ -85,7 +88,10 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
         webview = null;
       }
     });
-    view.addEventListener('hide', () => cancelLogin(view));
+    view.addEventListener('hide', () => {
+      cancelLogin(view);
+      if (hiding?.view === view) hiding.finish();
+    });
   }
 
   function cancelLogin(view) {
@@ -136,6 +142,7 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
     if (disposed) return failure('CLOSED', '连接已关闭。');
     if (!Object.prototype.hasOwnProperty.call(REGIONS, region)) return failure('INVALID_REGION', '不支持的服务区域。');
     if (login) return failure('BUSY', '请先完成官方页面登录或返回应用。');
+    if (summary) return failure('BUSY', '正在读取清单汇总，请稍后再试。');
     if (pending && (changing || region !== activeRegion)) return failure('BUSY', '上一项操作尚未结束，请等待结果后再切换或重载。');
     return null;
   }
@@ -175,6 +182,37 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
     });
   }
 
+  /** 汇总期间独占官方窗口，读取范围和恢复选区交给两端共用的汇总逻辑。 */
+  async function readSummary(pageId, listId, region = 'cn') {
+    const blocked = unavailable(region, true);
+    if (blocked) return blocked;
+    if (typeof pageId !== 'string' || !pageId || pageId.length > 150 ||
+        typeof listId !== 'string' || listId.length > 150) return failure('INVALID_COMMAND', '清单汇总参数无效。');
+    const view = webview;
+    const current = { cancelled: false };
+    const canRead = () => !disposed && !current.cancelled && view && webview === view &&
+      activeRegion === region && ready && isHidden(view) && onRegionSite(view, region);
+    summary = current;
+    const now = () => globalThis.performance?.now?.() ?? Date.now();
+    try {
+      if (hiding?.view === view) await hiding.done;
+      const result = await collectSummary({ pageId, listId }, {
+        canRead,
+        // Android 隐藏 WebView 的计时器可能被降频，仍对每次读取和整个汇总设上限。
+        timeoutMs: 60000,
+        restoreTimeoutMs: 14000,
+        read(request, deadline) {
+          if (!canRead()) return deferAutoRead();
+          const remaining = deadline - now();
+          if (remaining <= 0) return failure('BRIDGE_TIMEOUT', '读取汇总超时，请稍后刷新。');
+          return dispatch(view, request, false, false, Math.min(timeoutMs, remaining));
+        }
+      });
+      if (!result.ok || !result.snapshot) needsRead = true;
+      return result;
+    } finally { summary = null; }
+  }
+
   /** 登录交接只等清单导航就绪，并复用登录后的同一个官方窗口。 */
   async function openLogin(region = 'cn') {
     const blocked = unavailable(region, true);
@@ -199,8 +237,19 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
               snapshot?.pageId && snapshot.activeListId === null && snapshot.items.length === 0 &&
               (snapshot.lists.length > 0 || snapshot.emptyAccount === true)) {
             login = null;
-            view.hide('auto');
-            return { ...result, code: 'LOGIN_READY',
+            // 自动汇总等待窗口真正隐藏，避免和原生关闭动画竞争。
+            let finish;
+            const done = new Promise(resolve => { finish = resolve; });
+            const timer = setTimeout(() => finish(), 1000);
+            const handoff = { view, done, finish };
+            hiding = handoff;
+            done.then(() => {
+              clearTimeout(timer);
+              if (hiding === handoff) hiding = null;
+            });
+            try { view.hide('none'); }
+            finally { if (isHidden(view)) finish(); }
+            return { ...result, code: 'LOGIN_READY', initialSummary: true,
               message: snapshot.emptyAccount ? '已连接 iCloud，当前账号没有清单。' : '已连接 iCloud，请选择清单。' };
           }
         }
@@ -217,12 +266,13 @@ export function createAndroidBridge({ runtime, adapterSource, timeoutMs = 18000,
   }
 
   return {
-    platform: 'Android', capabilities: { reconnect: true, editText: true, editFlag: true, editSchedule: true, deleteItem: true, openNewItem: true, createItem: true, showCompleted: true, loadedListRefresh: true }, execute, openLogin, hideSite,
+    platform: 'Android', capabilities: { reconnect: true, editText: true, editFlag: true, editSchedule: true, deleteItem: true, openNewItem: true, createItem: true, showCompleted: true, loadedListRefresh: true }, execute, openLogin, hideSite, readSummary,
     connectionState() {
       const network = runtime.networkinfo;
       const type = network?.getCurrentType();
       if (!Number.isInteger(type)) return { ok: true, state: 'unknown' };
       if (type === network.CONNECTION_NONE) {
+        if (summary) summary.cancelled = true;
         interrupt('OFFLINE', '网络已断开，联网后请重新读取。');
         return { ok: true, state: 'offline' };
       }
