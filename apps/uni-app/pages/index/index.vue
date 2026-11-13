@@ -1272,6 +1272,50 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .list-controls { flex-wrap:wrap; gap:0 14px; }.tabs { gap:18px; flex-wrap:wrap; min-width:0; }.tabs button { white-space:nowrap; }.view-tab:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }.date-view-description { display:block; flex-shrink:0; color:#78899e; font-size:11px; line-height:1.7; margin:10px 0 0; }.view-context .reminder-title { color:#8795a6; }.view-context { background:#fafcff; }
 .date-section-heading { margin-top:14px; padding:7px 2px 5px; border-bottom:1px solid #e5ebf2; color:#53657b; font-size:13px; font-weight:600; }
 
+/* #ifdef APP-PLUS */
+@media (max-width:760px) {
+  /* 自定义导航栏使用 uni-app 提供的状态栏高度，旧版 WebView 的安全区变量可能为零。 */
+  .toolbar,.toolbar.with-tools {
+    height:auto;
+    display:grid;
+    grid-template-columns:auto minmax(0,1fr);
+    gap:8px;
+    padding:calc(var(--status-bar-height, 0px) + 10px) 16px 10px;
+  }
+  .toolbar .mobile-menu { width:36px; min-height:36px; }
+  .toolbar-actions {
+    margin-left:0;
+    justify-self:end;
+    justify-content:flex-end;
+    flex-wrap:wrap;
+    min-width:0;
+    max-width:100%;
+    gap:0;
+  }
+  .toolbar-actions > * + * { margin-left:8px; }
+  .toolbar-actions .quiet-button { min-height:36px; }
+  .quick-tools { grid-column:1 / -1; gap:0; }
+  .add-reminder-button { margin-right:8px; }
+  .toolbar-search { gap:0; }
+  .toolbar-search .search { margin-left:8px; }
+  .sidebar { padding-top:calc(var(--status-bar-height, 0px) + 28px); }
+
+  .title-line,.reminder-title-line,.source-chip { column-gap:0; }
+  .title-line > * + * { margin-left:8px; }
+  .source-chip > text { margin-left:4px; }
+  .reminder-title-line > :not(:last-child) { margin-right:4px; }
+
+  /* 旧版 WebView 支持网格间距。筛选标签保留点击范围，窄屏时工具组可换行。 */
+  .tabs { display:grid; grid-auto-flow:column; grid-auto-columns:max-content; gap:4px; }
+  .tabs button { min-height:40px; padding:0 6px; }
+  .list-view-tools { margin-left:auto; }
+  .list-view-tools .flag-filter { margin-right:6px; }
+  .reminder-row { padding:12px 0; row-gap:4px; }
+  .reminder-row > .row-actions { gap:0; }
+  .row-actions button { width:36px; height:36px; }
+}
+/* #endif */
+
 /* 宽屏快捷视图放在左侧，事项区沿用随行原有布局。 */
 .desktop-sidebar-layout .sidebar {
   width:clamp(248px,33.4vw,510px);
