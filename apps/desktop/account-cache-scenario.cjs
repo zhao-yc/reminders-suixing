@@ -257,20 +257,26 @@ async function verifyAccountPartitions(fixtureURL) {
     await one.executeJavaScript('localStorage.setItem("synthetic-account","first")');
     await two.executeJavaScript('localStorage.setItem("synthetic-account","second")');
     await one.executeJavaScript(`(() => {
+      const dormant=document.createElement('div');
+      dormant.style.display='none';
+      dormant.innerHTML='<div role="menu"><button role="menuitem">隐藏已完成</button></div>';
+      document.body.append(dormant);
       const avatar=document.createElement('button');
       avatar.setAttribute('aria-haspopup','menu');
       avatar.innerHTML='<span class="profile-photo"></span>';
       avatar.addEventListener('click',()=>{
+        const open=document.querySelector('.account-menu');
+        if(open){open.remove();return;}
         const menu=document.createElement('div');
         menu.className='account-menu';
         menu.innerHTML='<div class="header"><span class="email">first@example.invalid</span></div>';
-        menu.addEventListener('keydown',event=>{if(event.key==='Escape') menu.remove();});
         document.body.append(menu);
       });
       document.body.append(avatar);
     })()`);
     assert.equal((await first.readNavigation('cn')).appleAccount,'first@example.invalid');
     assert.equal(await one.executeJavaScript('!!document.querySelector(".account-menu")'),false);
+    assert.equal((await first.readNavigation('cn')).ok,true);
     first.dispose();
     assert.equal(await (await load(resumed)).executeJavaScript('localStorage.getItem("synthetic-account")'),'first');
     assert.equal((await resumed.forget('cn')).ok,true);

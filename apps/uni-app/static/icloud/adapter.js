@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.29') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.30') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -191,15 +191,38 @@
 
   /** 自动交接和读取共用官方编辑保护，保留焦点和草稿。 */
   function deferredWhileEditing(doc, preservedCreation) {
-    var focused=doc.activeElement;
-    var editing=focused && focused.closest('[contenteditable="true"],input,textarea') && !preservedCreation;
-    var panels=Array.from(doc.querySelectorAll('.reminder-list-detail,.details-popover,[role="dialog"],[role="alertdialog"],[role="menu"]')).some(visibleControl);
+    var focused=doc.activeElement?.closest('[contenteditable="true"],[contenteditable="plaintext-only"],input,textarea');
+    var editing=focused && !preservedCreation && !focused.disabled && !focused.readOnly &&
+      !/^(?:button|checkbox|file|hidden|image|radio|range|reset|submit)$/.test(focused.type || '') && activeControl(focused);
+    var panels=Array.from(doc.querySelectorAll('.reminder-list-detail,.details-popover,[role="dialog"],[role="alertdialog"],[role="menu"]')).some(activeControl);
     var markers=Array.from(doc.querySelectorAll('[data-edit="true"]')).some(function(node){
-      return visibleControl(node) && !(preservedCreation && (node===preservedCreation.row || preservedCreation.row.contains(node) && node.contains(preservedCreation.editor)));
+      return activeControl(node) && !(preservedCreation && (node===preservedCreation.row || preservedCreation.row.contains(node) && node.contains(preservedCreation.editor)));
     });
     if(editing || panels || markers)return result(false,'AUTO_READ_DEFERRED','正在官方页面编辑，自动读取暂缓。',{
       reason:editing?'focused-field':panels?'open-panel':'active-marker'
     });
+  }
+
+  /** 官网页面可保留卸载动画或隐藏容器中的控件。仅可见、可操作的控件参与编辑保护。 */
+  function activeControl(node) {
+    if (!node?.isConnected || node.closest('[hidden],[aria-hidden="true"],[inert]')) return false;
+    var view=node.ownerDocument.defaultView;
+    if (/^(?:hidden|collapse)$/.test(view.getComputedStyle(node).visibility)) return false;
+    for (var current=node;current;current=current.parentElement) {
+      var style=view.getComputedStyle(current);
+      if (style.display==='none' || style.contentVisibility==='hidden' || style.opacity==='0') return false;
+    }
+    return true;
+  }
+
+  /** 仅对本次已打开的同一菜单发关闭操作，并等待网页收起后再继续读。 */
+  async function dismissMenu(menu, trigger, isOpen, closeButton) {
+    if (!menu || !isOpen()) return true;
+    if (closeButton) activate(closeButton);
+    else menu.dispatchEvent(new menu.ownerDocument.defaultView.KeyboardEvent('keydown', {key:'Escape',code:'Escape',bubbles:true,cancelable:true}));
+    if (await until(function () { return !isOpen(); }, 240)) return true;
+    if (activeControl(trigger) && !trigger.disabled && trigger.getAttribute('aria-disabled')!=='true') activate(trigger);
+    return !!await until(function () { return !isOpen(); }, 400);
   }
 
   /** 账号标识来自官方头像菜单的可见标题，只关闭本次探测主动打开的菜单。 */
@@ -210,7 +233,7 @@
       if (!pages.includes(top)) pages.unshift(top);
     } catch (_) { /* 跨域窗口由宿主桥接独立读取。 */ }
     var find = function (selector) {
-      return pages.flatMap(function (doc) { return Array.from(doc.querySelectorAll(selector)).filter(visibleControl); });
+      return pages.flatMap(function (doc) { return Array.from(doc.querySelectorAll(selector)).filter(activeControl); });
     };
     var menus = function () { return find('.account-menu'); };
     var identifier = function (menu) {
@@ -231,14 +254,11 @@
     var menu = await until(function () { var open=menus(); return open.length===1 && open[0]; }, 700);
     if (!menu) return '';
     var value = identifier(menu);
-    var view = menu.ownerDocument.defaultView;
     var sheet = menu.closest('.account-menu-compact');
     var close = sheet && Array.from(sheet.querySelectorAll('button[aria-label], [role="button"][aria-label]')).filter(function (button) {
-      return visibleControl(button) && /^(close|关闭|關閉)( menu|菜单|選單)?$/i.test(button.getAttribute('aria-label'));
+      return activeControl(button) && /^(close|关闭|關閉)( menu|菜单|選單)?$/i.test(button.getAttribute('aria-label'));
     });
-    if (close?.length === 1) activate(close[0]);
-    else menu.dispatchEvent(new view.KeyboardEvent('keydown', {key:'Escape',code:'Escape',bubbles:true,cancelable:true}));
-    return await until(function () { return !menus().length; }, 700) ? value : '';
+    return await dismissMenu(menu,triggers[0],function () { return menus().includes(menu); },close?.length===1 ? close[0] : null) ? value : '';
   }
 
   async function readLists(command) {
@@ -550,19 +570,22 @@
       if (deferred) return deferred;
     }
     function actions() {
-      return Array.from(doc.querySelectorAll('[role="menuitem"]')).filter(function (node) {
-        return !node.closest('[hidden], [aria-hidden="true"]') && doc.defaultView.getComputedStyle(node).display !== 'none';
-      }).map(function (node) { return { node: node, label: node.getAttribute('aria-label') || text(node) }; });
+      return Array.from(doc.querySelectorAll('[role="menuitem"]')).filter(activeControl)
+        .map(function (node) { return { node: node, label: node.getAttribute('aria-label') || text(node) }; });
     }
     function completionActions() {
       return actions().filter(function (item) { return /^(?:show\b.*\bcompleted|hide\b.*\bcompleted|显示.*已完成|隐藏.*已完成)/i.test(item.label); });
     }
+    function dismissListMenu(menuItem) {
+      var menu=menuItem?.closest('[role="menu"],ui-menu') || menuItem;
+      return dismissMenu(menu,menuButton,function () {
+        return currentList() && activeControl(menu);
+      });
+    }
     var openedHere = false;
     var menuButton = null;
     if (!completionActions().length) {
-      var buttons = Array.from(doc.querySelectorAll('.list-detail-button[role="button"]')).filter(function (node) {
-        return !node.closest('[hidden], [aria-hidden="true"]');
-      });
+      var buttons = Array.from(doc.querySelectorAll('.list-detail-button[role="button"]')).filter(activeControl);
       if (buttons.length !== 1 || buttons[0].disabled || buttons[0].getAttribute('aria-disabled') === 'true') return result(false, 'VIEW_UNAVAILABLE', '请在官方页面显示已完成事项，返回后刷新。');
       menuButton = buttons[0];
       openedHere = true;
@@ -571,12 +594,13 @@
     var candidates = await until(function () { var found = completionActions(); return found.length ? found : null; }, 1400);
     if (!currentList()) { lastSnapshot = null; return result(false, 'STALE_VIEW', '打开菜单时清单发生变化，请先刷新。'); }
     if (!candidates || candidates.length !== 1 || candidates[0].node.disabled || candidates[0].node.getAttribute('aria-disabled') === 'true') {
-      if (openedHere && actions().length) activate(menuButton);
+      if (openedHere) await dismissListMenu(actions()[0]?.node);
       return result(false, 'VIEW_UNAVAILABLE', '请在官方页面显示已完成事项，返回后刷新。');
     }
     // 已显示时不点击“隐藏”，确保重复请求不会反转界面设置。
     if (/^(?:hide\b|隐藏)/i.test(candidates[0].label)) {
-      if (openedHere) activate(menuButton);
+      if (openedHere) await dismissListMenu(candidates[0].node);
+      if (!currentList()) { lastSnapshot=null; return result(false,'STALE_VIEW','关闭菜单时清单发生变化，请先刷新。'); }
       var visible = read();
       if (visible.snapshot) visible.snapshot.completedVisible = true;
       return visible;
@@ -593,16 +617,19 @@
       return stable >= 4;
     }, 6500);
     if (!currentList()) { lastSnapshot = null; return result(false, 'STALE_VIEW', '展开期间清单发生变化，请先刷新。'); }
+    if (openedHere) await dismissListMenu(candidates[0].node);
+    if (!currentList()) { lastSnapshot=null; return result(false,'STALE_VIEW','关闭菜单时清单发生变化，请先刷新。'); }
     var refreshed = read();
     if (!refreshed.ok) return refreshed;
     var hasCompleted = refreshed.snapshot.items.some(function (item) { return item.completed; });
-    if (!hasCompleted && menuButton && visibleControl(menuButton) && !actions().length) {
+    if (!hasCompleted && menuButton && activeControl(menuButton) && !actions().length) {
       // 零条完成项也要核对菜单已切到“隐藏”，避免把尚未展开误报为零。
       activate(menuButton);
       var checked = await until(function () { var found = completionActions(); return found.length ? found : null; }, 800);
       if (!currentList()) { lastSnapshot = null; return result(false, 'STALE_VIEW', '核对完成事项时清单发生变化，请先刷新。'); }
       hasCompleted = checked?.length === 1 && /^(?:hide\b|隐藏)/i.test(checked[0].label);
-      if (actions().length) activate(menuButton);
+      await dismissListMenu(checked?.[0]?.node || actions()[0]?.node);
+      if (!currentList()) { lastSnapshot=null; return result(false,'STALE_VIEW','关闭菜单时清单发生变化，请先刷新。'); }
     }
     if (hasCompleted) refreshed.snapshot.completedVisible = true;
     return result(true, 'VIEW_REQUESTED', '已请求显示已完成事项；仍只读取网页当前已加载内容。', { snapshot: refreshed.snapshot });
@@ -1634,7 +1661,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.29',
+    version: '0.3.30',
     readAccountIdentifier: readAccountIdentifier,
     dispose:function(){clearSettledCreation();root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,

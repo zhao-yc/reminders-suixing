@@ -1136,7 +1136,11 @@ async function openLiveList(list, quiet=false, summaryBinding) {
     }
     if (!navigation.ok) {
       if (navigation.code==='LOGIN_REQUIRED') updateAccountReport(account,null,navigation.code,navigation);
-      if (!quiet) accept({...navigation,message:navigation.message || '请先刷新此账号的清单。'});
+      if (!quiet) {
+        const message=navigation.code==='AUTO_READ_DEFERRED' && navigation.reason
+          ? 'iCloud 官方页面有编辑或菜单尚未关闭，请结束当前操作后再试。' : navigation.message || '请先刷新此账号的清单。';
+        accept({...navigation,message});
+      }
       return;
     }
     if (differentAppleAccount(account,navigation.appleAccount)) {

@@ -221,6 +221,9 @@ document.querySelector('.list-detail-button').addEventListener('click', () => {
   menu.hidden = !menu.hidden;
   menu.querySelector('[role="menuitem"]').textContent = window.fixtureHideCompleted ? '显示已完成的项目' : '隐藏已完成的项目';
 });
+document.querySelector('.fixture-list-menu').addEventListener('keydown', event => {
+  if (event.key === 'Escape') event.currentTarget.hidden = true;
+});
 document.querySelector('.fixture-list-menu [role="menuitem"]').addEventListener('click', () => {
   window.fixtureCompletedActionClicks++;
   window.fixtureHideCompleted = !window.fixtureHideCompleted;

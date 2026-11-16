@@ -108,6 +108,41 @@ test('显示菜单不可用或被禁用时明确要求官方核对',async t=>{
   assert.equal(window.fixtureCompletedMenuClicks,0);
 });
 
+test('后台展开完成项忽略隐藏菜单容器和普通按钮焦点，保留可见草稿保护',async t=>{
+  const {window,execute,command}=await setup(t);
+  const doc=window.document;
+  const blocker=doc.createElement('div');
+  blocker.innerHTML='<div style="display:none"><div role="menu"><button role="menuitem">隐藏已完成</button></div></div>'+
+    '<div style="opacity:0"><div data-edit="true"></div></div><input type="checkbox"><textarea>随行验证 · 草稿</textarea>';
+  doc.body.append(blocker);
+  blocker.querySelector('input').focus();
+  assert.ok((await execute({type:'readLists',background:true})).ok);
+  assert.ok((await execute({type:'read'})).ok);
+  const shown=await execute({...command,background:true});
+  assert.equal(shown.snapshot.items.filter(item=>item.completed).length,1);
+  assert.equal(doc.querySelector('.fixture-list-menu').hidden,true);
+  blocker.querySelector('textarea').focus();
+  const deferred=await execute({...command,background:true});
+  assert.equal(deferred.code,'AUTO_READ_DEFERRED');
+  assert.equal(deferred.reason,'focused-field');
+  assert.equal(doc.activeElement.value,'随行验证 · 草稿');
+  assert.equal(window.fixtureClicks,0);
+});
+
+test('只打开不切换的官方完成菜单使用 Escape 收起，下一次导航继续读取',async t=>{
+  const {window,execute,command}=await setup(t);
+  const doc=window.document;
+  const button=doc.querySelector('.list-detail-button');
+  const menu=doc.querySelector('.fixture-list-menu');
+  button.addEventListener('click',()=>{menu.hidden=false;});
+  await execute(command);
+  const reply=await execute(command);
+  assert.equal(reply.snapshot.completedVisible,true);
+  assert.equal(menu.hidden,true);
+  assert.equal((await execute({type:'readLists',background:true})).ok,true);
+  assert.equal(window.fixtureCompletedActionClicks,1);
+});
+
 test('桌面显示完成项命令必须携带当前页面与清单，不接受任意动作',()=>{
   assert.equal(validCommand({type:'showCompleted',pageId:'synthetic-page',listId:'synthetic-list'}),true);
   assert.equal(validCommand({type:'showCompleted'}),false);
