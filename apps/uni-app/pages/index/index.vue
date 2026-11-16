@@ -68,7 +68,7 @@
         </button>
         <text v-if="search && mobileOverview && !sidebarLists.length" class="sidebar-placeholder">没有找到相关清单。</text>
       </view>
-      <view class="sidebar-footer"><button v-if="canNotify" class="notifications-settings-button" role="button" :aria-expanded="String(notificationsPanelOpen)" :disabled="busy || !!editing" @click="toggleNotificationPanel">系统通知{{ notificationState.enabled ? ' · 已开启' : '' }}</button><text class="footer-wordmark">随行 · 开源</text><text class="muted small">{{ bridge.platform }} · 最小验证版</text></view>
+      <view class="sidebar-footer"><button v-if="canNotify" class="notifications-settings-button" role="button" :aria-expanded="String(notificationsPanelOpen)" :disabled="busy || !!editing" @click="toggleNotificationPanel">系统通知{{ notificationState.enabled ? ' · 已开启' : '' }}</button><text class="footer-wordmark">随行 · 开源</text></view>
     </view>
     <view class="workspace" :inert="creatingList ? '' : undefined">
       <view class="toolbar" :class="{ 'with-tools': !!snapshot }">
@@ -1940,7 +1940,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
   --list-symbol-size:34px;
 }
 .compact-overview .sidebar > * { flex-shrink:0; }
-.compact-overview .brand,.compact-overview .footer-wordmark,.compact-overview .sidebar-footer > .small { display:none; }
+.compact-overview .brand,.compact-overview .footer-wordmark { display:none; }
 .compact-overview .desktop-view-grid { margin:0 0 18px; }
 .overview-scope { display:block; font-size:12px; margin-bottom:12px; }
 .compact-overview .sidebar-section { align-items:center; color:var(--compact-text); font-size:21px; letter-spacing:0; padding:0 12px; margin-bottom:10px; }
