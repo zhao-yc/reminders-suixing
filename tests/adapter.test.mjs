@@ -27,6 +27,35 @@ function textChange(snapshot, field, value, index = 0) {
     fingerprint: item.fingerprint, expectedCompleted: item.completed, field, value };
 }
 
+test('账号标识只取自登录后的官方账号菜单，并关闭本次打开的菜单', async t => {
+  const { execute, window } = setup(t);
+  const doc=window.document;
+  const trigger=doc.createElement('button');
+  trigger.setAttribute('aria-haspopup','menu');
+  trigger.innerHTML='<div class="profile-photo"></div>';
+  doc.body.append(trigger);
+  let opened=0, dismissed=0;
+  trigger.addEventListener('click',()=>{
+    opened++;
+    const menu=doc.createElement('ui-menu');
+    menu.className='account-menu';
+    menu.innerHTML='<div class="header"><div class="email" aria-hidden="true">synthetic-account@example.invalid</div></div>';
+    doc.body.append(menu);
+    menu.addEventListener('keydown',event=>{ if (event.key==='Escape') {dismissed++;menu.remove();} });
+  });
+  assert.equal((await execute({type:'readLists'})).appleAccount,undefined);
+  assert.equal(opened,0);
+  const reply=await execute({type:'readLists',background:true,includeAccount:true});
+  assert.equal(reply.appleAccount,'synthetic-account@example.invalid');
+  assert.equal(reply.snapshot.items.length,0);
+  assert.equal(opened,1);
+  assert.equal(dismissed,1);
+  assert.equal(doc.querySelector('.account-menu'),null);
+  const dialog=doc.createElement('div');dialog.setAttribute('role','dialog');doc.body.append(dialog);
+  assert.equal((await execute({type:'readLists',background:true,includeAccount:true})).code,'AUTO_READ_DEFERRED');
+  assert.equal(opened,1);
+});
+
 test('Android 官方窄屏详情移除导航时，读取清单并按选择恢复事项', async t => {
   const { execute, window } = setup(t);
   const doc = window.document;

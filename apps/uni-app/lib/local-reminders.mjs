@@ -17,6 +17,17 @@ export function matchingList(lists, list) {
   return matches.length === 1 ? matches[0] : null;
 }
 
+export function officialAccountLabel(value) {
+  const label = typeof value === 'string' ? value.trim() : '';
+  return label.length <= 254 && (/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(label) || /^\+?\d[\d ()-]{5,24}\d$/.test(label)) ? label : '';
+}
+
+export function differentAppleAccount(account, observed) {
+  const known=officialAccountLabel(account.appleAccount), current=officialAccountLabel(observed);
+  const identity=label=>label.includes('@') ? label.toLowerCase() : label.replace(/[^\d]/g,'');
+  return !!known && !!current && identity(known)!==identity(current);
+}
+
 /** 只投影显示字段，页面句柄和写入指纹始终留在实时桥接中。 */
 export function toLocalReport(account, report) {
   const lists = report.lists.map(({ list, items, partial }, listIndex) => {
@@ -70,10 +81,12 @@ export async function refreshOfficial(bridge, account, initial) {
   const { region, id } = account;
   const navigation = initial || await prepareNavigation(bridge,account);
   if (!navigation.ok) return navigation;
-  if (!navigation.ok || !navigation.snapshot?.pageId ||
+  if (!navigation.snapshot?.pageId ||
       (!navigation.snapshot.lists.length && !navigation.snapshot.emptyAccount)) return { ok: false, code: 'PAGE_NOT_READY' };
+  const appleAccount = officialAccountLabel(navigation.appleAccount);
+  if (differentAppleAccount(account,appleAccount)) return {ok:false,code:'APPLE_ACCOUNT_CHANGED'};
   const result = await bridge.readSummary(navigation.snapshot.pageId, '', region, id);
-  return { ...result, navigation: navigation.snapshot };
+  return { ...result, navigation: navigation.snapshot, appleAccount };
 }
 
 export function createLocalStore(files) {
@@ -96,6 +109,7 @@ export function createLocalStore(files) {
         return true;
       }).map(account => ({
         id: account.id, region: account.region, label: text(account.label, 48) || 'iCloud',
+        appleAccount: officialAccountLabel(account.appleAccount),
         confirmed: account.confirmed === true, verify: account.verify === true
       }));
     },

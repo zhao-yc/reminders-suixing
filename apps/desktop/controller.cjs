@@ -210,7 +210,20 @@ function createController(options = {}) {
         return pageNotReady;
       }
       const phaseDiagnostics=options.diagnostics && command.type === 'createItem' ? '\nwindow.__suixingDiagnosticPhases=true;window.__suixingDiagnosticWriteSequence=' + sequence + ';' : '';
-      const operation = target.executeJavaScript(SOURCE + phaseDiagnostics + '\nwindow.__suixingAdapter.execute(' + JSON.stringify(request) + ');', true);
+      const mainFrame = window.webContents.mainFrame;
+      const { includeAccount, ...scopedRequest } = request;
+      const readAccount = includeAccount && !options.diagnostics;
+      const separateShell = readAccount && target !== mainFrame && canNavigate(mainFrame.url) &&
+        new URL(target.url).origin !== new URL(mainFrame.url).origin;
+      const operation = (async () => {
+        const reply = await target.executeJavaScript(SOURCE + phaseDiagnostics + '\nwindow.__suixingAdapter.execute(' +
+          JSON.stringify(readAccount && !separateShell ? request : scopedRequest) + ');', true);
+        if (readAccount && separateShell && reply?.ok && canNavigate(mainFrame.url)) {
+          // 不跨过 iframe 的同源边界。提醒事项读回后由官方顶层页面读取自己的账号菜单。
+          reply.appleAccount = await mainFrame.executeJavaScript(SOURCE + '\nwindow.__suixingAdapter.readAccountIdentifier();', true).catch(() => '');
+        }
+        return reply;
+      })();
       let timer;
       const timeout = new Promise(resolve => {
         timer = setTimeout(() => resolve({ ok: false, code: write ? 'UNCERTAIN_WRITE' : 'BRIDGE_TIMEOUT', message: '页面响应超时，请打开官方页面核对。', cloudConfirmed: false }), Math.min(18000,Math.max(1,deadline-performance.now())));
@@ -327,7 +340,7 @@ function createController(options = {}) {
       const deadline = performance.now() + 600000;
       while (current() && performance.now() < deadline) {
         if (canCheck()) {
-          const result = await execute({ type:'readLists', background:true }, region);
+          const result = await execute({ type:'readLists', background:true, includeAccount:true }, region);
           const snapshot = result.snapshot;
           if (canCheck() && result.ok && result.needsListSelection && snapshot?.pageId &&
               snapshot.activeListId === null && snapshot.items?.length === 0 && (snapshot.lists?.length || snapshot.emptyAccount)) {
@@ -374,7 +387,7 @@ function createController(options = {}) {
       if (!site || site.isDestroyed() || site.isVisible() || site.webContents.isLoading() || activeRegion !== region) {
         return {ok:false,code:'PAGE_NOT_READY'};
       }
-      const result = await execute({type:'readLists',background:true,sessionProbe:true},region);
+      const result = await execute({type:'readLists',background:true,sessionProbe:true,includeAccount:true},region);
       if (result.code !== 'PAGE_NOT_READY') return result;
       // 仅识别公开的登录入口和认证框架，不读取输入框或会话数据。
       const login = await site.webContents.executeJavaScript(

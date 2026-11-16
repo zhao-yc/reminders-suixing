@@ -129,7 +129,7 @@ export function createHarmonyBridge({ adapterSource, timeoutMs = 18000, summaryE
     },
     async readNavigation(region) {
       if (host?.region !== region || !ready || host.visible || pending) return failure('PAGE_NOT_READY','官方页面尚未就绪。');
-      return dispatch({type:'readLists',background:true,sessionProbe:true},3000);
+      return dispatch({type:'readLists',background:true,sessionProbe:true,includeAccount:true},3000);
     },
     async readSummary(pageId,listId,region) {
       const current = host?.instanceId;
@@ -152,7 +152,7 @@ export function createHarmonyBridge({ adapterSource, timeoutMs = 18000, summaryE
         const deadline = Date.now() + 600000;
         while (active() && Date.now() < deadline) {
           if (ready) {
-            const reply = await dispatch({type:'readLists',background:true},3000);
+            const reply = await dispatch({type:'readLists',background:true,includeAccount:true},3000);
             if (active() && reply.ok && (reply.snapshot.lists.length || reply.snapshot.emptyAccount)) {
               publish({visible:false});
               return {...reply,code:'LOGIN_READY',initialSummary:true};

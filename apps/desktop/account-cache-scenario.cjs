@@ -14,8 +14,9 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
   const store=createLocalStore(files);
   const accounts=[
     {id:'legacy-cn',region:'cn',label:'iCloud',confirmed:true},
-    {id:'syntheticsecondaccount',region:'cn',label:'iCloud 2',confirmed:true}
+    {id:'syntheticsecondaccount',region:'cn',label:'iCloud 2',appleAccount:'second@example.invalid',confirmed:true}
   ];
+  const firstAppleAccount='first@example.invalid';
   const list={id:'synthetic-live-list',title:'随行验证 · 同名清单',color:'#1687ff'};
   const dateLabel=date=>new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,10);
   const now=new Date(),today=dateLabel(now);
@@ -45,7 +46,7 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
       connectionState:()=>({ok:true,state:online?'available':'offline'}),
       prepareSummary:()=>{opened.push(account.id);return online?{ok:true}:{ok:false,code:'OFFLINE'};},
       readNavigation:()=>expired.has(account.id) ? {ok:false,code:'LOGIN_REQUIRED'} :
-        {ok:true,snapshot:{pageId,lists:[list],items:[]}},
+        {ok:true,appleAccount:account.appleAccount || firstAppleAccount,snapshot:{pageId,lists:[list],items:[]}},
       openLogin:()=>{logins.push(account.id);return {ok:false,code:'LOGIN_CANCELLED',message:'已取消登录。'};},
       execute:command=>{
         if (!online) return {ok:false,code:'OFFLINE'};
@@ -85,6 +86,8 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
     await ui.loadURL(frontendURL);
     await waitForRenderer('document.querySelectorAll(".account-group").length===2 && !document.querySelector(".refresh-button[disabled]")',ui);
     assert.deepEqual(opened,accounts.map(account=>account.id));
+    assert.deepEqual(await run('[...document.querySelectorAll(".account-group-toggle .list-name")].map(node=>node.textContent)'),
+      ['iCloud',accounts[1].appleAccount]);
     assert.equal(await run('document.querySelector("[data-status=pending] .desktop-card-count").textContent'),'2');
     await run('document.querySelector("[data-status=pending]").click()');
     await waitForRenderer('document.querySelector(".summary-completion-button") && document.querySelector(".network-notice")?.dataset.state==="offline"',ui);
@@ -106,6 +109,8 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
     await run('document.querySelector(".more-tool").click();document.querySelector(".refresh-button").click()');
     await waitForRenderer('!document.querySelector(".refresh-button[disabled]")',ui);
     assert.deepEqual(opened,[...accounts,...accounts].map(account=>account.id));
+    assert.deepEqual(await run('[...document.querySelectorAll(".account-group-toggle .list-name")].map(node=>node.textContent)'),
+      [firstAppleAccount,accounts[1].appleAccount]);
     await run('document.querySelector("[data-status=today]").click()');
     await waitForRenderer('document.querySelectorAll(".summary-completion-button").length===2 && document.querySelector(".network-notice")?.dataset.state!=="offline"',ui);
     await run('document.querySelectorAll(".summary-completion-button")[1].click()');
@@ -193,6 +198,21 @@ async function verifyAccountPartitions(fixtureURL) {
     const two=await load(second);
     await one.executeJavaScript('localStorage.setItem("synthetic-account","first")');
     await two.executeJavaScript('localStorage.setItem("synthetic-account","second")');
+    await one.executeJavaScript(`(() => {
+      const avatar=document.createElement('button');
+      avatar.setAttribute('aria-haspopup','menu');
+      avatar.innerHTML='<span class="profile-photo"></span>';
+      avatar.addEventListener('click',()=>{
+        const menu=document.createElement('div');
+        menu.className='account-menu';
+        menu.innerHTML='<div class="header"><span class="email">first@example.invalid</span></div>';
+        menu.addEventListener('keydown',event=>{if(event.key==='Escape') menu.remove();});
+        document.body.append(menu);
+      });
+      document.body.append(avatar);
+    })()`);
+    assert.equal((await first.readNavigation('cn')).appleAccount,'first@example.invalid');
+    assert.equal(await one.executeJavaScript('!!document.querySelector(".account-menu")'),false);
     first.dispose();
     assert.equal(await (await load(resumed)).executeJavaScript('localStorage.getItem("synthetic-account")'),'first');
     assert.equal((await resumed.forget('cn')).ok,true);

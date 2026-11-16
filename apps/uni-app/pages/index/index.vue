@@ -36,16 +36,16 @@
         <view v-for="group in accountGroups" :key="group.account.id" class="account-group">
           <view class="account-group-header">
             <button class="account-group-toggle" :aria-expanded="String(!accountCollapsed[group.account.id])" @click="accountCollapsed[group.account.id]=!accountCollapsed[group.account.id]">
-              <text class="list-name">{{ group.account.label }}</text>
+              <text class="list-name" :title="accountDisplay(group.account)">{{ accountDisplay(group.account) }}</text>
               <view class="list-chevron" :class="{'account-chevron-open':!accountCollapsed[group.account.id]}" aria-hidden="true"></view>
             </button>
-            <button class="account-more quiet-button" :aria-label="group.account.label + '的账号选项'" :aria-expanded="String(accountOptions===group.account.id)" :disabled="busy || refreshingAccounts || !!editing" @click="accountOptions=accountOptions===group.account.id?'':group.account.id">•••</button>
+            <button class="account-more quiet-button" :aria-label="accountDisplay(group.account) + '的账号选项'" :aria-expanded="String(accountOptions===group.account.id)" :disabled="busy || refreshingAccounts || !!editing" @click="accountOptions=accountOptions===group.account.id?'':group.account.id">•••</button>
           </view>
           <view v-if="accountOptions===group.account.id" class="account-group-actions">
             <button class="quiet-button" :disabled="busy || refreshingAccounts || !!editing" @click="accountLogin(group.account,true)">重新登录</button>
             <button class="quiet-button" :disabled="busy || refreshingAccounts || !!editing" @click="clearAccount(group.account,false)">清除缓存</button>
             <button v-if="canRemoveAccount(group.account)" class="quiet-button" :disabled="busy || refreshingAccounts || !!editing" @click="clearAccount(group.account,true)">移除账号</button>
-            <button class="quiet-button" :disabled="busy || refreshingAccounts || !!editing" @click="renameAccount(group.account)">修改名称</button>
+            <button v-if="!group.account.appleAccount" class="quiet-button" :disabled="busy || refreshingAccounts || !!editing" @click="renameAccount(group.account)">修改名称</button>
           </view>
           <text v-if="accountMessage(group.account)" class="sidebar-placeholder account-status" role="status">{{ accountMessage(group.account) }}</text>
           <view v-if="!accountCollapsed[group.account.id]" class="list-group">
@@ -260,7 +260,7 @@ import { listIconURL, appearanceColorLabel } from '../../lib/list-appearance.js'
 import { VIEW_OPTIONS, groupLoadedDateView, projectLoadedItems, projectAcrossLists } from '../../lib/list-views.js';
 import { monitorConnection, connectionResult } from '../../lib/connection.js';
 import { monitorLoadedList } from '../../lib/loaded-list-monitor.js';
-import { createLocalStore, createAccountRefresh, refreshOfficial, prepareNavigation, incompleteReport, matchingList, toLocalReport } from '../../lib/local-reminders.mjs';
+import { createLocalStore, createAccountRefresh, refreshOfficial, prepareNavigation, incompleteReport, matchingList, toLocalReport, officialAccountLabel, differentAppleAccount } from '../../lib/local-reminders.mjs';
 // #ifdef APP-HARMONY
 import HarmonyICloudHost from '../../components/HarmonyICloudHost.vue';
 // #endif
@@ -589,8 +589,9 @@ function accept(result,readRecovery=false) {
 
 const sessionAccountId = () => localEnabled.value ? selectedAccount.value?.id : undefined;
 const legacyAccount = () => ({id:'legacy-' + region.value, region:region.value, label:'iCloud', confirmed:false, verify:false});
+const accountDisplay = account => account?.appleAccount || account?.label || 'iCloud';
 const sourceLabel = list => accounts.value.length > 1
-  ? (accounts.value.find(account=>account.id===list.accountId)?.label || 'iCloud') + ' · ' + list.title : list.title;
+  ? accountDisplay(accounts.value.find(account=>account.id===list.accountId)) + ' · ' + list.title : list.title;
 const canRemoveAccount = account => typeof bridge.forgetAccount === 'function' && !!account;
 
 function renameAccount(account) {
@@ -656,6 +657,7 @@ function rememberCurrentList(value) {
 }
 
 function accountMessage(account) {
+  if (accountStatus.value[account.id]==='APPLE_ACCOUNT_CHANGED') return '登录账号已变更，请重新登录此账号';
   if (account.verify) return '请重新登录，缓存可继续查看';
   return {
     PARTIAL:'部分清单尚未读取', CACHE_WRITE_FAILED:'本地缓存保存失败',
@@ -686,10 +688,17 @@ function showAccountOverview() {
 
 function updateAccountReport(account, report, code, result) {
   accountStatus.value[account.id]=code;
-  if (code==='LOGIN_REQUIRED' && !account.verify) {
+  let registryChanged=false;
+  if (['LOGIN_REQUIRED','APPLE_ACCOUNT_CHANGED'].includes(code) && !account.verify) {
     account.verify=true;
-    saveAccounts(accounts.value).catch(()=>{accountStatus.value[account.id]='CACHE_WRITE_FAILED';});
+    registryChanged=true;
   }
+  const label=officialAccountLabel(result.appleAccount);
+  if (!account.verify && label && account.appleAccount!==label && !differentAppleAccount(account,label)) {
+    account.appleAccount=label;
+    registryChanged=true;
+  }
+  if (registryChanged) saveAccounts(accounts.value).catch(()=>{accountStatus.value[account.id]='CACHE_WRITE_FAILED';});
   if (report) {
     const official=result.summary?.lists;
     if (official && official.length===report.lists.length) {
@@ -767,6 +776,7 @@ async function initializeAccounts() {
     const result=await refreshOfficial(bridge,account);
     if (!workspaceMounted || !result.ok || !result.summary) return;
     account.confirmed=true;
+    account.appleAccount=officialAccountLabel(result.appleAccount);
     accounts.value=[account];
     selectedAccount.value=account;
     const report=toLocalReport(account,result.summary);
@@ -792,13 +802,22 @@ async function accountLogin(account, verify=false) {
     }
     const result=await bridge.openLogin(account.region,account.id);
     if (!result.ok) {notice.value=result.message || '登录未完成'; return;}
-    if (existing && account.confirmed && account.verify) {
+    const label=officialAccountLabel(result.appleAccount);
+    if (existing && differentAppleAccount(account,label)) {
+      updateAccountReport(account,null,'APPLE_ACCOUNT_CHANGED',{});
+      const opened=await bridge.openSite(account.region,account.id);
+      notice.value=opened.ok ? '请在官方页面切换回此 Apple 账号，返回后点「重新登录」核对。' :
+        opened.message || '当前登录的是其他 Apple 账号，请重新打开官方页面核对。';
+      noticeError.value=true;
+      return;
+    }
+    if (existing && account.confirmed && account.verify && (!account.appleAccount || !label)) {
       const confirmed=await new Promise(resolve=>uni.showModal({
-        title:'确认 Apple 账号',content:'请确认刚刚登录的是「' + account.label + '」对应的 Apple 账号。',confirmText:'确认',success:value=>resolve(value.confirm),fail:()=>resolve(false)
+        title:'确认 Apple 账号',content:'请确认刚刚登录的是「' + accountDisplay(account) + '」对应的 Apple 账号。',confirmText:'确认',success:value=>resolve(value.confirm),fail:()=>resolve(false)
       }));
       if (!confirmed) return;
     }
-    const connected={...account,confirmed:true,verify:false};
+    const connected={...account,appleAccount:label || account.appleAccount || '',confirmed:true,verify:false};
     const next=existing ? accounts.value.map(entry=>entry.id===account.id?connected:entry) : [...accounts.value,connected];
     await saveAccounts(next);
     accounts.value=next;
@@ -838,7 +857,7 @@ function newAccount(accountRegion) {
 async function clearAccount(account, remove) {
   if (busy.value || refreshingAccounts.value || editing.value) return;
   const confirmed=await new Promise(resolve=>uni.showModal({
-    title:remove?'移除账号':'清除缓存',content:remove?'移除「' + account.label + '」在本机的会话及缓存？':'清除「' + account.label + '」在本机的缓存？',
+    title:remove?'移除账号':'清除缓存',content:remove?'移除「' + accountDisplay(account) + '」在本机的会话及缓存？':'清除「' + accountDisplay(account) + '」在本机的缓存？',
     success:value=>resolve(value.confirm),fail:()=>resolve(false)
   }));
   if (!confirmed || busy.value || refreshingAccounts.value) return;
@@ -1107,6 +1126,11 @@ async function openLiveList(list, quiet=false, summaryBinding) {
     if (!navigation.ok) {
       if (navigation.code==='LOGIN_REQUIRED') updateAccountReport(account,null,navigation.code,navigation);
       if (!quiet) accept({...navigation,message:navigation.message || '请先刷新此账号的清单。'});
+      return;
+    }
+    if (differentAppleAccount(account,navigation.appleAccount)) {
+      updateAccountReport(account,null,'APPLE_ACCOUNT_CHANGED',{});
+      if (!quiet) accept({ok:false,code:'APPLE_ACCOUNT_CHANGED',message:'登录账号已变更，请重新登录此账号。'});
       return;
     }
     const boundListId=summaryBinding?.pageId===navigation.snapshot.pageId ? summaryBinding.listId : null;
@@ -1877,7 +1901,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .account-group { margin-bottom:12px; }
 .account-group-header { display:flex; align-items:center; gap:4px; }
 .account-group-toggle { display:flex; align-items:center; gap:12px; flex:1; min-width:0; text-align:left; padding:6px 8px; min-height:36px; }
-.account-group-toggle .list-name { font-weight:650; }
+.account-group-toggle .list-name { min-width:0; font-weight:650; white-space:normal; overflow-wrap:anywhere; }
 .account-group-toggle .list-chevron { width:7px; height:7px; border:solid currentColor; border-width:2px 2px 0 0; transform:rotate(45deg); opacity:.5; flex:none; }
 .account-group-toggle .account-chevron-open { transform:rotate(135deg); }
 .account-more { flex-shrink:0; min-width:32px; }

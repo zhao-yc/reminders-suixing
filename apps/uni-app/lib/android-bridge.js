@@ -237,7 +237,7 @@ export function createAndroidBridge({ runtime, profileRuntime, adapterSource, ti
       view.show('slide-in-right', 180);
       while (active() && Date.now() < deadline) {
         if (onRegionSite(view, region)) {
-          const result = await dispatch(view, { type: 'readLists', background: true }, false, true,
+          const result = await dispatch(view, { type: 'readLists', background: true, includeAccount: true }, false, true,
             Math.min(timeoutMs, 3000, Math.max(1, deadline - Date.now())));
           if (!active()) return cancelled();
           const snapshot = result.snapshot;
@@ -312,7 +312,7 @@ export function createAndroidBridge({ runtime, profileRuntime, adapterSource, ti
         return failure('PAGE_NOT_READY', '官方页面尚未就绪。');
       }
       const blocked = unavailable(region, true);
-      return blocked || dispatch(webview, {type:'readLists', background:true, sessionProbe:true}, false, false, 3000);
+      return blocked || dispatch(webview, {type:'readLists', background:true, sessionProbe:true, includeAccount:true}, false, false, 3000);
     },
     async forgetAccount(region, accountId) {
       if (unavailable(region,true)) return failure('BUSY','请等待当前操作结束。');

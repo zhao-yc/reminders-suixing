@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.26') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.27') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -202,6 +202,45 @@
     });
   }
 
+  /** 账号标识来自官方头像菜单的可见标题，只关闭本次探测主动打开的菜单。 */
+  async function readAccountIdentifier() {
+    var pages = documents();
+    try {
+      var top = root.top.document;
+      if (!pages.includes(top)) pages.unshift(top);
+    } catch (_) { /* 跨域窗口由宿主桥接独立读取。 */ }
+    var find = function (selector) {
+      return pages.flatMap(function (doc) { return Array.from(doc.querySelectorAll(selector)).filter(visibleControl); });
+    };
+    var menus = function () { return find('.account-menu'); };
+    var identifier = function (menu) {
+      var labels = menu.querySelectorAll('.header .email');
+      if (labels.length !== 1) return '';
+      // 官网页面为读屏提供整个标题，单独的邮箱文字使用 aria-hidden，仍然可见。
+      var value = text(labels[0]);
+      return value.length <= 254 && (/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(value) || /^\+?\d[\d ()-]{5,24}\d$/.test(value)) ? value : '';
+    };
+    var existing = menus();
+    if (existing.length) return existing.length === 1 ? identifier(existing[0]) : '';
+    if (pages.some(function (doc) { return deferredWhileEditing(doc); }) || find('ui-menu').length) return '';
+    var triggers = find('button[aria-haspopup="menu"], [role="button"][aria-haspopup="menu"]').filter(function (node) {
+      return !node.disabled && node.getAttribute('aria-disabled') !== 'true' && node.querySelector('.profile-photo');
+    });
+    if (triggers.length !== 1) return '';
+    activate(triggers[0]);
+    var menu = await until(function () { var open=menus(); return open.length===1 && open[0]; }, 700);
+    if (!menu) return '';
+    var value = identifier(menu);
+    var view = menu.ownerDocument.defaultView;
+    var sheet = menu.closest('.account-menu-compact');
+    var close = sheet && Array.from(sheet.querySelectorAll('button[aria-label], [role="button"][aria-label]')).filter(function (button) {
+      return visibleControl(button) && /^(close|关闭|關閉)( menu|菜单|選單)?$/i.test(button.getAttribute('aria-label'));
+    });
+    if (close?.length === 1) activate(close[0]);
+    else menu.dispatchEvent(new view.KeyboardEvent('keydown', {key:'Escape',code:'Escape',bubbles:true,cancelable:true}));
+    return await until(function () { return !menus().length; }, 700) ? value : '';
+  }
+
   async function readLists(command) {
     var doc=application();
     if(!doc || isLoading(doc)) {
@@ -219,9 +258,9 @@
     }
     if (command.androidCompact && command.background && compactPane(doc) && selectedListNode(doc)) {
       // 手机官网选中清单时卸载导航。汇总先核对当前事项页绑定，保留选区供恢复使用。
-      return result(true,'SELECT_A_LIST','请选择清单后继续。',{
-        snapshot:navigationSnapshot(doc,compactLists),needsListSelection:true,selectedListId:handle(compactSelection.node)
-      });
+      var compact = {snapshot:navigationSnapshot(doc,compactLists),needsListSelection:true,selectedListId:handle(compactSelection.node)};
+      if (command.includeAccount === true) compact.appleAccount = await readAccountIdentifier();
+      return result(true,'SELECT_A_LIST','请选择清单后继续。',compact);
     }
     if (command.androidCompact && !listNodes(doc).length && compactPane(doc)) {
       var navigation = await revealCompactLists(doc);
@@ -239,6 +278,7 @@
       // 空字符串表示确认无选区，null 表示选区不唯一，后者不能作为后台切换起点。
       navigation.selectedListId=selected.length===1?selected[0].id:selected.length===0?'':null;
     }
+    if (command.includeAccount === true) navigation.appleAccount = await readAccountIdentifier();
     return result(true,'SELECT_A_LIST','请选择清单后继续。',navigation);
   }
 
@@ -1559,7 +1599,8 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.26',
+    version: '0.3.27',
+    readAccountIdentifier: readAccountIdentifier,
     dispose:function(){clearSettledCreation();root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,
     /** 对外仅提供固定命令，不接受任意脚本、接口地址或登录信息。 */

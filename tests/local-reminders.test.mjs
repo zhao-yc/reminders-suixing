@@ -21,11 +21,12 @@ test('离线冷启动能从磁盘恢复两个账号，同名清单和事项的�
   t.after(()=>fs.rm(directory,{recursive:true,force:true}));
   const files = filesModule.createLocalFiles(directory);
   const store = createLocalStore(files);
-  await store.saveAccounts([first,second]);
+  await store.saveAccounts([{...first,appleAccount:'first@example.invalid'},second]);
   await store.saveReport(first,toLocalReport(first,summary('随行验证 · 账号一')));
   await store.saveReport(second,toLocalReport(second,summary('随行验证 · 账号二')));
   const restarted = createLocalStore(filesModule.createLocalFiles(directory));
   const accounts = await restarted.accounts();
+  assert.deepEqual(accounts.map(account=>account.appleAccount),['first@example.invalid','']);
   const snapshots = await Promise.all(accounts.map(account=>restarted.report(account)));
   const projection = projectAcrossLists(snapshots.flatMap(value=>value.lists),{view:'pending'});
   assert.equal(projection.counts.pending,2);
@@ -33,6 +34,7 @@ test('离线冷启动能从磁盘恢复两个账号，同名清单和事项的�
   assert.equal(new Set(projection.rows.map(row=>row.key)).size,2);
   assert.equal(matchingList(snapshots.map(report=>report.lists[0].list),snapshots[0].lists[0].list),null);
   assert.doesNotMatch(await files.read('snapshot-legacy-cn'),/secret|page-row|page-list/);
+  assert.doesNotMatch(await files.read('snapshot-legacy-cn'),/example\.invalid/);
   await restarted.removeReport(first);
   assert.equal(await restarted.report(first),null);
   assert.ok(await restarted.report(second));
@@ -95,4 +97,14 @@ test('刚完成登录时复用同一账号的官方页面，手动刷新先打�
   calls.length=0;
   assert.ok((await refreshOfficial(bridge,first)).ok);
   assert.deepEqual(calls,[['open','cn',first.id],['read','cn',first.id],['summary','synthetic-page','','cn',first.id]]);
+});
+
+test('已知 Apple 账号与官方菜单不符时保留缓存，并跳过读取其他账号的事项', async () => {
+  let reads=0;
+  const bridge={readSummary:async()=>{reads++;return {ok:true,summary:summary('随行验证 · 合成账号')};}};
+  const navigation={ok:true,appleAccount:'other@example.invalid',snapshot:{pageId:'synthetic-page',lists:[{}]}};
+  assert.deepEqual(await refreshOfficial(bridge,{...first,appleAccount:'first@example.invalid'},navigation),{ok:false,code:'APPLE_ACCOUNT_CHANGED'});
+  assert.equal(reads,0);
+  assert.equal((await refreshOfficial(bridge,{...first,appleAccount:'OTHER@example.invalid'},navigation)).appleAccount,'other@example.invalid');
+  assert.equal(reads,1);
 });
