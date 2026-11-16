@@ -106,7 +106,7 @@
         <view class="notification-actions"><button class="enable-system-notifications" role="button" :disabled="notificationBusy || !notificationState.supported" @click="setNotifications(!notificationState.enabled)">{{ notificationState.enabled ? '关闭通知与后台运行' : '开启通知并在托盘运行' }}</button><button v-if="notificationState.enabled && notificationTime!==notificationState.allDayTime" class="save-notification-time" role="button" :disabled="notificationBusy" @click="setNotifications(true)">保存全天时间</button><button class="test-system-notification" role="button" :disabled="notificationBusy || !notificationState.supported" @click="testSystemNotification">发送测试通知</button></view>
         <text class="notification-state" role="status">{{ notificationMessage || notificationStatusText }}</text><text v-if="notificationState.unknownDates">{{ notificationState.unknownDates }} 项日期不可确认，暂不提醒；请在官方页面核对。</text>
       </view>
-      <view v-if="!isDemo && (networkOffline || networkNeedsRead)" class="notice network-notice" :class="{ error: networkOffline }" :data-state="networkOffline ? networkReason : 'read-required'" role="status"><text>{{ networkOffline ? networkReason === 'offline' ? '网络已断开，当前内容仅供查看；联网后请刷新核对。' : '暂时无法连接 iCloud，当前内容仅供查看；连接恢复后请刷新核对。' : '检测到网络可用，请刷新核对后继续编辑。' }}</text></view>
+      <view v-if="!isDemo && (networkOffline || networkNeedsRead && !selectedAccount?.verify)" class="notice network-notice" :class="{ error: networkOffline }" :data-state="networkOffline ? networkReason : 'read-required'" role="status"><text>{{ networkOffline ? networkReason === 'offline' ? '网络已断开，当前内容仅供查看；联网后请刷新核对。' : '暂时无法连接 iCloud，当前内容仅供查看；连接恢复后请刷新核对。' : '检测到网络可用，请刷新核对后继续编辑。' }}</text></view>
       <view v-if="notice && (desktopWide || !isDemo || noticeError)" class="notice" :data-code="noticeCode" :data-reconnect-stage="noticeStage" :class="{ error: noticeError }" role="status"><text>{{ notice }}</text></view>
       <view v-if="editing?.blocked" class="edit-recovery"><text>{{ editing.offline ? '草稿保留在当前窗口；请联网后先刷新核对。' : '请先核对修改结果。' }}</text><button class="end-blocked-edit" role="button" :disabled="busy" @click="endEdit">结束本次编辑</button></view>
       <view v-if="!snapshot" class="welcome" :class="{'notification-settings-open':notificationsPanelOpen}">
@@ -125,11 +125,16 @@
           <template v-for="entry in summaryProjection.rows" :key="entry.key">
             <view v-if="entry.heading" class="date-section-heading" role="heading" aria-level="2">{{ entry.heading }}</view>
             <view class="reminder-row summary-row" :class="{ 'view-context': entry.context, 'is-subtask': entry.item.level > 1, completed: entry.item.completed }">
-              <view class="completion-button" :class="{ checked: entry.item.completed }" aria-hidden="true">{{ entry.item.completed ? '✓' : '' }}</view>
+              <button class="completion-button summary-completion-button" :class="{ checked: entry.item.completed }"
+                :disabled="busy || refreshingAccounts || !!editing || entry.context || entry.item.disabled"
+                :aria-label="(entry.item.completed ? '取消完成：' : '完成：') + entry.item.title" @click="actOnSummaryItem(entry, 'complete')"><text v-if="entry.item.completed">✓</text></button>
               <view class="reminder-copy">
-                <text class="reminder-title">{{ entry.item.title }}</text>
+                <text class="reminder-title" @dblclick="canEdit && actOnSummaryItem(entry, 'title')">{{ entry.item.title }}</text>
                 <view class="summary-row-meta"><button v-if="summarySourcesCurrent" class="summary-source-button reminder-source" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" :aria-label="'打开清单：' + sourceLabel(entry.list)" @click="selectList(entry.list)">{{ sourceLabel(entry.list) }}</button><text v-else class="reminder-metadata reminder-source">{{ entry.list.title }}</text><text v-if="entry.item.metadata" class="reminder-metadata" :class="{ 'is-overdue': entry.overdue }">{{ entry.item.metadata }}</text></view>
               </view>
+              <view v-if="canEdit && !entry.context" class="row-actions summary-row-actions"><button class="summary-edit-button"
+                :disabled="busy || refreshingAccounts || !!editing || entry.item.disabled" aria-label="编辑标题" title="编辑标题"
+                @click="actOnSummaryItem(entry, 'title')">✎</button></view>
             </view>
           </template>
           <view v-if="!summaryProjection.rows.length" class="empty-list"><text>{{ busy ? '正在逐份读取清单…' : !summaryData ? '点击刷新重新读取清单。' : search ? '没有找到相关事项。' : '已加载内容中没有符合条件的事项。' }}</text></view>
@@ -242,7 +247,7 @@
 </template>
 
 <script setup>
-import { computed, ref, nextTick, onMounted, onUnmounted, watch } from 'vue';
+import { computed, ref, toRaw, nextTick, onMounted, onUnmounted, watch } from 'vue';
 import { createBridge } from '../../lib/bridge.js';
 import { demoSnapshot } from '../../lib/demo.js';
 import { priorityInfo } from '../../lib/priority.js';
@@ -268,6 +273,8 @@ const localEnabled = ref(false);
 const multipleAccounts = ref(false);
 const accounts = ref([]);
 const accountReports = ref({});
+// 汇总缓存只保存展示字段，操作目标只绑定到当次官方页面的记录。
+const summaryItemBindings = new WeakMap();
 const accountStatus = ref({});
 const accountCollapsed = ref({});
 const selectedAccount = ref(null);
@@ -513,6 +520,7 @@ onBackPress(() => {
 // #endif
 // 同一页面的单清单读回只更新该清单的缓存，其余清单继续使用上次汇总数据。
 watch(snapshot,value=>{
+  if (summaryView.value) return;
   if (localEnabled.value && !isDemo.value) {
     void rememberCurrentList(value);
     return;
@@ -604,6 +612,20 @@ function saveAccounts(value) {
 }
 
 let pendingCacheWrite=Promise.resolve();
+function saveAccountReport(account, report) {
+  accountReports.value[account.id]=report;
+  pendingCacheWrite=pendingCacheWrite.then(()=>localStore.saveReport(account,report))
+    .catch(()=>{accountStatus.value[account.id]='CACHE_WRITE_FAILED';});
+}
+
+function bindSummaryItems(projected, items, pageId) {
+  if (!pageId || projected.length !== items.length) return;
+  projected.forEach((item,index)=>{
+    const {id,listId,fingerprint}=items[index];
+    if (fingerprint) summaryItemBindings.set(toRaw(item),{pageId,id,listId,fingerprint});
+  });
+}
+
 function rememberCurrentList(value) {
   const account=selectedAccount.value;
   if (!account || account.verify || !live.value || refreshingAccounts.value || !value?.pageId || !value.activeListId || value.partial) return;
@@ -616,11 +638,17 @@ function rememberCurrentList(value) {
   const fresh=value.items.filter(item=>!item.completed);
   const done=before.items.filter(item=>item.completed);
   if (before.items.some(item=>item.level>1) || fresh.some(item=>item.level>1)) return;
-  const lists=report.lists.map(entry=>entry===before ? {list:selected,items:[...fresh,...done],partial:false} : entry);
+  const index=report.lists.indexOf(before);
+  const items=[...fresh,...done];
+  const lists=report.lists.map((entry,i)=>i===index ? {list:selected,items,partial:false} : entry);
   const next=toLocalReport(account,{...report,lists});
-  if (JSON.stringify(next)===JSON.stringify(report)) return;
-  accountReports.value[account.id]=next;
-  pendingCacheWrite=pendingCacheWrite.then(()=>localStore.saveReport(account,next)).catch(()=>{accountStatus.value[account.id]='CACHE_WRITE_FAILED';});
+  if (JSON.stringify(next.lists[index])===JSON.stringify(before)) {
+    bindSummaryItems(before.items,items,value.pageId);
+    return;
+  }
+  bindSummaryItems(next.lists[index].items,items,value.pageId);
+  next.lists=report.lists.map((entry,i)=>i===index ? next.lists[i] : entry);
+  saveAccountReport(account,next);
 }
 
 function accountMessage(account) {
@@ -659,6 +687,10 @@ function updateAccountReport(account, report, code, result) {
     saveAccounts(accounts.value).catch(()=>{accountStatus.value[account.id]='CACHE_WRITE_FAILED';});
   }
   if (report) {
+    const official=result.summary?.lists;
+    if (official && official.length===report.lists.length) {
+      report.lists.forEach((entry,i)=>bindSummaryItems(entry.items,official[i].items,result.navigation?.pageId));
+    }
     const previous=cachedList.value?.accountId===account.id ? cachedList.value : null;
     accountReports.value[account.id]=report;
     if (previous) {
@@ -744,6 +776,7 @@ async function initializeAccounts() {
 async function accountLogin(account, verify=false) {
   if (busy.value || refreshingAccounts.value || editing.value) return;
   busy.value=true;
+  const previousSummary=summaryView.value;
   if (verify && selectedAccount.value?.id===account.id) live.value=false;
   accountOptions.value='';
   const existing=accounts.value.some(entry=>entry.id===account.id);
@@ -770,7 +803,7 @@ async function accountLogin(account, verify=false) {
     cachedList.value=null;
     listSelectionRequired.value=true;
     accept({...result,code:'READY'},true);
-    if (desktopWide.value && !result.snapshot.emptyAccount) summaryView.value='today';
+    if (previousSummary || desktopWide.value && !result.snapshot.emptyAccount) summaryView.value=previousSummary || 'today';
     else summaryView.value=null;
     initialNavigation={id:account.id,result};
     success=true;
@@ -1050,7 +1083,7 @@ async function selectList(list) {
 }
 
 /** 清单同名或外观无法唯一对应时留在只读界面，等待从官方导航中重新选择。 */
-async function openLiveList(list, quiet=false) {
+async function openLiveList(list, quiet=false, summaryBinding) {
   if (busy.value || refreshingAccounts.value || editing.value) return;
   const account=accounts.value.find(entry=>entry.id===list.accountId);
   if (!account) return;
@@ -1070,7 +1103,10 @@ async function openLiveList(list, quiet=false) {
       if (!quiet) accept({...navigation,message:navigation.message || '请先刷新此账号的清单。'});
       return;
     }
-    const target=current ? navigation.snapshot.lists.find(entry=>entry.id===list.id) : matchingList(navigation.snapshot.lists,list);
+    const boundListId=summaryBinding?.pageId===navigation.snapshot.pageId ? summaryBinding.listId : null;
+    const target=current || boundListId
+      ? navigation.snapshot.lists.find(entry=>entry.id===(boundListId || list.id))
+      : matchingList(navigation.snapshot.lists,list);
     if (!target) {
       if (!quiet) {
         cachedList.value=null;
@@ -1084,11 +1120,100 @@ async function openLiveList(list, quiet=false) {
       cachedList.value=null;
       listSelectionRequired.value=false;
       accept(result,true);
-      showMobileDetail();
+      if (!summaryView.value) showMobileDetail();
+      return result.snapshot;
     } else if (!quiet) accept(result);
   } catch {
     if (!quiet) {notice.value='暂时无法打开此清单，请刷新后重试。';noticeError.value=true;}
   } finally {busy.value=false;}
+}
+
+function summaryActionMessage(code,message) {
+  noticeCode.value=code;
+  notice.value=message;
+  noticeError.value=false;
+}
+
+function showSummarySource(entry) {
+  summaryView.value=null;
+  tab.value=entry.item.completed?'completed':'pending';
+  flagOnly.value=false;
+  search.value='';
+  showMobileDetail();
+}
+
+/** 只有当次汇总取得的页面和指纹都匹配时，才用本次点击提交完成状态。 */
+async function actOnSummaryItem(entry, action) {
+  if (busy.value || refreshingAccounts.value || editing.value || entry.context || entry.item.disabled) return;
+  const account=accounts.value.find(value=>value.id===entry.list.accountId);
+  if (networkOffline.value) {
+    summaryActionMessage('OFFLINE_SUMMARY','当前无法连接 iCloud。联网后可在此完成或编辑。');
+    return;
+  }
+  if (account?.verify) {
+    await accountLogin(account);
+    return;
+  }
+  const binding=account ? summaryItemBindings.get(toRaw(entry.item)) :
+    {...entry.item,pageId:summaryCache.value?.sourcePageId};
+  let source;
+  if (account) {
+    source=await openLiveList(entry.list,false,binding);
+    if (!source && account.verify) await accountLogin(account);
+  } else if (summarySourcesCurrent.value) {
+    const result=await run({type:'selectList',pageId:binding.pageId,listId:entry.list.id});
+    if (result?.ok && result.snapshot?.activeListId===entry.list.id) {
+      listSelectionRequired.value=false;
+      live.value=!networkOffline.value && !networkNeedsRead.value;
+      source=result.snapshot;
+    }
+  }
+  if (!source || !live.value) {
+    if (!source && !account && !summarySourcesCurrent.value) summaryActionMessage('SUMMARY_READ_REQUIRED','请刷新汇总后再操作。');
+    return;
+  }
+  const matches=source.items.filter(item=>item.id===binding?.id);
+  const item=matches.length===1 ? matches[0] : null;
+  if (!binding || !item || item.disabled || source.pageId!==binding.pageId || source.activeListId!==binding.listId || item.fingerprint!==binding.fingerprint) {
+    showSummarySource(entry);
+    if (entry.item.completed) await selectTab('completed');
+    summaryActionMessage('SUMMARY_TARGET_CHANGED','请在来源清单中核对事项，再进行操作。');
+    return;
+  }
+  if (action==='title') {
+    showSummarySource(entry);
+    startEdit(item,'title');
+    return;
+  }
+  const result=await setCompletion(item);
+  if (!result?.ok || result.code!=='WEB_STATE_OBSERVED') return;
+  const updated=result.snapshot;
+  updateSummaryCompletion(entry,account,item,updated?.pageId===source.pageId && updated.activeListId===source.activeListId ? updated : null);
+}
+
+function updateSummaryCompletion(entry,account,item,updated) {
+  if (!account) {
+    const cached=summaryCache.value;
+    if (!cached) return;
+    const lists=cached.report.lists.map(value=>value.list.id===entry.list.id ?
+      {...value,items:value.items.map(row=>row.id!==item.id?row:updated?.items.find(fresh=>fresh.id===item.id) ||
+        {...row,completed:!item.completed,fingerprint:''})} : value);
+    summaryCache.value={...cached,report:{...cached.report,lists}};
+    return;
+  }
+  const report=accountReports.value[account.id];
+  if (!report) return;
+  const confirmed=updated?.items.find(row=>row.id===item.id);
+  // 完成项可能从网页选区消失。只有网页已回读完成状态，才更新这条缓存。
+  const replacement={...entry.item,completed:!item.completed};
+  if (confirmed) {
+    replacement.metadata=confirmed.metadata;
+    replacement.schedule=confirmed.schedule;
+    bindSummaryItems([replacement],[confirmed],updated.pageId);
+  }
+  const lists=report.lists.map(value=>value.list.id===entry.list.id ?
+    {...value,items:value.items.map(row=>row.id===entry.item.id?replacement:row)} : value);
+  saveAccountReport(account,{...report,lists});
 }
 
 async function renameListFromSidebar(list) {
@@ -1153,7 +1278,11 @@ async function toggle(item) {
   if (editing.value) return;
   if (isDemo.value) { item.completed = !item.completed; return; }
   if (!live.value || busy.value) return;
-  await run({ type: 'setCompleted', pageId: snapshot.value.pageId, listId: item.listId,
+  return setCompletion(item);
+}
+
+function setCompletion(item) {
+  return run({ type: 'setCompleted', pageId: snapshot.value.pageId, listId: item.listId,
     id: item.id, fingerprint: item.fingerprint, expectedCompleted: item.completed, completed: !item.completed });
 }
 
@@ -1913,6 +2042,11 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .summary-source-button { margin:0; color:#2872ba; font-size:11px; text-align:left; }
 .summary-row-meta .reminder-source { color:#8a8a8d; }
 .summary-source-button:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
+.summary-completion-button:not([disabled]),.summary-edit-button:not([disabled]) { cursor:pointer; }
+@media (max-width:760px) {
+  .summary-row { grid-template-columns:22px minmax(0,1fr) auto; }
+  .summary-row > .summary-row-actions { grid-column:3; grid-row:1; align-self:start; }
+}
 
 /* 窄屏按层导航，快捷卡片、清单行和事项区仍使用宽屏的组件。 */
 .compact-layout {

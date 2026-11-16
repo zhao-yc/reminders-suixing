@@ -17,20 +17,43 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
     {id:'syntheticsecondaccount',region:'cn',label:'iCloud 2',confirmed:true}
   ];
   const list={id:'synthetic-live-list',title:'随行验证 · 同名清单',color:'#1687ff'};
+  const completed=new Set(), expired=new Set(), changed=new Set(), titles=new Map();
+  const record=account=>({
+    id:'synthetic-row',listId:list.id,title:titles.get(account.id) || '随行验证 · '+account.label,
+    completed:completed.has(account.id),flagged:false,
+    fingerprint:JSON.stringify([account.id,completed.has(account.id),changed.has(account.id),titles.get(account.id)])
+  });
   const summary=account=>({
     capturedAt:new Date().toISOString(),totalLists:1,
-    lists:[{list,partial:false,items:[{id:'synthetic-row',title:'随行验证 · '+account.label,completed:false,flagged:false}]}]
+    lists:[{list,partial:false,items:[record(account)]}]
   });
   await store.saveAccounts(accounts);
   await Promise.all(accounts.map(account=>store.saveReport(account,toLocalReport(account,summary(account)))));
-  const opened=[];
+  const opened=[], writes=[], logins=[];
   let online=false;
-  const byAccount=new Map(accounts.map(account=>[account.id,{
-    connectionState:()=>({ok:true,state:online?'available':'offline'}),
-    prepareSummary:()=>{opened.push(account.id);return online?{ok:true}:{ok:false,code:'OFFLINE'};},
-    readNavigation:()=>({ok:true,snapshot:{pageId:'synthetic-page-'+account.id,lists:[list],items:[]}}),
-    execute:command=>command.type==='readSummary'?{ok:true,summary:summary(account)}:{ok:false,code:'OFFLINE'}
-  }]));
+  const byAccount=new Map(accounts.map(account=>{
+    const pageId='synthetic-page-'+account.id;
+    const snapshot=()=>({pageId,capturedAt:new Date().toISOString(),lists:[list],
+      activeListId:list.id,activeListTitle:list.title,items:[record(account)]});
+    return [account.id,{
+      connectionState:()=>({ok:true,state:online?'available':'offline'}),
+      prepareSummary:()=>{opened.push(account.id);return online?{ok:true}:{ok:false,code:'OFFLINE'};},
+      readNavigation:()=>expired.has(account.id) ? {ok:false,code:'LOGIN_REQUIRED'} :
+        {ok:true,snapshot:{pageId,lists:[list],items:[]}},
+      openLogin:()=>{logins.push(account.id);return {ok:false,code:'LOGIN_CANCELLED',message:'已取消登录。'};},
+      execute:command=>{
+        if (!online) return {ok:false,code:'OFFLINE'};
+        if (command.type==='readSummary') return {ok:true,summary:summary(account)};
+        if (command.type==='selectList') return {ok:command.pageId===pageId && command.listId===list.id,code:'READY',snapshot:snapshot()};
+        if (!['setCompleted','setText'].includes(command.type)) return {ok:false,code:'INVALID_COMMAND'};
+        writes.push({accountId:account.id,...command});
+        if (command.id!==record(account).id || command.fingerprint!==record(account).fingerprint) return {ok:false,code:'STALE_VIEW'};
+        if (command.type==='setText') titles.set(account.id,command.value);
+        else completed.add(account.id);
+        return {ok:true,code:'WEB_STATE_OBSERVED',snapshot:snapshot()};
+      }
+    }];
+  }));
   const ui=new BrowserWindow({show:false,width:1120,height:820,webPreferences:{
     preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false
   }});
@@ -42,6 +65,11 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
     await waitForRenderer('document.querySelectorAll(".account-group").length===2 && !document.querySelector(".refresh-button[disabled]")',ui);
     assert.deepEqual(opened,accounts.map(account=>account.id));
     assert.equal(await run('document.querySelector("[data-status=pending] .desktop-card-count").textContent'),'2');
+    await run('document.querySelector("[data-status=pending]").click()');
+    await waitForRenderer('document.querySelector(".summary-completion-button") && document.querySelector(".network-notice")?.dataset.state==="offline"',ui);
+    await run('document.querySelector(".summary-completion-button").click()');
+    await waitForRenderer('document.querySelector(".notice[data-code=OFFLINE_SUMMARY]")',ui);
+    assert.equal(writes.length,0);
     await run('document.querySelector(".account-group-toggle").click()');
     assert.equal(await run('document.querySelector("[data-status=pending] .desktop-card-count").textContent'),'2');
     await run('document.querySelectorAll(".account-group .list-button")[0].click()');
@@ -57,6 +85,41 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
     await run('document.querySelector(".more-tool").click();document.querySelector(".refresh-button").click()');
     await waitForRenderer('!document.querySelector(".refresh-button[disabled]")',ui);
     assert.deepEqual(opened,[...accounts,...accounts].map(account=>account.id));
+    await run('document.querySelector("[data-status=pending]").click()');
+    await waitForRenderer('document.querySelectorAll(".summary-completion-button").length===2 && document.querySelector(".network-notice")?.dataset.state!=="offline"',ui);
+    await run('document.querySelectorAll(".summary-completion-button")[1].click()');
+    await waitForRenderer('document.querySelectorAll(".summary-completion-button").length===1',ui);
+    assert.deepEqual(writes.map(command=>[command.accountId,command.pageId,command.id,command.completed]),
+      [[accounts[1].id,'synthetic-page-'+accounts[1].id,'synthetic-row',true]]);
+    await run('document.querySelector(".summary-edit-button").click()');
+    await waitForRenderer('document.querySelector(".inline-editor input")',ui);
+    assert.equal(await run('document.querySelector(".inline-editor input").value'),'随行验证 · iCloud');
+    await run(`(()=>{
+      const input=document.querySelector(".inline-editor input");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(input,"随行验证 · 编辑后的标题");
+      input.dispatchEvent(new Event("input",{bubbles:true}));
+    })()`);
+    await run('document.querySelector(".inline-editor .save-edit").click()');
+    await waitForRenderer('document.querySelector(".list-content .reminder-title")?.textContent==="随行验证 · 编辑后的标题"',ui);
+    assert.deepEqual(writes.slice(1).map(command=>[command.accountId,command.type,command.id]),
+      [[accounts[0].id,'setText','synthetic-row']]);
+    await run('document.querySelector(".mobile-menu").click()');
+    await waitForRenderer('document.querySelector(".compact-overview")',ui);
+    changed.add(accounts[0].id);
+    await run('document.querySelector("[data-status=pending]").click()');
+    await waitForRenderer('document.querySelectorAll(".summary-completion-button").length===1',ui);
+    await run('document.querySelector(".summary-completion-button").click()');
+    await waitForRenderer('document.querySelector(".notice[data-code=SUMMARY_TARGET_CHANGED]") && document.querySelector(".list-content[data-live=true]")',ui);
+    assert.equal(writes.length,2);
+    await run('document.querySelector(".mobile-menu").click()');
+    await waitForRenderer('document.querySelector(".compact-overview")',ui);
+    expired.add(accounts[0].id);
+    await run('document.querySelector("[data-status=pending]").click()');
+    await waitForRenderer('document.querySelectorAll(".summary-completion-button").length===1',ui);
+    await run('document.querySelector(".summary-completion-button").click()');
+    await waitForRenderer('document.querySelector(".notice:not(.network-notice)")?.textContent.includes("已取消登录")',ui);
+    assert.deepEqual(logins,[accounts[0].id]);
+    assert.equal(writes.length,2);
   } finally {
     stop();
     ui.destroy();
