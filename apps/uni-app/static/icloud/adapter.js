@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.27') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.28') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -545,6 +545,10 @@
     }
     if (!doc || !lastSnapshot || lastSnapshot.activeListId !== command.listId || !currentList()) return result(false, 'STALE_VIEW', '当前清单已变化，请先刷新。');
     if (isLoading(doc)) return result(false, 'LIST_LOADING', 'iCloud 正在加载列表，请稍后重新读取。');
+    if (command.background === true) {
+      var deferred = deferredWhileEditing(doc);
+      if (deferred) return deferred;
+    }
     function actions() {
       return Array.from(doc.querySelectorAll('[role="menuitem"]')).filter(function (node) {
         return !node.closest('[hidden], [aria-hidden="true"]') && doc.defaultView.getComputedStyle(node).display !== 'none';
@@ -566,9 +570,17 @@
     }
     var candidates = await until(function () { var found = completionActions(); return found.length ? found : null; }, 1400);
     if (!currentList()) { lastSnapshot = null; return result(false, 'STALE_VIEW', '打开菜单时清单发生变化，请先刷新。'); }
-    if (!candidates || candidates.length !== 1 || candidates[0].node.disabled || candidates[0].node.getAttribute('aria-disabled') === 'true') return result(false, 'VIEW_UNAVAILABLE', '请在官方页面显示已完成事项，返回后刷新。');
+    if (!candidates || candidates.length !== 1 || candidates[0].node.disabled || candidates[0].node.getAttribute('aria-disabled') === 'true') {
+      if (openedHere && actions().length) activate(menuButton);
+      return result(false, 'VIEW_UNAVAILABLE', '请在官方页面显示已完成事项，返回后刷新。');
+    }
     // 已显示时不点击“隐藏”，确保重复请求不会反转界面设置。
-    if (/^(?:hide\b|隐藏)/i.test(candidates[0].label)) { if (openedHere) activate(menuButton); return read(); }
+    if (/^(?:hide\b|隐藏)/i.test(candidates[0].label)) {
+      if (openedHere) activate(menuButton);
+      var visible = read();
+      if (visible.snapshot) visible.snapshot.completedVisible = true;
+      return visible;
+    }
     activate(candidates[0].node);
     var stable = 0;
     var previous = null;
@@ -583,6 +595,16 @@
     if (!currentList()) { lastSnapshot = null; return result(false, 'STALE_VIEW', '展开期间清单发生变化，请先刷新。'); }
     var refreshed = read();
     if (!refreshed.ok) return refreshed;
+    var hasCompleted = refreshed.snapshot.items.some(function (item) { return item.completed; });
+    if (!hasCompleted && menuButton && visibleControl(menuButton) && !actions().length) {
+      // 零条完成项也要核对菜单已切到“隐藏”，避免把尚未展开误报为零。
+      activate(menuButton);
+      var checked = await until(function () { var found = completionActions(); return found.length ? found : null; }, 800);
+      if (!currentList()) { lastSnapshot = null; return result(false, 'STALE_VIEW', '核对完成事项时清单发生变化，请先刷新。'); }
+      hasCompleted = checked?.length === 1 && /^(?:hide\b|隐藏)/i.test(checked[0].label);
+      if (actions().length) activate(menuButton);
+    }
+    if (hasCompleted) refreshed.snapshot.completedVisible = true;
     return result(true, 'VIEW_REQUESTED', '已请求显示已完成事项；仍只读取网页当前已加载内容。', { snapshot: refreshed.snapshot });
   }
 
@@ -605,18 +627,26 @@
     }
     if (current.disabled) return result(false, 'READ_ONLY', '网页暂不允许修改这条事项。');
     if (current.completed === command.completed) return result(true, 'UNCHANGED', '事项已经处于目标状态，未再次点击。', { snapshot: lastSnapshot });
+    var completedVisible = lastSnapshot.completedVisible === true;
     var button = row.querySelector('button.mark-completed[data-completed]');
     activate(button);
     var observed = await until(function () {
+      var selected = selectedListNode(doc);
+      if (!selected || handle(selected) !== command.listId || pageId !== command.pageId) return 'stale';
       var currentRow = doc.getElementById(command.id);
       var currentButton = currentRow && currentRow.querySelector('button.mark-completed[data-completed]');
-      return currentButton && currentButton.getAttribute('data-completed') === String(command.completed);
+      if (currentButton && currentButton.getAttribute('data-completed') === String(command.completed)) return 'observed';
+      if (!currentRow && command.completed && !isLoading(doc)) return 'hidden';
     }, 6500);
-    if (!observed) {
+    // 完成后网页可能直接卸载该行。通过展开完成项核对同一 ID，消失本身不足以确认完成。
+    var expanded = observed === 'hidden' ? await showCompleted({...command,background:true}) : null;
+    if (expanded?.ok && expanded.snapshot?.items.some(function (item) { return item.id===command.id && item.completed; })) observed = 'observed';
+    if (observed !== 'observed') {
       lastSnapshot = null;
       return result(false, 'UNCERTAIN_WRITE', '操作已发送，但网页未确认结果。请打开官方页面核对，不要重复提交。', { dispatched: true, cloudConfirmed: false });
     }
-    var refreshed = read();
+    var refreshed = expanded || read();
+    if (completedVisible && refreshed.snapshot) refreshed.snapshot.completedVisible = true;
     return result(true, 'WEB_STATE_OBSERVED', '网页状态已更新；云端保存仍由 iCloud 处理。', {
       dispatched: true, cloudConfirmed: false, snapshot: refreshed.snapshot || null
     });
@@ -1599,7 +1629,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.27',
+    version: '0.3.28',
     readAccountIdentifier: readAccountIdentifier,
     dispose:function(){clearSettledCreation();root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,

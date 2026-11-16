@@ -439,6 +439,8 @@ watch([summaryView, mobileOverview, search],()=>{summaryEditorKey.value='';});
 const summaryProjection=computed(()=>projectAcrossLists(summaryData.value?.lists || [],{...viewDates.value,view:summaryView.value || 'pending',query:summaryView.value?search.value:''}));
 const summaryPartial=computed(()=>!!summaryData.value && (incompleteReport(summaryData.value) ||
   localEnabled.value && accounts.value.some(account=>!accountReports.value[account.id] || accountStatus.value[account.id]==='PARTIAL')));
+const summaryCompletedPartial=computed(()=>!!summaryData.value && (summaryData.value.lists.some(entry=>!entry.completedVisible) ||
+  accounts.value.some(account=>accountStatus.value[account.id]==='COMPLETED_PARTIAL')));
 const summaryNotice=computed(()=>{
   const data=summaryData.value;
   if(!data) return '';
@@ -447,7 +449,7 @@ const summaryNotice=computed(()=>{
   if(summaryPartial.value) messages.push('部分内容尚未读取');
   const unknown=summaryProjection.value.unknown[summaryView.value];
   if(unknown) messages.push(unknown+(summaryView.value==='flagged'?' 项旗标待核对':' 项日期待核对'));
-  if(summaryView.value==='completed') messages.push('网页隐藏的完成事项未计入');
+  if(summaryView.value==='completed' && summaryCompletedPartial.value) messages.push('部分完成事项待同步');
   return messages.join(' · ');
 });
 const summaryReadTime=computed(()=>summaryData.value?localTimeString(new Date(summaryData.value.capturedAt)):'');
@@ -466,7 +468,7 @@ function sidebarListCount(list) {
 }
 const desktopCardsDisabled=computed(()=>busy.value || !!editing.value || (!canReadSummary.value && !snapshot.value?.activeListId));
 function desktopCardCount(view) {
-  if (canReadSummary.value) return summaryData.value?summaryProjection.value.counts[view]+((summaryPartial.value || summaryProjection.value.unknown[view])?'+':''):'—';
+  if (canReadSummary.value) return summaryData.value?summaryProjection.value.counts[view]+((summaryPartial.value || summaryProjection.value.unknown[view] || view==='completed' && summaryCompletedPartial.value)?'+':''):'—';
   if (!snapshot.value?.activeListId) return '—';
   return viewProjection.value.counts[view]+(unknownForView(view)?'+':'');
 }
@@ -523,8 +525,9 @@ onBackPress(() => {
 });
 // #endif
 // 同一页面的单清单读回只更新该清单的缓存，其余清单继续使用上次汇总数据。
+let completionPending=false;
 watch(snapshot,value=>{
-  if (summaryView.value) return;
+  if (summaryView.value || completionPending) return;
   if (localEnabled.value && !isDemo.value) {
     void rememberCurrentList(value);
     return;
@@ -532,7 +535,8 @@ watch(snapshot,value=>{
   const report=summaryData.value;
   if (!summarySourcesCurrent.value || !value?.lists) return;
   const prior=new Map(report.lists.map(entry=>[entry.list.id,entry]));
-  const lists=value.lists.flatMap(list=>list.id===value.activeListId ? [{list,items:value.items,partial:value.partial}] : prior.has(list.id) ? [{...prior.get(list.id),list}] : []);
+  const lists=value.lists.flatMap(list=>list.id===value.activeListId && (!prior.get(list.id)?.completedVisible || value.completedVisible)
+    ? [{list,items:value.items,partial:value.partial,completedVisible:value.completedVisible}] : prior.has(list.id) ? [{...prior.get(list.id),list}] : []);
   summaryCache.value={...summaryCache.value,report:{...report,lists,totalLists:value.lists.length}};
 });
 watch(snapshot, value => {
@@ -627,11 +631,13 @@ function bindSummaryItems(projected, items, pageId) {
   if (!pageId || projected.length !== items.length) return;
   projected.forEach((item,index)=>{
     const {id,listId,fingerprint}=items[index];
+    const previous=summaryItemBindings.get(toRaw(items[index]));
     if (fingerprint) summaryItemBindings.set(toRaw(item),{pageId,id,listId,fingerprint});
+    else if (previous?.pageId===pageId) summaryItemBindings.set(toRaw(item),previous);
   });
 }
 
-function rememberCurrentList(value) {
+function rememberCurrentList(value, finishedItem) {
   const account=selectedAccount.value;
   if (!account || account.verify || !live.value || refreshingAccounts.value || !value?.pageId || !value.activeListId || value.partial) return;
   const report=accountReports.value[account.id];
@@ -639,13 +645,16 @@ function rememberCurrentList(value) {
   const match=selected && report && matchingList(report.lists.map(entry=>entry.list),selected);
   if (!match) return;
   const before=report.lists.find(entry=>entry.list.id===match.id);
-  // 当前视图可能隐藏完成事项。全局刷新负责替换整份清单，单清单读取只更新可核对的待办。
-  const fresh=value.items.filter(item=>!item.completed);
-  const done=before.items.filter(item=>item.completed);
-  if (before.items.some(item=>item.level>1) || fresh.some(item=>item.level>1)) return;
+  const completedVisible=value.completedVisible===true;
+  const fresh=completedVisible ? value.items : value.items.filter(item=>!item.completed);
+  // 只有确认已展开的快照才替换完成历史。普通读回保留已核对的完成项。
+  const done=completedVisible ? [] : before.items.filter(item=>item.completed);
+  const finished=finishedItem && value.items.find(item=>item.id===finishedItem.id);
+  if (!completedVisible && finishedItem && (!finished || finished.completed)) done.push(finished || {...finishedItem,completed:true,fingerprint:''});
+  if (!completedVisible && (before.items.some(item=>item.level>1) || fresh.some(item=>item.level>1) || finishedItem?.level>1)) return;
   const index=report.lists.indexOf(before);
   const items=[...fresh,...done];
-  const lists=report.lists.map((entry,i)=>i===index ? {list:selected,items,partial:false} : entry);
+  const lists=report.lists.map((entry,i)=>i===index ? {list:selected,items,partial:false,completedVisible:completedVisible || entry.completedVisible} : entry);
   const next=toLocalReport(account,{...report,lists});
   if (JSON.stringify(next.lists[index])===JSON.stringify(before)) {
     bindSummaryItems(before.items,items,value.pageId);
@@ -660,7 +669,7 @@ function accountMessage(account) {
   if (accountStatus.value[account.id]==='APPLE_ACCOUNT_CHANGED') return '登录账号已变更，请重新登录此账号';
   if (account.verify) return '请重新登录，缓存可继续查看';
   return {
-    PARTIAL:'部分清单尚未读取', CACHE_WRITE_FAILED:'本地缓存保存失败',
+    PARTIAL:'部分清单尚未读取', COMPLETED_PARTIAL:'部分完成事项待同步', CACHE_WRITE_FAILED:'本地缓存保存失败',
     PAGE_NOT_READY:'iCloud 尚未就绪', CONNECTION_FAILED:'暂时无法同步', CONNECTION_UNAVAILABLE:'暂时无法连接 iCloud',
     OFFLINE:'离线 · 显示上次读取内容', AUTO_READ_DEFERRED:'官方页面忙，请稍后刷新', OFFICIAL_PAGE_BUSY:'官方页面忙，请稍后刷新',
     RECONNECT_FAILED:'暂时无法连接 iCloud', RECONNECT_TIMEOUT:'iCloud 连接超时'
@@ -1334,7 +1343,29 @@ async function toggle(item) {
   if (editing.value) return;
   if (isDemo.value) { item.completed = !item.completed; return; }
   if (!live.value || busy.value) return;
-  return setCompletion(item);
+  const before=snapshot.value;
+  const entry=findSummaryEntry(item,before.pageId);
+  completionPending=true;
+  try {
+    const result=await setCompletion(item);
+    if (!result?.ok || result.code!=='WEB_STATE_OBSERVED') return;
+    const updated=result.snapshot?.pageId===before.pageId && result.snapshot.activeListId===item.listId ? result.snapshot : null;
+    if (entry) updateSummaryItem(entry,{pageId:before.pageId,listId:item.listId,id:item.id,completed:!item.completed},updated);
+    if (localEnabled.value && updated) rememberCurrentList(updated, !entry && !item.completed ? item : undefined);
+  } finally { completionPending=false; }
+}
+
+/** 来源清单和跨清单汇总都通过已核对的网页行更新同一份本地历史。 */
+function findSummaryEntry(item,pageId) {
+  const account=sessionAccountId();
+  const lists=account ? accountReports.value[account]?.lists : summaryData.value?.lists;
+  for (const {list,items} of lists || []) {
+    const cached=items.find(row=>{
+      const target=account ? summaryItemBindings.get(toRaw(row)) : {...row,pageId:summaryCache.value?.sourcePageId};
+      return target?.pageId===pageId && target.listId===item.listId && target.id===item.id && target.fingerprint===item.fingerprint;
+    });
+    if (cached) return {list,item:cached};
+  }
 }
 
 function setCompletion(item) {

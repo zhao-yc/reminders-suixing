@@ -30,7 +30,7 @@ export function differentAppleAccount(account, observed) {
 
 /** 只投影显示字段，页面句柄和写入指纹始终留在实时桥接中。 */
 export function toLocalReport(account, report) {
-  const lists = report.lists.map(({ list, items, partial }, listIndex) => {
+  const lists = report.lists.map(({ list, items, partial, completedVisible }, listIndex) => {
     const id = account.id + ':' + listIndex;
     const ids = new Map(items.map((item, index) => [item.id, id + ':' + index]));
     return {
@@ -40,6 +40,7 @@ export function toLocalReport(account, report) {
         icon: list.icon?.key ? { key: text(list.icon.key, 100), svg: text(list.icon.svg, 60000) } : null
       },
       partial: partial === true,
+      completedVisible: completedVisible === true,
       items: items.map(item => ({
         id: ids.get(item.id), listId: id, title: text(item.title, 4000), notes: text(item.notes, 2000),
         notesTruncated: item.notesTruncated === true, metadata: text(item.metadata, 2000),
@@ -145,8 +146,14 @@ export function createAccountRefresh({ collect, previous, save, update, active }
           continue;
         }
         const report = toLocalReport(account, result.summary);
-        if (incompleteReport(report) && previous(account)) {
+        const prior=previous(account);
+        if (incompleteReport(report) && prior) {
           update(account, null, 'PARTIAL', result);
+          continue;
+        }
+        // 页面层级和本地记录标识无法安全跨次匹配，未展开的视图不能覆盖已有完成历史。
+        if (report.lists.some(entry=>!entry.completedVisible) && prior?.lists.some(entry=>entry.items.some(item=>item.completed))) {
+          update(account,null,'COMPLETED_PARTIAL',result);
           continue;
         }
         let code = incompleteReport(report) ? 'PARTIAL' : 'READY';

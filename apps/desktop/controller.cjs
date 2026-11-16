@@ -289,7 +289,7 @@ function createController(options = {}) {
         const destination=fixtureURL || ENTRY[region];
         const canRead=()=>window && site===window && !window.isDestroyed() && activeRegion===region && !window.isVisible() &&
           !window.getChildWindows().some(child=>child.isVisible()) && !window.webContents.isLoading() && atRemindersEntry(window.webContents,destination);
-        return await collectSummary(command,{canRead,read:(request,deadline)=>attempt(false,deadline,request)});
+        return await collectSummary(command,{canRead,includeCompleted:true,read:(request,deadline)=>attempt(false,deadline,request)});
       }
       if(command.type==='readList' && command.reload===true)return finish(await reloadSelectedList());
       const reply=await attempt(write || mayWait || ['readList','selectList'].includes(command.type),loginProbe?performance.now()+3500:undefined);

@@ -30,9 +30,11 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
     completed:completed.has(account.id),flagged:false,
     fingerprint:JSON.stringify([account.id,completed.has(account.id),changed.has(account.id),titles.get(account.id),notes.get(account.id),schedules.get(account.id)])
   });
+  let hideCompletedOnRefresh=false;
   const summary=account=>({
     capturedAt:new Date().toISOString(),totalLists:1,
-    lists:[{list,partial:false,items:[record(account)]}]
+    lists:[{list,partial:false,completedVisible:!hideCompletedOnRefresh,
+      items:hideCompletedOnRefresh && completed.has(account.id) ? [] : [record(account)]}]
   });
   await store.saveAccounts(accounts);
   await Promise.all(accounts.map(account=>store.saveReport(account,toLocalReport(account,summary(account)))));
@@ -52,6 +54,7 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
         if (!online) return {ok:false,code:'OFFLINE'};
         if (command.type==='readSummary') return {ok:true,summary:summary(account)};
         if (command.type==='selectList') return {ok:command.pageId===pageId && command.listId===list.id,code:'READY',snapshot:snapshot()};
+        if (command.type==='showCompleted') return {ok:true,code:'VIEW_REQUESTED',snapshot:{...snapshot(),completedVisible:true}};
         if (command.type==='getSchedule' && command.fingerprint===record(account).fingerprint) {
           return {ok:true,code:'READY',snapshot:snapshot(),schedule:record(account).schedule,scheduleFingerprint:'synthetic-schedule',editorTimeZone:'UTC'};
         }
@@ -60,7 +63,8 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
         if (command.id!==record(account).id || command.fingerprint!==record(account).fingerprint) return {ok:false,code:'STALE_VIEW'};
         if (command.type==='setSchedule') schedules.set(account.id,command.value);
         else if (command.type==='setText') (command.field==='title'?titles:notes).set(account.id,command.value);
-        else completed.add(account.id);
+        else if (command.completed) completed.add(account.id);
+        else completed.delete(account.id);
         return {ok:true,code:'WEB_STATE_OBSERVED',snapshot:snapshot()};
       }
     }];
@@ -171,6 +175,31 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
     await waitForRenderer('document.querySelector(".notice:not(.network-notice)")?.textContent.includes("已取消登录")',ui);
     assert.deepEqual(logins,[accounts[0].id]);
     assert.equal(writes.length,4);
+    await run('document.querySelector(".mobile-menu").click()');
+    await waitForRenderer('document.querySelector(".compact-overview")',ui);
+    await run('document.querySelector(".desktop-view-card[data-status=completed]").click()');
+    await waitForRenderer('document.querySelector(".summary-row .summary-completion-button.checked")',ui);
+    await run('document.querySelector(".summary-row .summary-source-button").click()');
+    await waitForRenderer('document.querySelector(".cached-list-actions button, .cached-list-actions uni-button")',ui);
+    await run('document.querySelector(".cached-list-actions .summary-source-button").click()');
+    await waitForRenderer('document.querySelector(".list-content[data-live=true] .tabs [data-status=completed]")',ui);
+    await run('document.querySelector(".tabs [data-status=completed]").click()');
+    await waitForRenderer('document.querySelector(".list-content .completion-button.checked") && !document.querySelector(".refresh-button[disabled]")',ui);
+    await run('document.querySelector(".list-content .completion-button.checked").click()');
+    await waitForRenderer('!document.querySelector(".list-content .completion-button") && !document.querySelector(".refresh-button[disabled]")',ui);
+    await run('document.querySelector(".tabs [data-status=pending]").click()');
+    await waitForRenderer('document.querySelector(".list-content .completion-button")',ui);
+    await run('document.querySelector(".list-content .completion-button").click()');
+    await waitForRenderer('!document.querySelector(".list-content .completion-button") && !document.querySelector(".refresh-button[disabled]")',ui);
+    assert.deepEqual(writes.slice(4).map(command=>[command.accountId,command.completed]),[[accounts[1].id,false],[accounts[1].id,true]]);
+    await run('document.querySelector(".mobile-menu").click()');
+    await waitForRenderer('document.querySelector(".compact-overview")',ui);
+    await run('document.querySelector(".desktop-view-card[data-status=completed]").click()');
+    await waitForRenderer('document.querySelector(".summary-row .summary-completion-button.checked")',ui);
+    hideCompletedOnRefresh=true;
+    await run('document.querySelector(".refresh-button").click()');
+    await waitForRenderer('document.querySelector(".across-lists .date-view-description")?.textContent.includes("部分完成事项待同步")',ui);
+    assert.equal(await run('document.querySelectorAll(".summary-row .summary-completion-button.checked").length'),1);
   } finally {
     stop();
     ui.destroy();

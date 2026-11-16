@@ -206,6 +206,7 @@ export function createAndroidBridge({ runtime, profileRuntime, adapterSource, ti
       if (hiding?.view === view) await hiding.done;
       const result = await collectSummary({ pageId, listId }, {
         canRead,
+        includeCompleted: true,
         // Android 隐藏 WebView 的计时器可能被降频，仍对每次读取和整个汇总设上限。
         timeoutMs: 60000,
         restoreTimeoutMs: 14000,

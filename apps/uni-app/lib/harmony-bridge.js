@@ -137,7 +137,7 @@ export function createHarmonyBridge({ adapterSource, timeoutMs = 18000, summaryE
       if (readingSummary || pending || loggingIn) return failure('BUSY','请等待当前读取结束。');
       readingSummary = true;
       try {
-        return await collectSummary({pageId,listId},{canRead,timeoutMs:60000,
+        return await collectSummary({pageId,listId},{canRead,includeCompleted:true,timeoutMs:60000,
           read:(command,deadline)=>dispatch(command,Math.max(1,Math.min(timeoutMs,deadline-performance.now())))});
       } finally { readingSummary = false; }
     },

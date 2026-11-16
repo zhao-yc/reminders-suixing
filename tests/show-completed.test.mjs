@@ -27,6 +27,7 @@ test('已完成入口展开官方隐藏事项，重复请求不会反转或修�
   assert.equal(first.code,'VIEW_REQUESTED');
   assert.equal(first.snapshot.items.length,2);
   assert.equal(first.snapshot.items.filter(item=>item.completed).length,1);
+  assert.equal(first.snapshot.completedVisible,true);
   assert.match(first.snapshot.coverage,/已加载/);
   const second=await execute(command);
   assert.equal(second.ok,true);
@@ -34,6 +35,21 @@ test('已完成入口展开官方隐藏事项，重复请求不会反转或修�
   assert.equal(window.fixtureCompletedActionClicks,1);
   assert.equal(window.fixtureClicks,0);
   assert.equal(window.sessionStorage.getItem('fixture-complete'),'true');
+});
+
+test('网页勾选后立即隐藏该行时，展开完成项核对同一记录且只写一次',async t=>{
+  const {window,execute}=await setup(t);
+  window.sessionStorage.setItem('fixture-complete','false');
+  window.renderFixture('one');
+  const {snapshot}=await execute({type:'read'});
+  const item=snapshot.items[0];
+  window.document.getElementById(item.id).querySelector('.mark-completed').addEventListener('click',()=>window.renderFixture('one'));
+  const done=await execute({type:'setCompleted',pageId:snapshot.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,
+    expectedCompleted:false,completed:true});
+  assert.equal(done.code,'WEB_STATE_OBSERVED');
+  assert.equal(done.snapshot.items.find(row=>row.id===item.id).completed,true);
+  assert.equal(done.snapshot.completedVisible,true);
+  assert.equal(window.fixtureClicks,1);
 });
 
 test('旧页面、其他清单和加载期间都不打开官方菜单',async t=>{

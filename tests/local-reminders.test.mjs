@@ -11,7 +11,7 @@ const first = {id:'legacy-cn',region:'cn',label:'iCloud',confirmed:true};
 const second = {id:'secondsyntheticaccount123',region:'cn',label:'iCloud 2',confirmed:true};
 const summary = (title, partial = false) => ({
   capturedAt:'2026-11-13T14:00:00Z', totalLists:partial?2:1,
-  lists:[{list:{id:'page-list',title:'随行验证 · 同名清单',color:'#1687ff',fingerprint:'list-secret'},partial,
+  lists:[{list:{id:'page-list',title:'随行验证 · 同名清单',color:'#1687ff',fingerprint:'list-secret'},partial,completedVisible:true,
     items:[{id:'page-row',title,completed:false,flagged:false,fingerprint:'write-secret',scheduleFingerprint:'date-secret'},
       {id:'completed-row',title:'随行验证 · 已完成',completed:true}]}]
 });
@@ -107,4 +107,26 @@ test('已知 Apple 账号与官方菜单不符时保留缓存，并跳过读取�
   assert.equal(reads,0);
   assert.equal((await refreshOfficial(bridge,{...first,appleAccount:'OTHER@example.invalid'},navigation)).appleAccount,'other@example.invalid');
   assert.equal(reads,1);
+});
+
+test('完成项未展开时保留上次历史，覆盖状态确认后才替换',async()=>{
+  const old=toLocalReport(first,summary('随行验证 · 已缓存'));
+  let previous=old, covered=false;
+  const states=[];
+  const refresh=createAccountRefresh({
+    collect:async()=>{
+      const current=summary('随行验证 · 已刷新');
+      current.lists[0].items=current.lists[0].items.filter(item=>!item.completed);
+      current.lists[0].completedVisible=covered;
+      return {ok:true,summary:current};
+    },
+    active:()=>true,previous:()=>previous,save:async()=>{},
+    update:(_account,report,code)=>{states.push(code);if(report)previous=report;}
+  });
+  await refresh.refresh([first]);
+  assert.equal(previous,old);
+  covered=true;
+  await refresh.refresh([first]);
+  assert.deepEqual(states,['COMPLETED_PARTIAL','READY']);
+  assert.equal(previous.lists[0].items.some(item=>item.completed),false);
 });

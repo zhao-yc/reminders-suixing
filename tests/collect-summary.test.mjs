@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { collectSummary } from '../apps/uni-app/lib/collect-summary.mjs';
 
-function fixture({failOnSwitch=false,restoreAllowed=true,initialSelection='one'}={}) {
+function fixture({failOnSwitch=false,restoreAllowed=true,initialSelection='one',includeCompleted=false}={}) {
   const lists=['one','two'].map(id=>({id,title:'随行验证 · 同名清单'}));
   const pageId='fixture-page';
   let selected=initialSelection,blocked=false;
@@ -10,6 +10,12 @@ function fixture({failOnSwitch=false,restoreAllowed=true,initialSelection='one'}
   const read=async command=>{
     commands.push(command);
     if(command.type==='readLists')return {ok:true,selectedListId:selected,snapshot:{pageId,lists}};
+    if(command.type==='showCompleted') {
+      assert.equal(command.pageId,pageId);
+      assert.equal(command.listId,selected);
+      assert.equal(command.background,true);
+      return {ok:true,snapshot:{pageId,activeListId:selected,items:[{id:selected,completed:true}],partial:false,completedVisible:true}};
+    }
     assert.ok(['readList','selectList'].includes(command.type));
     if(command.type==='selectList') {
       assert.equal(command.fromListId,selected);
@@ -21,7 +27,7 @@ function fixture({failOnSwitch=false,restoreAllowed=true,initialSelection='one'}
     }
     return {ok:true,snapshot:{pageId,activeListId:selected,items:[],partial:false}};
   };
-  return {commands,selected:()=>selected,run:listId=>collectSummary({pageId,listId},{read,canRead:()=>!blocked})};
+  return {commands,selected:()=>selected,run:listId=>collectSummary({pageId,listId},{read,canRead:()=>!blocked,includeCompleted})};
 }
 
 test('跨清单读取只使用页面绑定，完成后恢复原选区，导航模式保持本地待选择',async()=>{
@@ -32,6 +38,14 @@ test('跨清单读取只使用页面绑定，完成后恢复原选区，导航�
   assert.equal(state.selected(),'one');
   assert.equal(result.snapshot,undefined);
   assert.deepEqual(state.commands.map(command=>command.type),['readLists','readList','selectList','readLists','selectList']);
+});
+
+test('汇总逐清单展开并读到完成事项，恢复原选区时保留已经读到的历史',async()=>{
+  const state=fixture({includeCompleted:true});
+  const result=await state.run('one');
+  assert.deepEqual(result.summary.lists.map(entry=>[entry.completedVisible,entry.items[0]?.id]),[[true,'one'],[true,'two']]);
+  assert.deepEqual(state.commands.filter(command=>command.type==='showCompleted').map(command=>command.listId),['one','two']);
+  assert.equal(state.selected(),'one');
 });
 
 test('首次汇总可以从无选区读取所有清单，选区不明确时不切换',async()=>{

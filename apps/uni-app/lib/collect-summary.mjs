@@ -1,5 +1,5 @@
 /** 逐份读取官方已加载清单，始终核对页面和选区，并尝试恢复原清单。 */
-export async function collectSummary(command, { read, canRead, timeoutMs = 25000, restoreTimeoutMs = 9500 }) {
+export async function collectSummary(command, { read, canRead, includeCompleted = false, timeoutMs = 25000, restoreTimeoutMs = 9500 }) {
   const unavailable = {ok:false,code:'SUMMARY_UNAVAILABLE',message:'请先收起官方页面，再刷新汇总。'};
   const reselect = {ok:false,code:'STALE_VIEW',needsListSelection:true,message:'官方页面或选区已变化，请刷新清单后重新选择。'};
   const readSafely = async (request,deadline) => {
@@ -32,8 +32,13 @@ export async function collectSummary(command, { read, canRead, timeoutMs = 25000
       const reply = await readSafely(switching?selectList(list.id,current):readList(list.id),deadline);
       if (!verified(reply,list.id)) break;
       current = list.id;
-      if (current===original) originalSnapshot = reply.snapshot;
-      collected.push({list,items:reply.snapshot.items,partial:reply.snapshot.partial});
+      let snapshot = reply.snapshot;
+      if (includeCompleted && canRead() && now()<deadline) {
+        const expanded=await readSafely({type:'showCompleted',pageId,listId:current,background:true},deadline);
+        if (verified(expanded,current)) snapshot=expanded.snapshot;
+      }
+      if (current===original) originalSnapshot = snapshot;
+      collected.push({list,items:snapshot.items,partial:snapshot.partial,completedVisible:snapshot.completedVisible===true});
     }
   } finally {
     if (lastDestination && original) {
@@ -48,7 +53,11 @@ export async function collectSummary(command, { read, canRead, timeoutMs = 25000
           const restored = await readSafely(selected===original?readList(original):selectList(original,selected),restoreDeadline);
           if (verified(restored,original)) {
             originalSnapshot = restored.snapshot;
-            collected[0] = {...collected[0],items:originalSnapshot.items,partial:originalSnapshot.partial};
+            // 恢复选区时网页可能再次折叠完成项，保留刚才读到的完成事项。
+            if (!collected[0].completedVisible || originalSnapshot.completedVisible===true) {
+              collected[0] = {...collected[0],items:originalSnapshot.items,partial:originalSnapshot.partial,
+                completedVisible:originalSnapshot.completedVisible===true};
+            }
           }
         }
       }
