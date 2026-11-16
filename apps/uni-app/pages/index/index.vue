@@ -1190,7 +1190,7 @@ function showSummarySource(entry) {
   showMobileDetail();
 }
 
-/** 取消完成留在汇总页。旧缓存只能在两边匹配唯一且用户确认后使用实时记录。 */
+/** 取消完成留在汇总页。旧缓存需在后台唯一匹配实时记录后才提交。 */
 async function undoSummaryCompletion(entry, source, binding) {
   const matches=source.items.filter(row=>row.id===binding?.id);
   const samePage=!!binding && binding.pageId===source.pageId && binding.listId===source.activeListId;
@@ -1205,22 +1205,13 @@ async function undoSummaryCompletion(entry, source, binding) {
     const uniqueList=matchingList(lists.map(value=>value.list),entry.list);
     const cached=uniqueList?.id===entry.list.id ? lists.find(value=>value.list.id===entry.list.id) : null;
     item=completedRecoveryCandidate(cached,entry.item,source);
-    if (item) {
-      busy.value=true;
-      try {
-        const confirmed=await new Promise(resolve=>uni.showModal({
-          title:'取消完成', content:'将「'+sourceLabel(entry.list)+'」中的「'+item.title+'」恢复为待办？',confirmText:'恢复待办',
-          success:value=>resolve(value.confirm),fail:()=>resolve(false)
-        }));
-        if (!confirmed || !workspaceMounted || !live.value || toRaw(snapshot.value)!==toRaw(source)) return;
-      } finally {busy.value=false;}
-    }
   }
   if (!item || item.disabled || !item.completed || item.listId!==source.activeListId || !item.fingerprint || binding?.pageId===source.pageId && !samePage ||
       binding && !(samePage && item.fingerprint===binding.fingerprint) && !sameCompletedProjection(entry.item,item)) {
     summaryActionMessage('SUMMARY_TARGET_CHANGED','暂时无法核对这条完成事项，请刷新后再试。');
     return;
   }
+  if (!workspaceMounted || !live.value || toRaw(snapshot.value)!==toRaw(source)) return;
   const result=await setCompletion(item);
   if (result?.ok && result.code==='WEB_STATE_OBSERVED') {
     updateSummaryItem(entry,{pageId:source.pageId,listId:source.activeListId,id:item.id,completed:false,observed:result.completionItem},result.snapshot);

@@ -28,7 +28,7 @@ export function sameCompletedProjection(left, right) {
     completedProjection(left)===completedProjection(right);
 }
 
-/** 旧快照只有显示字段。仅提供两边都唯一的候选，让用户确认后再用实时记录操作。 */
+/** 旧快照只有显示字段。两边均唯一匹配时，返回携带实时指纹的记录。 */
 export function completedRecoveryCandidate(cachedList, item, snapshot) {
   if (!cachedList || cachedList.partial || !item.completed || item.notesTruncated || snapshot.partial || !snapshot.completedVisible) return null;
   const matches=row=>sameCompletedProjection(item,row);

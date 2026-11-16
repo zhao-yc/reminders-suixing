@@ -214,7 +214,7 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
     assert.equal(completed.has(accounts[1].id),false);
     await waitForSecondPendingCache();
 
-    // 模拟重启后只保留旧版完成快照。未确认前不得用显示字段直接写入。
+    // 重启后只保留旧版完成快照。一次点击应在后台核对并用当前网页记录提交。
     completed.add(accounts[1].id);
     await store.saveReport(accounts[1],toLocalReport(accounts[1],{
       ...summary(accounts[1]),lists:[{list,partial:false,items:[record(accounts[1])]}]
@@ -224,11 +224,10 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
     await run('document.querySelector(".desktop-view-card[data-status=completed]").click()');
     await waitForRenderer('document.querySelector(".summary-completion-button.checked")',ui);
     await run('document.querySelector(".summary-completion-button.checked").click()');
-    await waitForRenderer('document.querySelector(".uni-modal__btn_primary")?.textContent.trim()==="恢复待办"',ui);
-    assert.equal(writes.length,7);
-    await run('document.querySelector(".uni-modal__btn_primary").click()');
     await waitForRenderer('document.querySelector(".across-lists .list-title")?.textContent==="完成" && !document.querySelector(".summary-row")',ui);
-    assert.deepEqual(writes.slice(7).map(command=>[command.accountId,command.completed]),[[accounts[1].id,false]]);
+    assert.equal(await run('!!document.querySelector(".uni-modal__btn_primary")'),false);
+    assert.deepEqual(writes.slice(7).map(command=>[command.accountId,command.id,command.expectedCompleted,command.completed]),
+      [[accounts[1].id,'synthetic-row',true,false]]);
     await waitForSecondPendingCache();
   } finally {
     ui.destroy();
