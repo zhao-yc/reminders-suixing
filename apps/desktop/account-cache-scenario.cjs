@@ -31,6 +31,7 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
     fingerprint:JSON.stringify([account.id,completed.has(account.id),changed.has(account.id),titles.get(account.id),notes.get(account.id),schedules.get(account.id)])
   });
   let hideCompletedOnRefresh=false;
+  let hideCompletedOnSelection=false;
   const summary=account=>({
     capturedAt:new Date().toISOString(),totalLists:1,
     lists:[{list,partial:false,completedVisible:!hideCompletedOnRefresh,
@@ -53,7 +54,11 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
       execute:command=>{
         if (!online) return {ok:false,code:'OFFLINE'};
         if (command.type==='readSummary') return {ok:true,summary:summary(account)};
-        if (command.type==='selectList') return {ok:command.pageId===pageId && command.listId===list.id,code:'READY',snapshot:snapshot()};
+        if (command.type==='selectList') {
+          const view=snapshot();
+          if (hideCompletedOnSelection) view.items=view.items.filter(item=>!item.completed);
+          return {ok:command.pageId===pageId && command.listId===list.id,code:'READY',snapshot:view};
+        }
         if (command.type==='showCompleted') return {ok:true,code:'VIEW_REQUESTED',snapshot:{...snapshot(),completedVisible:true}};
         if (command.type==='getSchedule' && command.fingerprint===record(account).fingerprint) {
           return {ok:true,code:'READY',snapshot:snapshot(),schedule:record(account).schedule,scheduleFingerprint:'synthetic-schedule',editorTimeZone:'UTC'};
@@ -80,6 +85,8 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
   }
   const chooseField=field=>run(`document.querySelector('.summary-edit-option[data-field="${field}"]').click()`);
   const saveField=()=>run('document.querySelector(".summary-inline-editor .save-edit").click()');
+  const waitForSecondPendingCache=()=>waitForRenderer(
+    `window.suixingDesktop.localFiles.read('snapshot-${accounts[1].id}').then(value=>JSON.parse(value).lists[0].items[0]?.completed===false)`,ui);
   const setField=(element,value)=>run(`(()=>{
     const input=document.querySelector('.summary-inline-editor ${element}');
     const type=input instanceof HTMLTextAreaElement ? HTMLTextAreaElement : HTMLInputElement;
@@ -200,9 +207,32 @@ async function verifyAccountCache({frontendURL,root,waitForRenderer}) {
     await run('document.querySelector(".refresh-button").click()');
     await waitForRenderer('document.querySelector(".across-lists .date-view-description")?.textContent.includes("部分完成事项待同步")',ui);
     assert.equal(await run('document.querySelectorAll(".summary-row .summary-completion-button.checked").length'),1);
+    hideCompletedOnSelection=true;
+    await run('document.querySelector(".summary-completion-button.checked").click()');
+    await waitForRenderer('document.querySelector(".across-lists .list-title")?.textContent==="完成" && !document.querySelector(".summary-row")',ui);
+    assert.deepEqual(writes.slice(6).map(command=>[command.accountId,command.completed]),[[accounts[1].id,false]]);
+    assert.equal(completed.has(accounts[1].id),false);
+    await waitForSecondPendingCache();
+
+    // 模拟重启后只保留旧版完成快照。未确认前不得用显示字段直接写入。
+    completed.add(accounts[1].id);
+    await store.saveReport(accounts[1],toLocalReport(accounts[1],{
+      ...summary(accounts[1]),lists:[{list,partial:false,items:[record(accounts[1])]}]
+    }));
+    await ui.loadURL(frontendURL);
+    await waitForRenderer('document.querySelector(".compact-overview .desktop-view-card[data-status=completed]") && !document.querySelector(".refresh-button[disabled]")',ui);
+    await run('document.querySelector(".desktop-view-card[data-status=completed]").click()');
+    await waitForRenderer('document.querySelector(".summary-completion-button.checked")',ui);
+    await run('document.querySelector(".summary-completion-button.checked").click()');
+    await waitForRenderer('document.querySelector(".uni-modal__btn_primary")?.textContent.trim()==="恢复待办"',ui);
+    assert.equal(writes.length,7);
+    await run('document.querySelector(".uni-modal__btn_primary").click()');
+    await waitForRenderer('document.querySelector(".across-lists .list-title")?.textContent==="完成" && !document.querySelector(".summary-row")',ui);
+    assert.deepEqual(writes.slice(7).map(command=>[command.accountId,command.completed]),[[accounts[1].id,false]]);
+    await waitForSecondPendingCache();
   } finally {
-    stop();
     ui.destroy();
+    stop();
     for (const account of accounts) await store.removeReport(account);
     await files.remove('accounts');
     await fs.rmdir(directory);

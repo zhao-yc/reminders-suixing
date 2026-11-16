@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createLocalStore, createAccountRefresh, refreshOfficial, toLocalReport, matchingList } from '../apps/uni-app/lib/local-reminders.mjs';
+import { createLocalStore, createAccountRefresh, refreshOfficial, toLocalReport, matchingList, completedRecoveryCandidate } from '../apps/uni-app/lib/local-reminders.mjs';
 import { projectAcrossLists } from '../apps/uni-app/lib/list-views.js';
 import filesModule from '../apps/desktop/local-reminders.cjs';
 
@@ -129,4 +129,18 @@ test('完成项未展开时保留上次历史，覆盖状态确认后才替换',
   await refresh.refresh([first]);
   assert.deepEqual(states,['COMPLETED_PARTIAL','READY']);
   assert.equal(previous.lists[0].items.some(item=>item.completed),false);
+});
+
+test('旧完成快照只提供两边都唯一的候选，同名不同日期或未展开时不误选',()=>{
+  const cached={title:'随行验证 · 重复提醒',completed:true,metadata:'日期一'};
+  const historical={...cached,metadata:'日期二',id:'other',fingerprint:'different-date'};
+  const live={...cached,id:'current-live',fingerprint:'current-fingerprint'};
+  const local={items:[cached,historical],partial:false};
+  const source={items:[historical,live],partial:false,completedVisible:true};
+  assert.equal(completedRecoveryCandidate(local,cached,source),live);
+  assert.equal(completedRecoveryCandidate(local,cached,{...source,items:[historical]}),null);
+  assert.equal(completedRecoveryCandidate(local,cached,{...source,items:[live,{...live,id:'duplicate'}]}),null);
+  assert.equal(completedRecoveryCandidate({items:[cached,{...cached}]},cached,source),null);
+  assert.equal(completedRecoveryCandidate(local,cached,{...source,completedVisible:false}),null);
+  assert.equal(completedRecoveryCandidate(local,cached,{...source,partial:true}),null);
 });

@@ -1,7 +1,7 @@
 /* 提醒事项网页共用适配器。只适配已加载页面及当前 DOM 行绑定的日期字段，不接触密码、Cookie 或私有网络接口。 */
 (function installSuixingAdapter(root) {
   'use strict';
-  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.28') return;
+  if (root.__suixingAdapter && root.__suixingAdapter.version === '0.3.29') return;
   if (root.__suixingAdapter && typeof root.__suixingAdapter.dispose === 'function') root.__suixingAdapter.dispose();
 
   var pageId = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
@@ -629,13 +629,17 @@
     if (current.completed === command.completed) return result(true, 'UNCHANGED', '事项已经处于目标状态，未再次点击。', { snapshot: lastSnapshot });
     var completedVisible = lastSnapshot.completedVisible === true;
     var button = row.querySelector('button.mark-completed[data-completed]');
+    var witnessed = null;
     activate(button);
     var observed = await until(function () {
       var selected = selectedListNode(doc);
       if (!selected || handle(selected) !== command.listId || pageId !== command.pageId) return 'stale';
       var currentRow = doc.getElementById(command.id);
       var currentButton = currentRow && currentRow.querySelector('button.mark-completed[data-completed]');
-      if (currentButton && currentButton.getAttribute('data-completed') === String(command.completed)) return 'observed';
+      if (currentButton && currentButton.getAttribute('data-completed') === String(command.completed)) {
+        witnessed = readItem(currentRow, command.listId);
+        return 'observed';
+      }
       if (!currentRow && command.completed && !isLoading(doc)) return 'hidden';
     }, 6500);
     // 完成后网页可能直接卸载该行。通过展开完成项核对同一 ID，消失本身不足以确认完成。
@@ -648,7 +652,8 @@
     var refreshed = expanded || read();
     if (completedVisible && refreshed.snapshot) refreshed.snapshot.completedVisible = true;
     return result(true, 'WEB_STATE_OBSERVED', '网页状态已更新；云端保存仍由 iCloud 处理。', {
-      dispatched: true, cloudConfirmed: false, snapshot: refreshed.snapshot || null
+      dispatched: true, cloudConfirmed: false, snapshot: refreshed.snapshot || null,
+      completionItem: refreshed.snapshot?.items.some(function(item) { return item.id===command.id; }) ? undefined : witnessed
     });
   }
 
@@ -1629,7 +1634,7 @@
   }
 
   root.__suixingAdapter = {
-    version: '0.3.28',
+    version: '0.3.29',
     readAccountIdentifier: readAccountIdentifier,
     dispose:function(){clearSettledCreation();root.removeEventListener('offline',lostConnection);},
     invalidateConnection:lostConnection,

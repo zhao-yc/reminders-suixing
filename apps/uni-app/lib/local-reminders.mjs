@@ -17,6 +17,26 @@ export function matchingList(lists, list) {
   return matches.length === 1 ? matches[0] : null;
 }
 
+function completedProjection(item) {
+  const schedule=item.schedule;
+  return JSON.stringify([item.title,item.notes || '',item.metadata || '',item.metadataPartial===true,item.flagged ?? null,
+    item.priority ?? null,item.level || 1,schedule ? [schedule.date,schedule.time,schedule.timeZone] : null]);
+}
+
+export function sameCompletedProjection(left, right) {
+  return left.completed && right.completed && !left.notesTruncated && !right.notesTruncated &&
+    completedProjection(left)===completedProjection(right);
+}
+
+/** 旧快照只有显示字段。仅提供两边都唯一的候选，让用户确认后再用实时记录操作。 */
+export function completedRecoveryCandidate(cachedList, item, snapshot) {
+  if (!cachedList || cachedList.partial || !item.completed || item.notesTruncated || snapshot.partial || !snapshot.completedVisible) return null;
+  const matches=row=>sameCompletedProjection(item,row);
+  if (cachedList.items.filter(matches).length!==1) return null;
+  const found=snapshot.items.filter(matches);
+  return found.length===1 && !found[0].disabled && found[0].fingerprint ? found[0] : null;
+}
+
 export function officialAccountLabel(value) {
   const label = typeof value === 'string' ? value.trim() : '';
   return label.length <= 254 && (/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(label) || /^\+?\d[\d ()-]{5,24}\d$/.test(label)) ? label : '';

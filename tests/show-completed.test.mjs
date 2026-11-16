@@ -52,6 +52,23 @@ test('网页勾选后立即隐藏该行时，展开完成项核对同一记录�
   assert.equal(window.fixtureClicks,1);
 });
 
+test('已观察到完成状态而清单正在更新时，保留本次网页记录以供取消完成',async t=>{
+  const {window,execute}=await setup(t);
+  window.sessionStorage.setItem('fixture-complete','false');
+  window.renderFixture('one');
+  const {snapshot}=await execute({type:'read'});
+  const item=snapshot.items[0];
+  window.document.getElementById(item.id).querySelector('.mark-completed').addEventListener('click',()=>{
+    window.document.querySelector('[role="treegrid"]').setAttribute('aria-busy','true');
+  });
+  const done=await execute({type:'setCompleted',pageId:snapshot.pageId,listId:item.listId,id:item.id,fingerprint:item.fingerprint,
+    expectedCompleted:false,completed:true});
+  assert.equal(done.code,'WEB_STATE_OBSERVED');
+  assert.equal(done.snapshot,null);
+  assert.deepEqual([done.completionItem.id,done.completionItem.listId,done.completionItem.completed],[item.id,item.listId,true]);
+  assert.equal(window.fixtureClicks,1);
+});
+
 test('旧页面、其他清单和加载期间都不打开官方菜单',async t=>{
   const {window,execute,command}=await setup(t);
   assert.equal((await execute({...command,pageId:'synthetic-old-page'})).code,'STALE_VIEW');

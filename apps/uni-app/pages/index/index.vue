@@ -260,7 +260,7 @@ import { listIconURL, appearanceColorLabel } from '../../lib/list-appearance.js'
 import { VIEW_OPTIONS, groupLoadedDateView, projectLoadedItems, projectAcrossLists } from '../../lib/list-views.js';
 import { monitorConnection, connectionResult } from '../../lib/connection.js';
 import { monitorLoadedList } from '../../lib/loaded-list-monitor.js';
-import { createLocalStore, createAccountRefresh, refreshOfficial, prepareNavigation, incompleteReport, matchingList, toLocalReport, officialAccountLabel, differentAppleAccount } from '../../lib/local-reminders.mjs';
+import { createLocalStore, createAccountRefresh, refreshOfficial, prepareNavigation, incompleteReport, matchingList, toLocalReport, officialAccountLabel, differentAppleAccount, completedRecoveryCandidate, sameCompletedProjection } from '../../lib/local-reminders.mjs';
 // #ifdef APP-HARMONY
 import HarmonyICloudHost from '../../components/HarmonyICloudHost.vue';
 // #endif
@@ -650,7 +650,9 @@ function rememberCurrentList(value, finishedItem) {
   // 只有确认已展开的快照才替换完成历史。普通读回保留已核对的完成项。
   const done=completedVisible ? [] : before.items.filter(item=>item.completed);
   const finished=finishedItem && value.items.find(item=>item.id===finishedItem.id);
-  if (!completedVisible && finishedItem && (!finished || finished.completed)) done.push(finished || {...finishedItem,completed:true,fingerprint:''});
+  if (!completedVisible && finishedItem && (!finished || finished.completed)) {
+    done.push(finished || (finishedItem.completed ? finishedItem : {...finishedItem,completed:true,fingerprint:''}));
+  }
   if (!completedVisible && (before.items.some(item=>item.level>1) || fresh.some(item=>item.level>1) || finishedItem?.level>1)) return;
   const index=report.lists.indexOf(before);
   const items=[...fresh,...done];
@@ -1188,10 +1190,48 @@ function showSummarySource(entry) {
   showMobileDetail();
 }
 
+/** 取消完成留在汇总页。旧缓存只能在两边匹配唯一且用户确认后使用实时记录。 */
+async function undoSummaryCompletion(entry, source, binding) {
+  const matches=source.items.filter(row=>row.id===binding?.id);
+  const samePage=!!binding && binding.pageId===source.pageId && binding.listId===source.activeListId;
+  let item=matches.length===1 ? matches[0] : null;
+  if (item && samePage && !item.completed) {
+    updateSummaryItem(entry,{...binding,completed:false},source);
+    summaryActionMessage('SUMMARY_ALREADY_PENDING','这条提醒已恢复为待办。');
+    return;
+  }
+  if (!binding) {
+    const lists=accountReports.value[entry.list.accountId]?.lists || [];
+    const uniqueList=matchingList(lists.map(value=>value.list),entry.list);
+    const cached=uniqueList?.id===entry.list.id ? lists.find(value=>value.list.id===entry.list.id) : null;
+    item=completedRecoveryCandidate(cached,entry.item,source);
+    if (item) {
+      busy.value=true;
+      try {
+        const confirmed=await new Promise(resolve=>uni.showModal({
+          title:'取消完成', content:'将「'+sourceLabel(entry.list)+'」中的「'+item.title+'」恢复为待办？',confirmText:'恢复待办',
+          success:value=>resolve(value.confirm),fail:()=>resolve(false)
+        }));
+        if (!confirmed || !workspaceMounted || !live.value || toRaw(snapshot.value)!==toRaw(source)) return;
+      } finally {busy.value=false;}
+    }
+  }
+  if (!item || item.disabled || !item.completed || item.listId!==source.activeListId || !item.fingerprint || binding?.pageId===source.pageId && !samePage ||
+      binding && !(samePage && item.fingerprint===binding.fingerprint) && !sameCompletedProjection(entry.item,item)) {
+    summaryActionMessage('SUMMARY_TARGET_CHANGED','暂时无法核对这条完成事项，请刷新后再试。');
+    return;
+  }
+  const result=await setCompletion(item);
+  if (result?.ok && result.code==='WEB_STATE_OBSERVED') {
+    updateSummaryItem(entry,{pageId:source.pageId,listId:source.activeListId,id:item.id,completed:false,observed:result.completionItem},result.snapshot);
+  }
+}
+
 /** 在后台选定来源清单，仅允许使用同一官方页面中核对过的事项。 */
 async function actOnSummaryItem(entry, action) {
   if (busy.value || refreshingAccounts.value || editing.value || entry.context || entry.item.disabled) return;
   const isCompletion=action==='complete';
+  const undo=isCompletion && entry.item.completed;
   if (!isCompletion) summaryEditorKey.value=entry.key;
   const account=accounts.value.find(value=>value.id===entry.list.accountId);
   if (networkOffline.value) {
@@ -1220,12 +1260,13 @@ async function actOnSummaryItem(entry, action) {
     if (!source && !account && !summarySourcesCurrent.value) summaryActionMessage('SUMMARY_READ_REQUIRED','请刷新汇总后再操作。');
     return;
   }
-  if (entry.item.completed && binding?.pageId===source.pageId && source.activeListId===binding.listId &&
-      !source.items.some(item=>item.id===binding.id) && bridge.capabilities?.showCompleted) {
+  if (entry.item.completed && !source.completedVisible && bridge.capabilities?.showCompleted &&
+      (undo && !binding || !source.items.some(item=>item.id===binding?.id))) {
     const result=await run({type:'showCompleted',pageId:source.pageId,listId:source.activeListId});
     if (!result?.ok || !result.snapshot || !live.value) return;
     source=result.snapshot;
   }
+  if (undo) return undoSummaryCompletion(entry,source,binding);
   const matches=source.items.filter(item=>item.id===binding?.id);
   const item=matches.length===1 ? matches[0] : null;
   if (!binding || !item || item.disabled || source.pageId!==binding.pageId || source.activeListId!==binding.listId || item.fingerprint!==binding.fingerprint) {
@@ -1243,14 +1284,16 @@ async function actOnSummaryItem(entry, action) {
   }
   const result=await setCompletion(item);
   if (result?.ok && result.code==='WEB_STATE_OBSERVED') {
-    updateSummaryItem(entry,{...binding,completed:!item.completed},result.snapshot);
+    updateSummaryItem(entry,{...binding,completed:true,observed:result.completionItem},result.snapshot);
   }
 }
 
 /** 汇总只合入官方回读的事项，保留缓存标识和父子关系。 */
 function updateSummaryItem(entry, target, updated, schedule) {
-  const confirmed=updated?.pageId===target.pageId && updated.activeListId===target.listId
+  const visible=updated?.pageId===target.pageId && updated.activeListId===target.listId
     ? updated.items.find(row=>row.id===target.id) : null;
+  const observed=target.observed;
+  const confirmed=visible || (observed?.id===target.id && observed.listId===target.listId && observed.completed===target.completed ? observed : null);
   // 已确认完成时，官方网页可能已将该事项收起。
   if (!confirmed && typeof target.completed!=='boolean') return;
   const replacement={...entry.item};
@@ -1277,7 +1320,7 @@ function updateSummaryItem(entry, target, updated, schedule) {
   }
   const report=accountReports.value[account.id];
   if (!report) return;
-  if (confirmed) bindSummaryItems([replacement],[confirmed],updated.pageId);
+  if (confirmed) bindSummaryItems([replacement],[confirmed],target.pageId);
   saveAccountReport(account,{...report,lists:replaceRows(report.lists)});
 }
 
@@ -1350,8 +1393,8 @@ async function toggle(item) {
     const result=await setCompletion(item);
     if (!result?.ok || result.code!=='WEB_STATE_OBSERVED') return;
     const updated=result.snapshot?.pageId===before.pageId && result.snapshot.activeListId===item.listId ? result.snapshot : null;
-    if (entry) updateSummaryItem(entry,{pageId:before.pageId,listId:item.listId,id:item.id,completed:!item.completed},updated);
-    if (localEnabled.value && updated) rememberCurrentList(updated, !entry && !item.completed ? item : undefined);
+    if (entry) updateSummaryItem(entry,{pageId:before.pageId,listId:item.listId,id:item.id,completed:!item.completed,observed:result.completionItem},updated);
+    if (localEnabled.value && updated) rememberCurrentList(updated, !entry && !item.completed ? result.completionItem || item : undefined);
   } finally { completionPending=false; }
 }
 

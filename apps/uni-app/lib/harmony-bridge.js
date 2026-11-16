@@ -103,7 +103,7 @@ export function createHarmonyBridge({ adapterSource, timeoutMs = 18000, summaryE
   }
 
   return {
-    platform: 'HarmonyOS · 待真机验收', execute, handleHostEvent,
+    platform: 'HarmonyOS · 待真机验收', capabilities: {showCompleted:summaryEnabled}, execute, handleHostEvent,
     async forgetAccount(region) {
       const blocked=unavailable(region,true);
       if (blocked || readingSummary || loggingIn || host?.visible) return blocked || failure('BUSY','请先返回随行。');
