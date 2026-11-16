@@ -95,7 +95,7 @@
           </picker>
           <button class="quiet-button" :disabled="busy || refreshingAccounts || (!!editing && !editing.blocked)" @click="connect">{{ snapshot && !isDemo && (!localEnabled || live || selectedAccount && !selectedAccount.verify) ? '官方页面' : '登录 iCloud' }}</button>
           <button v-if="snapshot && !isDemo && bridge.capabilities?.reconnect" class="quiet-button reconnect-button" role="button" :tabindex="busy || editing || networkOffline ? -1 : 0" :disabled="busy || !!editing || networkOffline" title="重新打开官方页面并读取清单，复用现有会话" @click="reconnectClient">重新连接</button>
-          <button class="primary-button refresh-button" :disabled="busy || refreshingAccounts || (!!editing && !editing.blocked)" @click="refresh">{{ refreshingAccounts ? '刷新中…' : busy && !autoReading ? '处理中…' : '刷新' }}</button>
+          <button class="primary-button refresh-button" :disabled="busy || refreshingAccounts || (!!editing && (!editing.blocked || !!editing.summaryEntry))" @click="refresh">{{ refreshingAccounts ? '刷新中…' : busy && !autoReading ? '处理中…' : '刷新' }}</button>
         </view>
       </view>
       <view v-if="canNotify && notificationsPanelOpen" class="notification-panel" role="region" aria-label="系统通知设置">
@@ -108,7 +108,7 @@
       </view>
       <view v-if="!isDemo && (networkOffline || networkNeedsRead && !selectedAccount?.verify)" class="notice network-notice" :class="{ error: networkOffline }" :data-state="networkOffline ? networkReason : 'read-required'" role="status"><text>{{ networkOffline ? networkReason === 'offline' ? '网络已断开，当前内容仅供查看；联网后请刷新核对。' : '暂时无法连接 iCloud，当前内容仅供查看；连接恢复后请刷新核对。' : '检测到网络可用，请刷新核对后继续编辑。' }}</text></view>
       <view v-if="notice && (desktopWide || !isDemo || noticeError)" class="notice" :data-code="noticeCode" :data-reconnect-stage="noticeStage" :class="{ error: noticeError }" role="status"><text>{{ notice }}</text></view>
-      <view v-if="editing?.blocked" class="edit-recovery"><text>{{ editing.offline ? '草稿保留在当前窗口；请联网后先刷新核对。' : '请先核对修改结果。' }}</text><button class="end-blocked-edit" role="button" :disabled="busy" @click="endEdit">结束本次编辑</button></view>
+      <view v-if="editing?.blocked" class="edit-recovery"><text>{{ editing.summaryEntry ? '草稿保留在当前页。结束本次编辑后可刷新核对。' : editing.offline ? '草稿保留在当前窗口；请联网后先刷新核对。' : '请先核对修改结果。' }}</text><button class="end-blocked-edit" role="button" :disabled="busy" @click="endEdit">结束本次编辑</button></view>
       <view v-if="!snapshot" class="welcome" :class="{'notification-settings-open':notificationsPanelOpen}">
         <view class="welcome-art"><view class="welcome-line"><text>✓</text><view></view></view><view class="welcome-line"><text>○</text><view></view></view><view class="welcome-line"><text>○</text><view></view></view></view>
         <text class="welcome-kicker">熟悉的提醒，新的随行方式</text>
@@ -130,11 +130,22 @@
                 :aria-label="(entry.item.completed ? '取消完成：' : '完成：') + entry.item.title" @click="actOnSummaryItem(entry, 'complete')"><text v-if="entry.item.completed">✓</text></button>
               <view class="reminder-copy">
                 <text class="reminder-title" @dblclick="canEdit && actOnSummaryItem(entry, 'title')">{{ entry.item.title }}</text>
-                <view class="summary-row-meta"><button v-if="summarySourcesCurrent" class="summary-source-button reminder-source" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" :aria-label="'打开清单：' + sourceLabel(entry.list)" @click="selectList(entry.list)">{{ sourceLabel(entry.list) }}</button><text v-else class="reminder-metadata reminder-source">{{ entry.list.title }}</text><text v-if="entry.item.metadata" class="reminder-metadata" :class="{ 'is-overdue': entry.overdue }">{{ entry.item.metadata }}</text></view>
+                <text v-if="entry.item.notes && !(editing?.summaryEntry?.key === entry.key && editing.field === 'notes')" class="reminder-notes">{{ entry.item.notes }}</text>
+                <view class="summary-row-meta"><button v-if="summarySourcesCurrent" class="summary-source-button reminder-source" role="button" :tabindex="busy || editing ? -1 : 0" :disabled="busy || !!editing" :aria-label="'打开清单：' + sourceLabel(entry.list)" @click="selectList(entry.list)">{{ sourceLabel(entry.list) }}</button><text v-else class="reminder-metadata reminder-source">{{ entry.list.title }}</text><text v-if="entry.item.metadata" class="reminder-metadata" :class="{ 'is-overdue': entry.overdue }">{{ entry.item.metadata }}</text></view>
+                <view v-if="editing?.summaryEntry?.key === entry.key" class="inline-editor summary-inline-editor" role="group" :aria-label="summaryEditLabels[editing.field]">
+                  <text class="editor-label">{{ summaryEditLabels[editing.field] }}</text>
+                  <ReminderEditFields :draft="editing" :disabled="busy || editing.blocked" @confirm="confirmEdit" @keydown="editKeydown" @set-day="setScheduleDay" />
+                  <view class="editor-actions"><button class="save-edit" role="button" :disabled="busy || editing.blocked" @click="saveEdit">{{ busy ? '保存中…' : '保存' }}</button><button class="summary-cancel-edit" role="button" :disabled="busy" @click="endEdit">取消</button></view>
+                </view>
+                <view v-else-if="summaryEditorKey === entry.key && !editing" class="editor-actions summary-edit-options" role="group" aria-label="编辑提醒事项">
+                  <button v-if="canEdit" class="summary-edit-option" data-field="title" role="button" :disabled="busy || refreshingAccounts" @click="actOnSummaryItem(entry, 'title')">标题</button>
+                  <button v-if="canEditSchedule" class="summary-edit-option" data-field="schedule" role="button" :disabled="busy || refreshingAccounts" @click="actOnSummaryItem(entry, 'schedule')">日期与时间</button>
+                  <button v-if="canEdit" class="summary-edit-option" data-field="notes" role="button" :disabled="busy || refreshingAccounts || entry.item.notesTruncated" @click="actOnSummaryItem(entry, 'notes')">备注</button>
+                </view>
               </view>
-              <view v-if="canEdit && !entry.context" class="row-actions summary-row-actions"><button class="summary-edit-button"
-                :disabled="busy || refreshingAccounts || !!editing || entry.item.disabled" aria-label="编辑标题" title="编辑标题"
-                @click="actOnSummaryItem(entry, 'title')">✎</button></view>
+              <view v-if="(canEdit || canEditSchedule) && !entry.context && !editing" class="row-actions summary-row-actions"><button class="summary-edit-button" role="button"
+                :disabled="busy || refreshingAccounts || entry.item.disabled" :aria-expanded="String(summaryEditorKey === entry.key)" aria-label="编辑提醒事项" title="编辑提醒事项"
+                @click="toggleSummaryEditor(entry)">✎</button></view>
             </view>
           </template>
           <view v-if="!summaryProjection.rows.length" class="empty-list"><text>{{ busy ? '正在逐份读取清单…' : !summaryData ? '点击刷新重新读取清单。' : search ? '没有找到相关事项。' : '已加载内容中没有符合条件的事项。' }}</text></view>
@@ -177,20 +188,9 @@
             <view class="reminder-copy">
               <view v-if="editing?.id === item.id" class="inline-editor">
                 <text class="editor-label">{{ editing.field === 'subtask' ? '调整事项层级' : editing.field === 'delete' ? '删除提醒事项' : editing.field === 'schedule' ? '日期与时间' : editing.field === 'title' ? '编辑标题' : '编辑备注' }}</text>
-                <input v-if="editing.field === 'title'" v-model="editing.value" class="edit-field" :maxlength="1000" :focus="true" :disabled="busy || editing.blocked" aria-label="事项标题" @confirm="confirmEdit" @keydown="editKeydown" />
-                <textarea v-else-if="editing.field === 'notes'" v-model="editing.value" class="edit-field edit-notes" :maxlength="2000" :focus="true" :disabled="busy || editing.blocked" auto-height aria-label="事项备注" @keydown="editKeydown" />
-                <view v-else-if="editing.field === 'subtask'" class="delete-confirmation subtask-confirmation" role="alertdialog" aria-label="确认调整事项层级"><text class="delete-title">{{ editing.direction === 'indent' ? '将“'+editing.title+'”设为“'+editing.parentTitle+'”的子事项？' : '将“'+editing.title+'”提升为顶层事项？' }}</text><text>调整会同步到使用此清单的设备。</text><template v-if="editing.affectedCount > 1"><text>后续 {{ editing.affectedCount - 1 }} 个同级子事项也会归入被提升事项：</text><view class="affected-subtasks"><text v-for="(title,index) in editing.affectedTitles.slice(1)" :key="index">{{ title }}</text></view></template></view>
+                <view v-if="editing.field === 'subtask'" class="delete-confirmation subtask-confirmation" role="alertdialog" aria-label="确认调整事项层级"><text class="delete-title">{{ editing.direction === 'indent' ? '将“'+editing.title+'”设为“'+editing.parentTitle+'”的子事项？' : '将“'+editing.title+'”提升为顶层事项？' }}</text><text>调整会同步到使用此清单的设备。</text><template v-if="editing.affectedCount > 1"><text>后续 {{ editing.affectedCount - 1 }} 个同级子事项也会归入被提升事项：</text><view class="affected-subtasks"><text v-for="(title,index) in editing.affectedTitles.slice(1)" :key="index">{{ title }}</text></view></template></view>
                 <view v-else-if="editing.field === 'delete'" class="delete-confirmation" role="alertdialog" aria-label="确认删除提醒事项"><text class="delete-title">删除“{{ editing.title }}”？</text><text>会从 iCloud 及同步设备中移除这一条事项。</text></view>
-                <view v-else class="schedule-editor">
-                  <view class="schedule-toggle-row"><text>日期</text><button class="schedule-date-toggle schedule-toggle" role="switch" :aria-checked="String(editing.useDate)" :disabled="busy || editing.blocked" @click="editing.useDate = !editing.useDate">{{ editing.useDate ? '开' : '关' }}</button></view>
-                  <template v-if="editing.useDate">
-                    <view class="schedule-value-row"><input v-model="editing.date" class="edit-field schedule-date-input" maxlength="10" aria-label="提醒日期" placeholder="YYYY-MM-DD" :disabled="busy || editing.blocked" /><picker mode="date" fields="day" :value="editing.date" start="0001-01-01" end="9999-12-31" :disabled="busy || editing.blocked" @change="editing.date = $event.detail.value"><view class="schedule-picker-button" role="button" aria-label="选择日期">▦</view></picker></view>
-                    <view class="schedule-presets"><button :disabled="busy || editing.blocked" @click="setScheduleDay(0)">今天</button><button :disabled="busy || editing.blocked" @click="setScheduleDay(1)">明天</button></view>
-                    <view class="schedule-toggle-row"><text>时间</text><button class="schedule-time-toggle schedule-toggle" role="switch" :aria-checked="String(editing.includeTime)" :disabled="busy || editing.blocked" @click="editing.includeTime = !editing.includeTime">{{ editing.includeTime ? '开' : '关' }}</button></view>
-                    <view v-if="editing.includeTime" class="schedule-value-row"><input v-model="editing.time" class="edit-field schedule-time-input" maxlength="5" aria-label="提醒时间" placeholder="HH:mm" :disabled="busy || editing.blocked" /><picker mode="time" :value="editing.time" :disabled="busy || editing.blocked" @change="editing.time = $event.detail.value"><view class="schedule-picker-button" role="button" aria-label="选择时间">◷</view></picker></view>
-                    <text v-if="editing.includeTime" class="schedule-zone">时区：{{ editing.timeZone }}</text>
-                  </template>
-                </view>
+                <ReminderEditFields v-else :draft="editing" :disabled="busy || editing.blocked" @confirm="confirmEdit" @keydown="editKeydown" @set-day="setScheduleDay" />
                 <view class="editor-actions"><button class="save-edit" :class="{ 'confirm-delete': editing.field === 'delete', 'confirm-subtask': editing.field === 'subtask' }" role="button" :tabindex="busy || editing.blocked ? -1 : 0" :disabled="busy || editing.blocked" @click="saveEdit">{{ editing.field === 'subtask' ? busy ? '调整中…' : '确认调整' : editing.field === 'delete' ? busy ? '删除中…' : '确认删除' : busy ? '保存中…' : '保存' }}</button><button :class="{ 'cancel-delete': editing.field === 'delete', 'cancel-subtask': editing.field === 'subtask' }" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" @click="endEdit">取消</button></view>
               </view>
               <template v-else><view class="reminder-title-line"><text v-if="item.flagged" class="flag-mark" aria-label="已添加旗标">⚑</text><text v-if="priorityInfo(item.priority).mark" class="priority-mark" :aria-label="priorityInfo(item.priority).label" :title="priorityInfo(item.priority).label + '；请在苹果设备上修改'">{{ priorityInfo(item.priority).mark }}</text><text class="reminder-title" @dblclick="startEdit(item, 'title')">{{ item.title }}</text></view><text v-if="item.notes" class="reminder-notes" @dblclick="startEdit(item, 'notes')">{{ item.notes }}</text><text v-if="item.notesTruncated" class="reminder-metadata">备注较长，请在官方页面查看完整内容</text><text v-if="item.priority === null" class="reminder-metadata">优先级不可读</text></template>
@@ -248,6 +248,7 @@
 
 <script setup>
 import { computed, ref, toRaw, nextTick, onMounted, onUnmounted, watch } from 'vue';
+import ReminderEditFields from '../../components/ReminderEditFields.vue';
 import { createBridge } from '../../lib/bridge.js';
 import { demoSnapshot } from '../../lib/demo.js';
 import { priorityInfo } from '../../lib/priority.js';
@@ -432,6 +433,9 @@ const summaryData=computed(()=>{
   return summaryCache.value?.pageId===snapshot.value?.pageId && summaryCache.value?.region===region.value?summaryCache.value.report:null;
 });
 const summarySourcesCurrent=computed(()=>!!summaryData.value && (localEnabled.value || summaryCache.value?.sourcePageId===snapshot.value?.pageId));
+const summaryEditorKey=ref('');
+const summaryEditLabels={title:'编辑标题',schedule:'日期与时间',notes:'编辑备注'};
+watch([summaryView, mobileOverview, search],()=>{summaryEditorKey.value='';});
 const summaryProjection=computed(()=>projectAcrossLists(summaryData.value?.lists || [],{...viewDates.value,view:summaryView.value || 'pending',query:summaryView.value?search.value:''}));
 const summaryPartial=computed(()=>!!summaryData.value && (incompleteReport(summaryData.value) ||
   localEnabled.value && accounts.value.some(account=>!accountReports.value[account.id] || accountStatus.value[account.id]==='PARTIAL')));
@@ -946,6 +950,8 @@ async function connect() {
 }
 
 async function refresh() {
+  summaryEditorKey.value='';
+  if (editing.value?.summaryEntry) return;
   if (localEnabled.value && !isDemo.value && accounts.value.length && !editing.value) return refreshAccounts();
   if (summaryView.value) return refreshSummary();
   if (isDemo.value) { showDemo(); return; }
@@ -1134,6 +1140,13 @@ function summaryActionMessage(code,message) {
   noticeError.value=false;
 }
 
+function toggleSummaryEditor(entry) {
+  summaryEditorKey.value=summaryEditorKey.value===entry.key ? '' : entry.key;
+  // #ifdef H5
+  if (summaryEditorKey.value) nextTick(()=>document.querySelector('.summary-edit-option:not([disabled])')?.focus());
+  // #endif
+}
+
 function showSummarySource(entry) {
   summaryView.value=null;
   tab.value=entry.item.completed?'completed':'pending';
@@ -1142,9 +1155,11 @@ function showSummarySource(entry) {
   showMobileDetail();
 }
 
-/** 只有当次汇总取得的页面和指纹都匹配时，才用本次点击提交完成状态。 */
+/** 在后台选定来源清单，仅允许使用同一官方页面中核对过的事项。 */
 async function actOnSummaryItem(entry, action) {
   if (busy.value || refreshingAccounts.value || editing.value || entry.context || entry.item.disabled) return;
+  const isCompletion=action==='complete';
+  if (!isCompletion) summaryEditorKey.value=entry.key;
   const account=accounts.value.find(value=>value.id===entry.list.accountId);
   if (networkOffline.value) {
     summaryActionMessage('OFFLINE_SUMMARY','当前无法连接 iCloud。联网后可在此完成或编辑。');
@@ -1172,48 +1187,65 @@ async function actOnSummaryItem(entry, action) {
     if (!source && !account && !summarySourcesCurrent.value) summaryActionMessage('SUMMARY_READ_REQUIRED','请刷新汇总后再操作。');
     return;
   }
+  if (entry.item.completed && binding?.pageId===source.pageId && source.activeListId===binding.listId &&
+      !source.items.some(item=>item.id===binding.id) && bridge.capabilities?.showCompleted) {
+    const result=await run({type:'showCompleted',pageId:source.pageId,listId:source.activeListId});
+    if (!result?.ok || !result.snapshot || !live.value) return;
+    source=result.snapshot;
+  }
   const matches=source.items.filter(item=>item.id===binding?.id);
   const item=matches.length===1 ? matches[0] : null;
   if (!binding || !item || item.disabled || source.pageId!==binding.pageId || source.activeListId!==binding.listId || item.fingerprint!==binding.fingerprint) {
-    showSummarySource(entry);
-    if (entry.item.completed) await selectTab('completed');
-    summaryActionMessage('SUMMARY_TARGET_CHANGED','请在来源清单中核对事项，再进行操作。');
+    if (isCompletion) {
+      showSummarySource(entry);
+      if (entry.item.completed) await selectTab('completed');
+      summaryActionMessage('SUMMARY_TARGET_CHANGED','请在来源清单中核对事项，再进行操作。');
+    } else summaryActionMessage('SUMMARY_TARGET_CHANGED','事项尚待核对，请刷新汇总后再编辑。');
     return;
   }
-  if (action==='title') {
-    showSummarySource(entry);
-    startEdit(item,'title');
+  if (!isCompletion) {
+    if (action==='schedule') await startScheduleEdit(item,entry);
+    else startEdit(item,action,entry);
     return;
   }
   const result=await setCompletion(item);
-  if (!result?.ok || result.code!=='WEB_STATE_OBSERVED') return;
-  const updated=result.snapshot;
-  updateSummaryCompletion(entry,account,item,updated?.pageId===source.pageId && updated.activeListId===source.activeListId ? updated : null);
+  if (result?.ok && result.code==='WEB_STATE_OBSERVED') {
+    updateSummaryItem(entry,{...binding,completed:!item.completed},result.snapshot);
+  }
 }
 
-function updateSummaryCompletion(entry,account,item,updated) {
+/** 汇总只合入官方回读的事项，保留缓存标识和父子关系。 */
+function updateSummaryItem(entry, target, updated, schedule) {
+  const confirmed=updated?.pageId===target.pageId && updated.activeListId===target.listId
+    ? updated.items.find(row=>row.id===target.id) : null;
+  // 已确认完成时，官方网页可能已将该事项收起。
+  if (!confirmed && typeof target.completed!=='boolean') return;
+  const replacement={...entry.item};
+  if (target.field==='title') replacement.title=confirmed.title;
+  if (target.field==='notes') {
+    replacement.notes=confirmed.notes;
+    replacement.notesTruncated=confirmed.notesTruncated;
+  }
+  if (target.field==='schedule' || (typeof target.completed==='boolean' && confirmed)) {
+    replacement.metadata=confirmed.metadata;
+    replacement.metadataPartial=confirmed.metadataPartial;
+    replacement.schedule=confirmed.schedule || schedule || entry.item.schedule;
+  }
+  if (typeof target.completed==='boolean') replacement.completed=confirmed?.completed ?? target.completed;
+  const account=accounts.value.find(value=>value.id===entry.list.accountId);
+  const replaceRows=lists=>lists.map(value=>value.list.id===entry.list.id
+    ? {...value,items:value.items.map(row=>row.id===entry.item.id?replacement:row)} : value);
   if (!account) {
     const cached=summaryCache.value;
     if (!cached) return;
-    const lists=cached.report.lists.map(value=>value.list.id===entry.list.id ?
-      {...value,items:value.items.map(row=>row.id!==item.id?row:updated?.items.find(fresh=>fresh.id===item.id) ||
-        {...row,completed:!item.completed,fingerprint:''})} : value);
-    summaryCache.value={...cached,report:{...cached.report,lists}};
+    replacement.fingerprint=confirmed?.fingerprint || '';
+    summaryCache.value={...cached,report:{...cached.report,lists:replaceRows(cached.report.lists)}};
     return;
   }
   const report=accountReports.value[account.id];
   if (!report) return;
-  const confirmed=updated?.items.find(row=>row.id===item.id);
-  // 完成项可能从网页选区消失。只有网页已回读完成状态，才更新这条缓存。
-  const replacement={...entry.item,completed:!item.completed};
-  if (confirmed) {
-    replacement.metadata=confirmed.metadata;
-    replacement.schedule=confirmed.schedule;
-    bindSummaryItems([replacement],[confirmed],updated.pageId);
-  }
-  const lists=report.lists.map(value=>value.list.id===entry.list.id ?
-    {...value,items:value.items.map(row=>row.id===entry.item.id?replacement:row)} : value);
-  saveAccountReport(account,{...report,lists});
+  if (confirmed) bindSummaryItems([replacement],[confirmed],updated.pageId);
+  saveAccountReport(account,{...report,lists:replaceRows(report.lists)});
 }
 
 async function renameListFromSidebar(list) {
@@ -1495,13 +1527,16 @@ function setSort(mode) {
   }
 }
 
-function startEdit(item, field) {
-  if(viewContext.value.has(item.id))return;
+function startEdit(item, field, summaryEntry) {
+  if (!summaryEntry && viewContext.value.has(item.id)) return;
   if (!canEdit.value || busy.value || editing.value || item.disabled || (!live.value && !isDemo.value)) return;
-  if (field === 'notes' && item.notesTruncated) return;
+  if (field === 'notes' && item.notesTruncated) {
+    if (summaryEntry) summaryActionMessage('NOTES_TRUNCATED','请在官方页面查看或编辑完整备注。');
+    return;
+  }
   selectedItemId.value = item.id;
   editing.value = { id: item.id, field, value: item[field] || '', pageId: snapshot.value.pageId, listId: item.listId,
-    fingerprint: item.fingerprint, expectedCompleted: item.completed, blocked: false };
+    fingerprint: item.fingerprint, expectedCompleted: item.completed, summaryEntry, blocked: false };
 }
 
 function endEdit() {
@@ -1522,7 +1557,7 @@ function endEdit() {
   // #endif
 }
 
-async function startScheduleEdit(item) {
+async function startScheduleEdit(item, summaryEntry) {
   if (!canEditSchedule.value || busy.value || editing.value || item.disabled || (!live.value && !isDemo.value)) return;
   let value=item.schedule || {date:null,time:null,timeZone:null};
   let target=item;
@@ -1537,7 +1572,7 @@ async function startScheduleEdit(item) {
     if (!target) return;
   }
   editing.value={id:target.id,field:'schedule',pageId:snapshot.value.pageId,listId:target.listId,fingerprint:target.fingerprint,expectedCompleted:target.completed,
-    expectedSchedule:value,expectedScheduleFingerprint:dateFingerprint,useDate:value.date!==null,includeTime:value.time!==null,date:value.date || localDateString(),time:value.time || '09:00',timeZone:zone,blocked:false};
+    expectedSchedule:value,expectedScheduleFingerprint:dateFingerprint,useDate:value.date!==null,includeTime:value.time!==null,date:value.date || localDateString(),time:value.time || '09:00',timeZone:zone,summaryEntry,blocked:false};
 }
 
 function setScheduleDay(offset) {
@@ -1558,8 +1593,7 @@ async function saveSchedule(current) {
   // IPC 只传递明确的普通对象，不能把 Vue 包装后的嵌套响应式对象交给结构化克隆。
   const expectedSchedule={date:current.expectedSchedule.date,time:current.expectedSchedule.time,timeZone:current.expectedSchedule.timeZone};
   const result=await run({type:'setSchedule',pageId:current.pageId,listId:current.listId,id:current.id,fingerprint:current.fingerprint,expectedCompleted:current.expectedCompleted,expectedSchedule,expectedScheduleFingerprint:current.expectedScheduleFingerprint,value});
-  if (result?.ok) editing.value=null;
-  else current.blocked=true;
+  finishItemEdit(current,result,value);
 }
 
 async function startCreate() {
@@ -1624,8 +1658,13 @@ async function saveEdit() {
   const result = await run(current.creating ? { type: 'createItem', pageId: current.pageId, listId: current.listId, title: current.value.trim(), requestId: current.requestId } :
     { type: 'setText', pageId: current.pageId, listId: current.listId, id: current.id,
       fingerprint: current.fingerprint, expectedCompleted: current.expectedCompleted, field: current.field, value: current.value });
-  if (result?.ok) editing.value = null;
-  else current.blocked = true;
+  finishItemEdit(current,result);
+}
+
+function finishItemEdit(current,result,schedule) {
+  if (!result?.ok) { current.blocked=true; return; }
+  if (current.summaryEntry) updateSummaryItem(current.summaryEntry,current,result.snapshot,schedule);
+  editing.value=null;
 }
 
 // #ifdef H5
@@ -1701,7 +1740,7 @@ function workspaceKeydown(event) {
     const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(['ArrowLeft','ArrowUp'].includes(event.key)?-1:1)+buttons.length)%buttons.length;
     buttons[next].click();nextTick(()=>buttons[next].focus());return;
   }
-  const actionButton=event.target?.closest?.('.region-picker,.view-tab,.summary-source-button,.flag-toggle-button,.flag-filter,.reconnect-button,.auto-read-toggle,.delete-item-button,.confirm-delete,.cancel-delete,.add-list-button,.rename-list-button,.save-list-edit,.cancel-list-edit,.create-list-icon-toggle,.delete-list-button,.confirm-list-delete,.cancel-list-delete,.list-appearance-button,.appearance-choice,.save-list-appearance,.cancel-list-appearance,.subtask-item-button,.confirm-subtask,.cancel-subtask');
+  const actionButton=event.target?.closest?.('.region-picker,.view-tab,.summary-source-button,.summary-edit-button,.summary-edit-option,.summary-inline-editor .editor-actions button,.flag-toggle-button,.flag-filter,.reconnect-button,.auto-read-toggle,.delete-item-button,.confirm-delete,.cancel-delete,.add-list-button,.rename-list-button,.save-list-edit,.cancel-list-edit,.create-list-icon-toggle,.delete-list-button,.confirm-list-delete,.cancel-list-delete,.list-appearance-button,.appearance-choice,.save-list-appearance,.cancel-list-appearance,.subtask-item-button,.confirm-subtask,.cancel-subtask');
   if (actionButton && ['Enter',' '].includes(event.key)) {
     event.preventDefault();
     if (!event.repeat && !actionButton.hasAttribute('disabled')) actionButton.click();
@@ -1858,7 +1897,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .row-actions { display:flex; gap:3px; flex-shrink:0; opacity:0; transition:opacity .15s; }.reminder-row:hover .row-actions,.reminder-row:focus-within .row-actions,.reminder-row[data-selected="true"] .row-actions { opacity:1; }.row-actions button { margin:0; padding:0; width:25px; height:28px; color:#8393a8; font-size:17px; }.row-actions button:hover { color:#1687ff; background:#eef5ff; border-radius:6px; }
 .flag-mark,.row-actions .flag-active { color:#ed9b38; }.flag-filter { margin:0; padding:8px 6px; color:#8492a5; background:transparent; font-size:11px; flex-shrink:0; }.flag-filter.flag-active { color:#b77d23; background:#fff5e5; border-radius:6px; }.flag-toggle-button:focus-visible,.flag-filter:focus-visible,.reconnect-button:focus-visible { outline:2px solid #1687ff; outline-offset:2px; border-radius:4px; }
 .reminder-title-line { display:flex; align-items:baseline; gap:5px; min-width:0; }.reminder-title-line .reminder-title { min-width:0; }.flag-mark { flex-shrink:0; }.priority-mark { color:#c67b22; font-size:15px; font-weight:700; letter-spacing:1px; flex-shrink:0; }
-.inline-editor { display:flex; flex-direction:column; gap:9px; width:100%; }.editor-label { color:#8393a8; font-size:11px; }.edit-field { box-sizing:border-box; width:100%; height:38px; padding:8px 10px; color:#3d4859; font-size:14px; border:1px solid #a3caff; border-radius:7px; background:#fafcff; }.edit-notes { min-height:95px; line-height:1.7; }.editor-actions { display:flex; gap:10px; }.editor-actions button { margin:0; padding:6px 11px; font-size:12px; color:#8491a4; border-radius:6px; }.editor-actions .save-edit { color:#fff; background:#1687ff; }.editor-actions .save-edit[disabled] { background:#aebed2; }.edit-recovery { margin:8px 34px 0; display:flex; align-items:center; gap:12px; font-size:12px; color:#b36139; }.edit-recovery button { margin:0; padding:5px; font-size:12px; color:#1687ff; }.reminder-notes { overflow-wrap:anywhere; }
+.inline-editor { display:flex; flex-direction:column; gap:9px; width:100%; }.editor-label { color:#8393a8; font-size:11px; }.inline-editor :deep(.edit-field) { box-sizing:border-box; width:100%; height:38px; padding:8px 10px; color:#3d4859; font-size:14px; border:1px solid #a3caff; border-radius:7px; background:#fafcff; }.inline-editor :deep(.edit-notes) { min-height:95px; line-height:1.7; }.editor-actions { display:flex; gap:10px; }.editor-actions button { margin:0; padding:6px 11px; font-size:12px; color:#8491a4; border-radius:6px; }.editor-actions .save-edit { color:#fff; background:#1687ff; }.editor-actions .save-edit[disabled] { background:#aebed2; }.edit-recovery { margin:8px 34px 0; display:flex; align-items:center; gap:12px; font-size:12px; color:#b36139; }.edit-recovery button { margin:0; padding:5px; font-size:12px; color:#1687ff; }.reminder-notes { overflow-wrap:anywhere; }
 @media (hover:none) { .row-actions { opacity:1; } }
 .toolbar { height:68px; gap:16px; }
 .region-control { flex-shrink:0; }
@@ -1888,7 +1927,16 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .list-view-tools { display:flex; align-items:center; gap:12px; min-width:0; }.sort-picker { flex-shrink:0; max-width:132px; }.sort-picker-label { padding:10px 0; color:#71829a; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.sort-description { display:block; color:#98a4b4; font-size:10px; line-height:1.6; padding:9px 0 2px; }
 .desktop-sort { position:relative; }.desktop-sort .sort-picker-label { cursor:pointer; }.desktop-sort .sort-picker-label:focus-visible { outline:2px solid #1687ff; outline-offset:3px; border-radius:4px; }.desktop-sort .sort-picker-label[aria-disabled="true"] { cursor:default; opacity:.5; }.sort-menu { position:absolute; right:0; top:100%; z-index:20; min-width:186px; padding:5px; border:1px solid #e5eaf1; border-radius:10px; background:#fff; box-shadow:0 8px 28px #24334d20; }.sort-option { display:flex; justify-content:space-between; gap:16px; padding:9px 11px; border-radius:6px; color:#62738a; font-size:12px; cursor:pointer; outline:none; }.sort-option:hover,.sort-option-focused { background:#edf5ff; color:#1687ff; }
 .new-reminder-row { background:#f8fbff; border-radius:9px; padding:16px 10px; margin-top:10px; gap:15px; }.draft-circle { width:22px; height:22px; border:1.5px solid #cbd4df; border-radius:50%; margin-top:29px; flex-shrink:0; }.new-reminder-row .inline-editor { min-width:0; flex:1; }.empty-add { color:#1687ff; font-size:12px; padding:8px 12px; }
-.schedule-editor { max-width:320px; width:100%; display:flex; flex-direction:column; gap:10px; }.schedule-toggle-row { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#62738a; font-size:12px; }.schedule-toggle { margin:0; width:42px; padding:3px 8px; border-radius:14px; background:#e5eaf0; color:#8492a5; font-size:11px; }.schedule-toggle[aria-checked="true"] { background:#e2f0ff; color:#1687ff; }.schedule-value-row { display:flex; align-items:center; gap:8px; min-width:0; }.schedule-value-row input { flex:1; min-width:0; }.schedule-picker-button { width:35px; height:35px; border-radius:7px; display:flex; align-items:center; justify-content:center; color:#1687ff; background:#edf5ff; font-size:20px; }.schedule-presets { display:flex; gap:8px; }.schedule-presets button { margin:0; padding:3px 9px; color:#1687ff; background:#f0f6ff; font-size:11px; border-radius:5px; }.schedule-zone { color:#98a4b4; font-size:10px; overflow-wrap:anywhere; }
+.inline-editor :deep(.schedule-editor) { max-width:320px; width:100%; display:flex; flex-direction:column; gap:10px; }
+.inline-editor :deep(.schedule-toggle-row) { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#62738a; font-size:12px; }
+.inline-editor :deep(.schedule-toggle) { margin:0; width:42px; padding:3px 8px; border-radius:14px; background:#e5eaf0; color:#8492a5; font-size:11px; }
+.inline-editor :deep(.schedule-toggle[aria-checked="true"]) { background:#e2f0ff; color:#1687ff; }
+.inline-editor :deep(.schedule-value-row) { display:flex; align-items:center; gap:8px; min-width:0; }
+.inline-editor :deep(.schedule-value-row input) { flex:1; min-width:0; }
+.inline-editor :deep(.schedule-picker-button) { width:35px; height:35px; border-radius:7px; display:flex; align-items:center; justify-content:center; color:#1687ff; background:#edf5ff; font-size:20px; }
+.inline-editor :deep(.schedule-presets) { display:flex; gap:8px; }
+.inline-editor :deep(.schedule-presets button) { margin:0; padding:3px 9px; color:#1687ff; background:#f0f6ff; font-size:11px; border-radius:5px; }
+.inline-editor :deep(.schedule-zone) { color:#98a4b4; font-size:10px; overflow-wrap:anywhere; }
 @media (max-width:760px) { .sidebar { position:fixed; top:0; bottom:0; left:0; z-index:30; transform:translateX(-100%); transition:transform .2s ease; padding-top:calc(28px + env(safe-area-inset-top)); }.sidebar.is-open { transform:translateX(0); }.sidebar-scrim { display:block; position:fixed; inset:0; z-index:25; background:#26324735; }.mobile-menu { display:block; color:#74839a; font-size:19px; width:28px; }.toolbar { height:calc(68px + env(safe-area-inset-top)); padding:env(safe-area-inset-top) 20px 0; gap:8px; }.toolbar-label { display:none; }.toolbar-actions { gap:10px; }.region-picker { font-size:10px; }.quiet-button { font-size:12px; }.primary-button { font-size:12px; padding:9px 15px; }.notice { margin:12px 20px 0; font-size:11px; }.list-content { padding:28px 24px 0; }.list-title { font-size:32px; }.heading-count { font-size:26px; }.list-heading { margin-bottom:21px; }.search { width:125px; font-size:10px; }.tabs { gap:18px; }.tabs button { font-size:11px; }.reminder-row { gap:13px; padding:21px 0; }.reminder-title { font-size:14px; }.list-footer { padding-bottom:calc(20px + env(safe-area-inset-bottom)); font-size:9px; }.welcome-title { font-size:33px; }.welcome { padding-bottom:40px; }.source-chip { font-size:9px; padding:6px 8px; } }
 @media (max-width:760px) { .toolbar.with-tools { height:calc(114px + env(safe-area-inset-top)); padding-bottom:10px; flex-wrap:wrap; align-content:center; row-gap:10px; }.toolbar.with-tools .mobile-menu { order:1; }.toolbar-actions { order:2; margin-left:auto; }.quick-tools { order:3; flex-basis:100%; }.toolbar-search { flex:1; width:auto; }.list-content { padding-top:22px; }.new-reminder-row { padding:15px 10px; } }
 @media (max-width:760px) { .list-view-tools .current-scope { display:none; }.list-view-tools { gap:0; }.sort-picker { max-width:116px; }.sort-picker-label { font-size:10px; }.sort-description { font-size:9px; } }
@@ -2043,6 +2091,9 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .summary-row-meta .reminder-source { color:#8a8a8d; }
 .summary-source-button:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
 .summary-completion-button:not([disabled]),.summary-edit-button:not([disabled]) { cursor:pointer; }
+.summary-inline-editor,.summary-edit-options { margin-top:6px; }
+.summary-edit-options { flex-wrap:wrap; }
+.summary-edit-options .summary-edit-option { color:#2872ba; background:#edf5ff; }
 @media (max-width:760px) {
   .summary-row { grid-template-columns:22px minmax(0,1fr) auto; }
   .summary-row > .summary-row-actions { grid-column:3; grid-row:1; align-self:start; }
@@ -2152,7 +2203,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
   .app-shell :is(.muted,.brand-caption,.sidebar-section,.sidebar-placeholder,.list-count,.footer-wordmark,.toolbar-label,
     .quiet-button,.eyebrow,.heading-count,.source-chip,.current-scope,.date-view-description,.sort-description,
     .sort-picker-label,.reminder-notes,.reminder-metadata,.subtask-tag,.list-footer,.auto-read-toggle,.flag-filter,
-    .empty-list,.editor-label,.editor-actions button,.schedule-toggle-row,.schedule-zone,.notifications-settings-button,
+    .empty-list,.editor-label,.editor-actions button,.notifications-settings-button,
     .notification-state,.demo-link,.welcome-kicker,.welcome-description,.welcome-footnote) { color:var(--theme-muted); }
   .app-shell :is(.delete-title,.delete-confirmation,.notification-heading,.welcome-title,.sort-option,.edit-field,.search) { color:var(--theme-text); }
   .app-shell .completed .reminder-title,.app-shell .view-context .reminder-title { color:#a3aebb; }
@@ -2167,6 +2218,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
     border-color:var(--theme-border);
     color:var(--theme-text);
   }
+  .app-shell .inline-editor :deep(.edit-field) { background:var(--theme-surface); border-color:var(--theme-border); color:var(--theme-text); }
   .app-shell .toolbar-search .search { background:transparent; }
   .app-shell .toolbar-search:focus-within { border-color:#67b9ff; }
   .app-shell .create-list-dialog { background:#27292c; border-color:#535a65; }
@@ -2182,9 +2234,10 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
   .app-shell .notice.error { background:#3b282c; color:#ffb8bb; }
   .app-shell .edit-recovery { color:#ffb8bb; }
   .app-shell :is(.sort-option:hover,.sort-option-focused,.row-actions button:hover,.flag-filter.flag-active,.icon-choice-selected,.view-context) { background:#343f50; }
-  .app-shell .add-reminder-button,.app-shell .schedule-picker-button,.app-shell .schedule-presets button,.app-shell .notification-actions button { background:#253e57; color:#8bceff; }
-  .app-shell .schedule-toggle { background:#414750; color:var(--theme-muted); }
-  .app-shell .schedule-toggle[aria-checked='true'] { background:#244d75; color:#b6e1ff; }
+  .app-shell .inline-editor :deep(.schedule-toggle-row),.app-shell .inline-editor :deep(.schedule-zone) { color:var(--theme-muted); }
+  .app-shell .add-reminder-button,.app-shell .summary-edit-options .summary-edit-option,.app-shell .inline-editor :deep(.schedule-picker-button),.app-shell .inline-editor :deep(.schedule-presets button),.app-shell .notification-actions button { background:#253e57; color:#8bceff; }
+  .app-shell .inline-editor :deep(.schedule-toggle) { background:#414750; color:var(--theme-muted); }
+  .app-shell .inline-editor :deep(.schedule-toggle[aria-checked='true']) { background:#244d75; color:#b6e1ff; }
   .app-shell .completion-button,.app-shell .draft-circle { border-color:#82909f; }
   .app-shell .completion-button:not(.checked) { background:transparent; }
   .app-shell .completion-button.checked { border-color:#647c90; background:#647c90; }
