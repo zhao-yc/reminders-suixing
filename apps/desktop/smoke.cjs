@@ -176,11 +176,13 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".refresh-button[disabled]")'),false,'重按今天应直接显示缓存');
     assert.equal(summaryReads,1);
     assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".summary-row .reminder-title")].map(node=>node.textContent.trim())'),['随行验证 · 第二个同名清单']);
-    const summaryMetaColors=()=>ui.webContents.executeJavaScript('[...document.querySelector(".summary-row .summary-row-meta").children].map(node=>getComputedStyle(node).color)');
-    assert.deepEqual(await summaryMetaColors(),['rgb(138, 138, 141)','rgb(209, 46, 60)'],'浅色模式下来源清单名为灰色，逾期日期为红色');
+    const reminderColors=selector=>ui.webContents.executeJavaScript(`Array.from(
+      document.querySelector(${JSON.stringify(selector)}).querySelectorAll(".reminder-title,.reminder-source,.is-overdue"),
+      node=>getComputedStyle(node).color)`);
+    assert.deepEqual(await reminderColors('.summary-row'),['rgb(0, 0, 0)','rgb(138, 138, 141)','rgb(254, 55, 60)'],'浅色模式显示黑色标题、灰色来源和红色逾期日期');
     nativeTheme.themeSource='dark';
     await waitForRenderer('matchMedia("(prefers-color-scheme: dark)").matches');
-    assert.deepEqual(await summaryMetaColors(),['rgb(153, 153, 154)','rgb(255, 120, 131)'],'深色模式下来源清单名为灰色，逾期日期为红色');
+    assert.deepEqual(await reminderColors('.summary-row'),['rgb(221, 221, 221)','rgb(153, 153, 154)','rgb(255, 66, 69)'],'深色模式显示浅灰标题、灰色来源和红色逾期日期');
     nativeTheme.themeSource='light';
     await waitForRenderer('!matchMedia("(prefers-color-scheme: dark)").matches');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+'+" .desktop-card-count").textContent.trim()'),'1+');
@@ -304,8 +306,8 @@ async function runSmoke({ frontendURL, root }) {
     await chooseView('today');
     assert.deepEqual(await displayedIds(),['view-overdue','view-root','view-child','view-morning','view-afternoon','view-evening']);
     assert.deepEqual(await dateHeadings(),['逾期','全天','上午','下午','今晚']);
-    const overdueColor=()=>ui.webContents.executeJavaScript('getComputedStyle(document.querySelector(\'[data-record-id="view-overdue"] .reminder-metadata\')).color');
-    assert.equal(await overdueColor(),'rgb(209, 46, 60)');
+    const overdueColors=()=>reminderColors('[data-record-id="view-overdue"]');
+    assert.deepEqual(await overdueColors(),['rgb(0, 0, 0)','rgb(254, 55, 60)']);
     assert.equal(await ui.webContents.executeJavaScript('document.querySelectorAll(".reminder-metadata.is-overdue").length'),1,'当天事项不使用逾期色');
     assert.deepEqual(await ui.webContents.executeJavaScript('(()=>{const n=document.querySelector(".date-view-description");return [n.dataset.matches,n.dataset.unknown,n.textContent.includes("当前清单已加载")];})()'),['5','1',true]);
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(\'[data-record-id="view-root"] .completion-button\').hasAttribute("disabled")'),true);
@@ -335,7 +337,7 @@ async function runSmoke({ frontendURL, root }) {
       }
       assert.equal(current.dark,theme==='dark');
       assert.equal(current.background,theme==='dark'?'rgb(28, 29, 30)':'rgb(255, 255, 255)');
-      assert.equal(await overdueColor(),theme==='dark'?'rgb(255, 120, 131)':'rgb(209, 46, 60)');
+      assert.deepEqual(await overdueColors(),theme==='dark'?['rgb(221, 221, 221)','rgb(255, 66, 69)']:['rgb(0, 0, 0)','rgb(254, 55, 60)']);
       assert.equal(current.titleSize,lightState.titleSize);
       assert.equal(current.pageId,lightState.pageId,'配色切换不重载清单');
       assert.deepEqual(current.ids,lightState.ids);
