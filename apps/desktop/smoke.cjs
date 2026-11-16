@@ -176,7 +176,13 @@ async function runSmoke({ frontendURL, root }) {
     assert.equal(await ui.webContents.executeJavaScript('!!document.querySelector(".refresh-button[disabled]")'),false,'重按今天应直接显示缓存');
     assert.equal(summaryReads,1);
     assert.deepEqual(await ui.webContents.executeJavaScript('[...document.querySelectorAll(".summary-row .reminder-title")].map(node=>node.textContent.trim())'),['随行验证 · 第二个同名清单']);
-    assert.equal(await ui.webContents.executeJavaScript('getComputedStyle(document.querySelector(".summary-row .reminder-metadata")).color'),'rgb(209, 46, 60)','跨清单的逾期日期应标红');
+    const summaryMetaColors=()=>ui.webContents.executeJavaScript('[...document.querySelector(".summary-row .summary-row-meta").children].map(node=>getComputedStyle(node).color)');
+    assert.deepEqual(await summaryMetaColors(),['rgb(138, 138, 141)','rgb(209, 46, 60)'],'浅色模式下来源清单名为灰色，逾期日期为红色');
+    nativeTheme.themeSource='dark';
+    await waitForRenderer('matchMedia("(prefers-color-scheme: dark)").matches');
+    assert.deepEqual(await summaryMetaColors(),['rgb(153, 153, 154)','rgb(255, 120, 131)'],'深色模式下来源清单名为灰色，逾期日期为红色');
+    nativeTheme.themeSource='light';
+    await waitForRenderer('!matchMedia("(prefers-color-scheme: dark)").matches');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector('+JSON.stringify(todayCard)+'+" .desktop-card-count").textContent.trim()'),'1+');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".across-lists .date-view-description").textContent.trim()'),'部分内容尚未读取');
     assert.equal(await ui.webContents.executeJavaScript('document.querySelector(".network-notice")?.dataset.state'),'read-required','使用缓存不解除恢复保护');

@@ -128,7 +128,7 @@
               <view class="completion-button" :class="{ checked: entry.item.completed }" aria-hidden="true">{{ entry.item.completed ? '✓' : '' }}</view>
               <view class="reminder-copy">
                 <text class="reminder-title">{{ entry.item.title }}</text>
-                <view class="summary-row-meta"><button v-if="summarySourcesCurrent" class="summary-source-button" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" :aria-label="'打开清单：' + sourceLabel(entry.list)" @click="selectList(entry.list)">{{ sourceLabel(entry.list) }}</button><text v-else class="reminder-metadata">{{ entry.list.title }}</text><text v-if="entry.item.metadata" class="reminder-metadata" :class="{ 'is-overdue': entry.overdue }">{{ entry.item.metadata }}</text></view>
+                <view class="summary-row-meta"><button v-if="summarySourcesCurrent" class="summary-source-button reminder-source" role="button" :tabindex="busy ? -1 : 0" :disabled="busy" :aria-label="'打开清单：' + sourceLabel(entry.list)" @click="selectList(entry.list)">{{ sourceLabel(entry.list) }}</button><text v-else class="reminder-metadata reminder-source">{{ entry.list.title }}</text><text v-if="entry.item.metadata" class="reminder-metadata" :class="{ 'is-overdue': entry.overdue }">{{ entry.item.metadata }}</text></view>
               </view>
             </view>
           </template>
@@ -190,7 +190,7 @@
               </view>
               <template v-else><view class="reminder-title-line"><text v-if="item.flagged" class="flag-mark" aria-label="已添加旗标">⚑</text><text v-if="priorityInfo(item.priority).mark" class="priority-mark" :aria-label="priorityInfo(item.priority).label" :title="priorityInfo(item.priority).label + '；请在苹果设备上修改'">{{ priorityInfo(item.priority).mark }}</text><text class="reminder-title" @dblclick="startEdit(item, 'title')">{{ item.title }}</text></view><text v-if="item.notes" class="reminder-notes" @dblclick="startEdit(item, 'notes')">{{ item.notes }}</text><text v-if="item.notesTruncated" class="reminder-metadata">备注较长，请在官方页面查看完整内容</text><text v-if="item.priority === null" class="reminder-metadata">优先级不可读</text></template>
               <text v-if="viewContext.has(item.id)" class="reminder-metadata">所属主事项 · 仅供定位</text>
-              <view v-if="mobileTitle || item.metadata" class="summary-row-meta"><text v-if="mobileTitle" class="reminder-metadata">{{ snapshot.activeListTitle }}</text><text v-if="item.metadata" class="reminder-metadata" :class="{ 'is-overdue': viewProjection.overdueIds.has(item.id) }">{{ item.metadata }}</text></view>
+              <view v-if="mobileTitle || item.metadata" class="summary-row-meta"><text v-if="mobileTitle" class="reminder-metadata reminder-source">{{ snapshot.activeListTitle }}</text><text v-if="item.metadata" class="reminder-metadata" :class="{ 'is-overdue': viewProjection.overdueIds.has(item.id) }">{{ item.metadata }}</text></view>
               <text v-if="item.metadataPartial" class="reminder-metadata">部分日期附注请在官方页面查看</text>
             </view>
             <view v-if="(canEdit || canEditSchedule || canEditFlag || canDelete || canEditHierarchy) && !editing && !viewContext.has(item.id)" class="row-actions"><button v-if="canEdit" class="edit-title-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑标题" @click="startEdit(item, 'title')">✎</button><button v-if="canEdit" class="edit-notes-button" :disabled="busy || (!live && !isDemo) || item.disabled || item.notesTruncated" aria-label="编辑备注" @click="startEdit(item, 'notes')">≡</button><button v-if="canEditSchedule" class="edit-schedule-button" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="编辑日期与时间" @click="startScheduleEdit(item)">▦</button><button v-if="canEditFlag" class="flag-toggle-button" role="button" :tabindex="busy || item.disabled || typeof item.flagged !== 'boolean' ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled || typeof item.flagged !== 'boolean'" :aria-pressed="String(item.flagged === true)" :aria-label="item.flagged ? '移除旗标' : '添加旗标'" :class="{ 'flag-active': item.flagged }" @click="toggleFlag(item)">⚑</button><button v-if="canEditHierarchy" class="subtask-item-button" role="button" :tabindex="busy || item.disabled || !item.hierarchyReadable ? -1 : 0" :disabled="busy || !live || item.disabled || !item.hierarchyReadable" :aria-label="item.level > 1 ? '提升为顶层事项' : '设为上一主事项的子事项'" :title="item.level > 1 ? '提升为顶层事项' : '设为上一主事项的子事项'" @click="startSubtask(item)">{{ item.level > 1 ? '⇤' : '⇥' }}</button><button v-if="canDelete" class="delete-item-button" role="button" :tabindex="busy || item.disabled ? -1 : 0" :disabled="busy || (!live && !isDemo) || item.disabled" aria-label="删除事项" title="删除这一条事项" @click="startDelete(item)">⌫</button></view>
@@ -1911,6 +1911,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .reminder-metadata.is-overdue { color:#d12e3c; }
 .summary-footer { justify-content:flex-end; }
 .summary-source-button { margin:0; color:#2872ba; font-size:11px; text-align:left; }
+.summary-row-meta .reminder-source { color:#8a8a8d; }
 .summary-source-button:focus-visible { outline:2px solid #1687ff; outline-offset:2px; }
 
 /* 窄屏按层导航，快捷卡片、清单行和事项区仍使用宽屏的组件。 */
@@ -2022,6 +2023,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
   .app-shell .completed .reminder-title,.app-shell .view-context .reminder-title { color:#a3aebb; }
   .app-shell .list-title,.app-shell .empty-add,.app-shell .edit-recovery button { color:#67b9ff; }
   .app-shell .summary-source-button { color:#67b9ff; }
+  .app-shell .summary-row-meta .reminder-source { color:#99999a; }
   .app-shell .reminder-metadata.is-overdue { color:#ff7883; }
   .app-shell :is(.toolbar,.list-controls,.reminder-row,.list-footer,.source-chip,.empty-circle,.date-section-heading,.reminder-row.is-subtask) { border-color:var(--theme-border); }
   .app-shell :is(.account-card,.notice,.notification-panel,.list-editor,.list-delete-confirmation,.appearance-editor,.edit-field,
