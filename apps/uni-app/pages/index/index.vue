@@ -1878,14 +1878,16 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
   text-align:left;
   line-height:1.15;
   color:#fff;
-  background:var(--card-color);
+  background:radial-gradient(ellipse 56% 82% at 25% 31%,var(--card-highlight),transparent),
+    linear-gradient(to bottom right,var(--card-start),var(--card-end));
 }
-.desktop-view-card[data-status='today'] { --card-color:#347bb7; }
-.desktop-view-card[data-status='scheduled'] { --card-color:#b75057; }
-.desktop-view-card[data-status='pending'] { --card-color:#4a4c4d; }
-.desktop-view-card[data-status='flagged'] { --card-color:#9e592c; }
-.desktop-view-card[data-status='overdue'] { --card-color:#a2476b; }
-.desktop-view-card[data-status='completed'] { --card-color:#5d6971; }
+/* 按 macOS 提醒事项截图的 sRGB 取色，宽屏和窄屏共用同一组渐变。 */
+.desktop-view-card[data-status='today'] { --card-highlight:#87bdf1; --card-start:#83b1ec; --card-end:#609ee7; }
+.desktop-view-card[data-status='scheduled'] { --card-highlight:#f69a98; --card-start:#ef8f8f; --card-end:#e97271; }
+.desktop-view-card[data-status='pending'] { --card-highlight:#737373; --card-start:#747472; --card-end:#4c4c4d; }
+.desktop-view-card[data-status='flagged'] { --card-highlight:#f7c79a; --card-start:#f5bb92; --card-end:#eeaa73; }
+.desktop-view-card[data-status='overdue'] { --card-highlight:#f692ae; --card-start:#ed8aa4; --card-end:#e86b8a; }
+.desktop-view-card[data-status='completed'] { --card-highlight:#a0a7ae; --card-start:#989ea3; --card-end:#7b848b; }
 .desktop-view-card[aria-pressed='true'] { outline:2px solid #1665a7; outline-offset:2px; }
 .desktop-view-card:hover:not([disabled]) { filter:brightness(1.11); }
 .desktop-card-top { display:flex; justify-content:space-between; align-items:center; gap:6px; }
@@ -1939,7 +1941,6 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
 .compact-overview .sidebar > * { flex-shrink:0; }
 .compact-overview .brand,.compact-overview .footer-wordmark,.compact-overview .sidebar-footer > .small { display:none; }
 .compact-overview .desktop-view-grid { margin:0 0 18px; }
-.compact-overview .desktop-view-card { background:linear-gradient(145deg,#ffffff20,transparent 75%),var(--card-color); }
 .overview-scope { display:block; font-size:12px; margin-bottom:12px; }
 .compact-overview .sidebar-section { align-items:center; color:var(--compact-text); font-size:21px; letter-spacing:0; padding:0 12px; margin-bottom:10px; }
 .compact-overview .list-group { border-radius:22px; overflow:hidden; background:var(--compact-group); }
@@ -2054,6 +2055,7 @@ onUnmounted(() => { stopSnapshotListener?.(); bridge.dispose?.(); });
   .app-shell .editor-actions :is(.save-edit,.confirm-delete,.confirm-list-delete,.save-list-appearance) { color:#fff; }
   .app-shell .desktop-add-list { background:var(--theme-surface); }
   .app-shell .desktop-add-list .desktop-icon { filter:brightness(0) invert(1); }
+  .desktop-view-card[data-status='pending'] { --card-highlight:#5a5959; --card-start:#5c5f5e; --card-end:#353333; }
   .app-shell .desktop-view-card[aria-pressed='true'] { outline-color:#a9d9ff; }
   .app-shell.compact-overview { background:var(--theme-sidebar); }
   .app-shell.compact-overview .sidebar,.app-shell.compact-overview .list-button { background:transparent; }
